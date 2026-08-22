@@ -5,7 +5,7 @@
 # 플랫폼 PC 가 이미 떠 있어야 한다("Auto-plan: waiting for a participant" 로그 확인).
 # =============================================================================
 set -uo pipefail
-source /opt/ros/humble/setup.bash 2>/dev/null || { echo "[FAIL] /opt/ros/humble 없음"; exit 1; }
+set +u; source /opt/ros/humble/setup.bash 2>/dev/null || { echo "[FAIL] /opt/ros/humble 없음"; exit 1; }; set -u  # ROS2 setup.bash는 set -u 안전하지 않음
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 PLATFORM_IP="${1:-}"
