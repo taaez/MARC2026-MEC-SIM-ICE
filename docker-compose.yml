@@ -1,0 +1,32 @@
+# 리포지토리 루트에 둔다. 주최측은 clone 직후 `docker compose up` 만 실행한다.
+# 구조·환경변수 이름은 스타터킷 demo/docker-compose.yml 과 동일하게 맞춘다
+# (MARC_TEAM_ID / MARC_TOKEN / ROS_DOMAIN_ID / RMW_IMPLEMENTATION, network_mode: host,
+#  GPU 는 deploy.resources 블록).
+services:
+  agent:
+    build:
+      context: .                  # 스타터킷 루트 (marc_sdk + stage1 + demo + models 포함)
+      dockerfile: docker/Dockerfile
+      args:
+        VLM_MODEL: "Qwen/Qwen2.5-VL-7B-Instruct"
+        DET_MODEL: "IDEA-Research/grounding-dino-base"
+    image: marc-mec-sim-ice-stage1:qualifier
+    network_mode: host            # DDS discovery over the LAN
+    environment:
+      # 제출용: ':-' 뒤 기본값이 곧 제출값 (주최측은 env 없이 실행)
+      MARC_TEAM_ID:  "${MARC_TEAM_ID:-mec_sim_ice}"
+      MARC_TOKEN:    "${MARC_TOKEN:-PASTE_TEAM_TOKEN_HERE}"
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
+      RMW_IMPLEMENTATION: "rmw_fastrtps_cpp"
+      # 로컬 8GB 개발 시:  MARC_VLM_4BIT=1 MARC_VLM_MODEL=Qwen/Qwen2.5-VL-3B-Instruct  (빌드 ARG 도 3B 로)
+      MARC_VLM_4BIT: "${MARC_VLM_4BIT:-0}"
+      MARC_YOLO_WEIGHTS: "${MARC_YOLO_WEIGHTS:-/agent/models/yolo_marc.pt}"
+      MARC_LOG_LEVEL: "INFO"
+    # GPU (nvidia-container-toolkit 필요) — 원본 demo compose 와 동일한 지정 방식
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
