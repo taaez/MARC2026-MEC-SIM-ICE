@@ -8,6 +8,8 @@
 #   MARC_TOKEN=<token> MARC_TEAM_ID=u1 ./launch.sh      # set env vars directly
 #   ./launch.sh u1                                       # if tokens.env exists, u1 -> U1_TOKEN
 #   ROS_DOMAIN_ID=0 ./launch.sh u2
+#   MARC_ENTRYPOINT=participant_app_agent_vla.py ./launch.sh u1   # run a different entry point
+#     (default: participant_app.py; both entry points live in this directory)
 #
 # ROS2 distribution:
 #   The runtime uses IsaacSim's built-in humble FastDDS. The client must also be humble
@@ -95,4 +97,4 @@ if ! "${RUN_PY}" -c "import placo" >/dev/null 2>&1; then
 fi
 
 cd "${SCRIPT_DIR}"
-exec "${RUN_PY}" participant_app.py
+exec "${RUN_PY}" "${MARC_ENTRYPOINT:-participant_app.py}"

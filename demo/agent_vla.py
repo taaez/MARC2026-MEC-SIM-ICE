@@ -101,9 +101,13 @@ class VLAGrounding:
         self._ensure_tf()
         ids = list(camera_ids or self.client.list_cctv())
         obs: List[CameraObservation] = []
-        # 프레임은 sim 시간으로 발행되므로 대기도 sim 시간으로 잰다 (절대 규칙: 벽시계 금지).
-        t_end = self.client.now_s() + wait_s
-        while True:
+        # 반복 횟수로 예산을 잰다(시간값 비교 아님): client.now_s()는 /clock을 아직 못 받았을 때
+        # time.time()(벽시계)으로 폴백하는데, 이 메서드의 첫 호출이 하필 그 순간과 겹치면
+        # 이후 /clock 수신 후의 (훨씬 작은) sim 시간과 비교돼 종료 조건이 영원히 거짓이 된다
+        # (실측: 라운드1에서 이 경합으로 무한 루프 재현됨). 매 반복은 client.sleep()으로 페이싱하므로
+        # 여전히 sim 시간 기반이고 벽시계 sleep은 쓰지 않는다.
+        missing: List[str] = []
+        for _ in range(max(1, int(wait_s / 0.1))):
             missing = []
             for cid in ids:
                 if any(o.cam.camera_id == cid for o in obs):
@@ -113,11 +117,12 @@ class VLAGrounding:
                     missing.append(cid)
                 else:
                     obs.append(CameraObservation(cm, image_msg_to_rgb(img)))
-            if not missing or self.client.now_s() > t_end:
-                if missing:
-                    log.warning("[vla] cameras without data: %s", missing)
-                return obs
+            if not missing:
+                break
             self.client.sleep(0.1)
+        if missing:
+            log.warning("[vla] cameras without data: %s", missing)
+        return obs
 
     # ---- 기록 (오프라인 재현용) ----
     def _record(self, command: str, obs: List[CameraObservation], payload: dict, stage: str):
