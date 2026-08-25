@@ -18,7 +18,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Participant algorithm dependencies. numpy + pyyaml (stdlib/ROS2 for the rest), placo for
 # the closed-loop arm IK pick (Pinocchio-based), ultralytics for YOLO11 detection/pose, and
-# ros-humble-tf2-ros for the CCTV extrinsic (world<-camera) lookups in real_agent_vla.py.
+# ros-humble-tf2-ros for the CCTV extrinsic (world<-camera) lookups in taejeong_agent_vla.py.
 # The network is used at build time only -- the judging runtime environment has no internet
 # (no runtime dependency) -- so best.pt and the yolo11n-pose.pt COCO weights must both be
 # present in the image after this step.
