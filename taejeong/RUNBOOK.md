@@ -18,9 +18,12 @@
 `demo/mock_agent_vla.py` 는 건드리지 않는다. 대회 가이드가 요구하는 것은
 `process()` / `process_stage2()` 시그니처 유지이고, `TaejeongVLAGrounding` 이 이를 지킨다.
 
-`demo/real_agent_vla.py`(YOLO + 인라인 휴리스틱)는 **더 이상 실행 경로가 아니다** —
-`participant_app.py` 가 `TaejeongVLAGrounding` 을 쓰도록 바뀌었다. 파일 자체는 남겨뒀으나
-(`demo/train_yolo11.py` 가 아직 import 한다) 런타임에는 관여하지 않는다.
+`demo/real_agent_vla.py`(YOLO + 인라인 휴리스틱)는 **팀 합의로 삭제**했다. 함께 삭제한 것:
+`demo/train_yolo11.py`(그 파일에서 `DET_CLASSES` 를 import 하던 구버전 — 최신본은
+`test/train_yolo11.py`)와 `demo/YOLO11_학습_실행_테스트_가이드.md`(두 파일 전용 문서 —
+대체본은 `test/YOLO11_학습_가이드.md`). 셋 다 팀원의 `feature/init` 브랜치에서도 이미
+삭제된 것들이라 방향이 일치한다. 복구가 필요하면 git 이력에 남아 있다.
+
 Grounding DINO + Qwen 실험은 `MARC_ENTRYPOINT=participant_app_agent_vla.py` 로 계속 쓸 수 있다.
 
 ## 0. 사전 준비 (최초 1회)

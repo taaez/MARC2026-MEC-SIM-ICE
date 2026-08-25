@@ -4,14 +4,12 @@ Wires taejeong's pure-Python pipeline (command_parser -> yolo_adapter -> groundi
 to the live MARCClient: builds CameraModel from tf2 + CameraInfo per camera,
 runs the teammate's YOLO detector, and converts the result to GroundingResult.
 
-Kept as a THIRD, independent Stage 1 implementation, side-by-side with
-real_agent_vla.py (YOLO + inline heuristics) and agent_vla.py (Grounding
-DINO + Qwen2.5-VL) -- selected via MARC_ENTRYPOINT, none of the three touch
-each other. See demo/launch.sh usage comment.
+This is the team's Stage 1 implementation: participant_app.py (the default
+entry point) wires it. The Grounding DINO + Qwen2.5-VL experiment stays
+available side-by-side via MARC_ENTRYPOINT=participant_app_agent_vla.py.
 
-Weights: reuses the SAME best.pt as real_agent_vla.py (demo/weights/best.pt)
--- same detector, different downstream logic (general geometry engine instead
-of per-round inline heuristics). Override with TAEJEONG_DET_WEIGHTS if needed.
+Weights: demo/weights/best.pt -- the team's YOLO detector, classes per
+test/det_classes.py. Override with TAEJEONG_DET_WEIGHTS if needed.
 """
 
 import logging
@@ -39,7 +37,7 @@ class TaejeongVLAGrounding:
 
     Needs the live MARCClient (not just its sensor getters) because camera
     extrinsics are read from tf2, which requires the client's spinning rclpy
-    node (same requirement as RealVLAGrounding).
+    node (tf2 needs a spinning node).
     """
 
     def __init__(self, client, det_weights: str = DET_WEIGHTS,
@@ -115,7 +113,7 @@ class TaejeongVLAGrounding:
             return None
         return camera_from_ros(cam_id, info, tf, float(ground_z))
 
-    # -- sensor_msgs/Image -> BGR ndarray (same convention as real_agent_vla.py) --
+    # -- sensor_msgs/Image -> BGR ndarray (what ultralytics/opencv expect) --
 
     @staticmethod
     def _to_bgr(img_msg):
