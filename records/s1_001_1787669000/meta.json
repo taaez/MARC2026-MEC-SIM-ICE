@@ -1,0 +1,24 @@
+{
+ "command": "Find the mug on the picnic table.",
+ "cameras": {},
+ "payload": {
+  "camera_id": "",
+  "interpretation": {
+   "target_type": "mug",
+   "landmark": "picnic_table",
+   "relation": "on"
+  },
+  "grounding": {
+   "anchor_coord": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "target_coord": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  }
+ }
+}

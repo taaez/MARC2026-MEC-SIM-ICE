@@ -1,0 +1,24 @@
+{
+ "command": "Find the tumbler on the bench.",
+ "cameras": {},
+ "payload": {
+  "camera_id": "",
+  "interpretation": {
+   "target_type": "tumbler",
+   "landmark": "bench",
+   "relation": "on"
+  },
+  "grounding": {
+   "anchor_coord": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "target_coord": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  }
+ }
+}
