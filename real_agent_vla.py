@@ -21,15 +21,24 @@ confirm with ``ros2 run tf2_tools view_frames`` against a running platform and
 adjust ``_pixel_to_world`` if the actual frame ids differ.
 """
 
+import json
 import logging
 import os
 import sys
+import time
 
 import numpy as np
-import rclpy
 from ultralytics import YOLO
 
-from marc_sdk import GroundingResult
+# marc_sdk pulls in rclpy at import time; tolerate its absence so the class
+# constants/static helpers stay importable on a ROS-less PC
+# (tools/run_offline_real_vla.py replays MARC_RECORD_DIR dumps there).
+# rclpy itself is imported lazily inside the tf-touching methods for the same
+# reason -- live runs always have it, offline replay never calls those paths.
+try:
+    from marc_sdk import GroundingResult
+except ImportError:
+    GroundingResult = None
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)  # taejeong/ package lives next to this file
@@ -92,6 +101,12 @@ class RealVLAGrounding:
         # on first use rather than here (RealVLAGrounding is constructed before connect()).
         self._tf_buffer = None
         self._tf_listener = None
+        # MARC_RECORD_DIR: dump each round's inputs (per-camera PNG + camera
+        # params + command) and the submitted payload, in the same meta.json
+        # schema as demo/agent_vla.py -- replayable without Isaac Sim/ROS via
+        # tools/run_offline_real_vla.py (or tools/eval_offline.py).
+        self._record_dir = os.getenv("MARC_RECORD_DIR")
+        self._round = 0
 
     def _tf(self):
         if self._tf_buffer is None:
@@ -103,18 +118,29 @@ class RealVLAGrounding:
     # -- Stage 1 / Stage 2 entry points (signature must match MockVLAGrounding) --
 
     def process(self, voice_command: str, camera_ids: list = None) -> GroundingResult:
-        return self._ground(voice_command, camera_ids or self._client.list_cctv())
+        self._round += 1
+        return self._ground(voice_command, camera_ids or self._client.list_cctv(), "s1")
 
     def process_stage2(self, task_description: str) -> GroundingResult:
-        return self._ground(task_description, self._client.list_cctv())
+        self._round += 1
+        return self._ground(task_description, self._client.list_cctv(), "s2")
 
-    def _ground(self, command: str, camera_ids: list) -> GroundingResult:
+    def _ground(self, command: str, camera_ids: list, stage: str = "s1") -> GroundingResult:
         parsed = parse_command(command)
         target_type = parsed.target_type or ("person" if parsed.is_person else "")
         landmark = parsed.landmark_type or ""
 
+        # Grab every camera frame up front (not lazily inside the match loop) so a
+        # MARC_RECORD_DIR dump always contains the full round regardless of which
+        # camera matched first.
+        images = {}
         for cam_id in camera_ids:
             img = self._to_bgr(self._client.get_cctv_image(cam_id))
+            if img is not None:
+                images[cam_id] = img
+
+        for cam_id in camera_ids:
+            img = images.get(cam_id)
             if img is None:
                 continue
             det = self._det.predict(img, imgsz=DET_IMGSZ, conf=DET_CONF, verbose=False)[0]
@@ -145,11 +171,13 @@ class RealVLAGrounding:
             target_coord = self._pixel_to_world(cam_id, self._box_center(target_box))
             anchor_coord = (self._pixel_to_world(cam_id, self._box_center(anchor_box))
                              if anchor_box is not None else target_coord)
-            return GroundingResult(
+            result = GroundingResult(
                 camera_id=cam_id, target_type=target_type,
                 anchor_coord=anchor_coord, target_coord=target_coord,
                 landmark=landmark, relation=relation, situation=situation,
             )
+            self._record(stage, command, images, result.to_payload())
+            return result
 
         log.warning("[vla] no camera matched target=%r landmark=%r pose_hint=%r",
                     target_type, landmark, parsed.pose_hint)
@@ -159,12 +187,67 @@ class RealVLAGrounding:
             # assume the most likely pose for the hinted bucket (walking if none).
             guess_pose = POSE_BUCKET_CLASSES.get(parsed.pose_hint, ("person_walking",))[0]
             situation = resolve_situation(guess_pose, landmark or parsed.area_hint).situation
-        return GroundingResult(
+        result = GroundingResult(
             camera_id="", target_type=target_type, anchor_coord=[0.0, 0.0, 0.0],
             target_coord=[0.0, 0.0, 0.0], landmark=landmark,
             relation=None if parsed.is_person else parsed.relation_hint,
             situation=situation,
         )
+        self._record(stage, command, images, result.to_payload())
+        return result
+
+    # -- MARC_RECORD_DIR round dump (offline replay input) --
+
+    def _record(self, stage: str, command: str, images: dict, payload: dict):
+        """Dump one round: <dir>/<stage>_<round>_<ts>/{<cam_id>.png..., meta.json}.
+
+        Same schema as demo/agent_vla.py so tools/eval_offline.py and
+        tools/run_offline_real_vla.py both read it. Never allowed to break the
+        live round -- failures are logged and swallowed.
+        """
+        if not self._record_dir:
+            return
+        try:
+            from PIL import Image
+            d = os.path.join(self._record_dir,
+                             f"{stage}_{self._round:03d}_{int(time.time())}")
+            os.makedirs(d, exist_ok=True)
+            cams = {}
+            for cam_id, bgr in images.items():
+                meta = self._camera_meta(cam_id)
+                if meta is None:
+                    continue
+                # saved as RGB; offline loaders convert back to BGR for YOLO
+                Image.fromarray(bgr[:, :, ::-1]).save(os.path.join(d, f"{cam_id}.png"))
+                cams[cam_id] = meta
+            with open(os.path.join(d, "meta.json"), "w") as f:
+                json.dump({"command": command, "cameras": cams, "payload": payload},
+                          f, indent=1)
+            log.info("[vla] recorded -> %s", d)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[vla] record failed: %s", e)
+
+    def _camera_meta(self, cam_id: str):
+        """{K, R_cw, C_w, ground_z, width, height} for meta.json, or None."""
+        import rclpy
+        info = self._client.get_cctv_info(cam_id)
+        ground_z = self._client.get_cctv_ground_height(cam_id)
+        if info is None or ground_z is None:
+            return None
+        try:
+            tf = self._tf().lookup_transform(
+                "world", cam_id, rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5))
+        except Exception as e:  # noqa: BLE001
+            log.warning("[vla] record: tf lookup world<-%s failed: %s", cam_id, e)
+            return None
+        t = tf.transform.translation
+        q = tf.transform.rotation
+        R = self._quat_to_R(q.w, q.x, q.y, q.z)
+        return {"K": np.array(info.k, dtype=float).reshape(3, 3).tolist(),
+                "R_cw": R.tolist(), "C_w": [t.x, t.y, t.z],
+                "ground_z": float(ground_z),
+                "width": int(info.width), "height": int(info.height)}
 
     # -- detection helpers --
 
@@ -218,6 +301,7 @@ class RealVLAGrounding:
     # -- pixel -> world (ground-plane back-projection) --
 
     def _pixel_to_world(self, cam_id: str, pixel):
+        import rclpy
         info = self._client.get_cctv_info(cam_id)
         ground_z = self._client.get_cctv_ground_height(cam_id)
         if info is None or ground_z is None:

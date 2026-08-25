@@ -63,6 +63,16 @@ cd demo
 MARC_ENTRYPOINT=participant_app_real_vla.py ./launch.sh <team_id>
 ```
 
+**라운드 기록을 남기려면** `MARC_RECORD_DIR` 를 함께 준다 (한 번만 기록해 두면
+이후에는 Isaac Sim 없이 오프라인으로 반복 실험 가능 — 아래 5절):
+
+```bash
+MARC_RECORD_DIR=../records MARC_ENTRYPOINT=participant_app_real_vla.py ./launch.sh <team_id>
+```
+
+라운드마다 `records/s1_<라운드>_<ts>/` 에 카메라별 PNG + `meta.json`(명령,
+카메라 K/R_cw/C_w/ground_z, 제출 payload)이 쌓인다.
+
 시작 로그에 `[entry] Stage 1/2 grounding = RealVLAGrounding` 이 찍히는지 확인.
 라운드별 점수는 동일하게 `results/scores.jsonl` 에 쌓인다:
 
@@ -87,6 +97,29 @@ cp ../../results/scores.jsonl runs/chungmu_realvla_$(date +%Y-%m-%d_%H%M).jsonl
 
 비교 기준선(taejeong 파이프라인, 2026-08-25, 39문항): Stage1 평균 44.03 / 총점
 131.03 — `taejeong/validation/runs/chungmu_full39_2026-08-25.jsonl`.
+
+## 5. 오프라인 재실행 (Isaac Sim/ROS 불필요)
+
+3단계에서 `MARC_RECORD_DIR` 로 기록해 뒀다면, 이후에는 아무 PC 에서나
+(ultralytics + PyYAML + Pillow 만 설치) 파이프라인 수정 → 재채점을 반복할 수 있다:
+
+```bash
+# 파이프라인 재실행 + 기록 당시 제출과 비교
+python3 tools/run_offline_real_vla.py --records ./records --weights demo/weights/best.pt
+
+# 좌표 포함 GT 와 비교 (필드 일치 + 좌표 점수 = 1 - 3D오차/5m)
+python3 tools/run_offline_real_vla.py --records ./records --weights demo/weights/best.pt \
+    --gt demo/mock_demo_data.yaml
+
+# 공식 시나리오 expected 와 해석 필드(camera/target/landmark/relation) 비교
+python3 tools/run_offline_real_vla.py --records ./records --weights demo/weights/best.pt \
+    --gt taejeong/content-image-2026.R03/marc2026_chungmu.yaml
+```
+
+한계: 오프라인 점수는 근사치다(공식 항목별 가중치는 플랫폼만 안다). 정확한 총점은
+라이브 실행의 `results/scores.jsonl` 로 확인하고, 오프라인은 **개선 전후의 상대 비교**
+(탐지/파싱/좌표 어디서 갈렸는지)에 쓴다. 참고로 `records/` 에는 예전 세션이 남긴
+샘플 라운드(s1_002, s1_003)가 이미 들어 있어 파이프라인 동작 확인용으로 쓸 수 있다.
 
 ## 주의사항
 
