@@ -66,7 +66,7 @@ y_center width height`, 0~1 정규화)으로 변환해서 `dataset/labels/train|
 ## 3. YOLO11 학습 (이미 구현됨)
 
 ```bash
-python3 train_yolo11.py train --data dataset/data.yaml --epochs 100 --imgsz 1280
+python3 train_yolo11.py train --data dataset/data.yaml --epochs 200 --imgsz 1280
 ```
 
 - 기본 가중치 `yolo11n.pt` (nano, 기본 커널/채널 — 아키텍처 수정 없음). 최초 실행 시 자동
@@ -84,7 +84,7 @@ python3 train_yolo11.py train --data dataset/data.yaml --epochs 100 --imgsz 1280
 데이터로더 워커가 OOM으로 강제종료된 것. `--batch`/`--workers`를 낮춰서 재시도:
 
 ```bash
-python3 train_yolo11.py train --data dataset/data.yaml --epochs 100 --imgsz 1280 --batch 4 --workers 2
+python3 train_yolo11.py train --data dataset/data.yaml --epochs 200 --imgsz 1280 --batch 4 --workers 2
 # 그래도 죽으면: --batch 2 --workers 0
 ```
 `dmesg | tail -30`에 `Out of memory: Killed process`가 있으면 OOM 확정.
