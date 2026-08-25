@@ -1,0 +1,88 @@
+# MARC 2026 — SAR situation 결정 규칙표 (공개)
+#
+# situation = f(자세 pose_class, 지지면 support_class) — 어포던스 위반 일반화.
+# 결정론적·공개 규칙(참가자 동일 기준·GT 분쟁 방어). → dev-docs/01_REQUIREMENTS.md §6
+#
+# 적용 우선순위 (stage1_scorer / Configurations.resolve_situation):
+#   1) incapacitation: 강하게 무력화된 자세는 장소 무관 우선 적용.
+#   2) rules[pose_class][support_class]: 지지면이 지정된 경우 결정론적 매핑.
+#   3) fallback: 지지면 미지정 시 people_poses.yaml 의 pose 별 situation(또는 default).
+#
+# 4 카테고리: normal(정상) | abnormal(이상행동) | emergency(응급) | accident(사고)
+# 거친 채점: 가장 중요한 경계는 normal↔비정상. 비정상 내부(이상↔응급↔사고)는 부분점수(튜닝).
+
+version: "2026.1"
+
+# ── 자세(type) → pose_class ───────────────────────────────────────────────
+#   upright(직립) / seated(앉음) / low(웅크림·낮음) / prostrate(누움·엎어짐)
+pose_class:
+  person_walking:       upright
+  person_walking_away:  upright
+  person_reaching:      upright
+  person_sitting:       seated
+  person_reclining:     seated
+  person_crouching:     low
+  person_bending:       prostrate
+  person_lying_down:    prostrate
+  person_prone:         prostrate
+
+# ── 무력화(incapacitation) — 장소 무관 우선 적용 ──────────────────────────
+#   강하게 무력화된 자세만. 나머지는 (pose × support) 규칙으로 해소.
+incapacitation:
+  person_prone:         accident      # 얼굴을 바닥에 댄 채 쓰러짐 — 명백한 사고
+
+# ── 지지면 토큰 → support_class ───────────────────────────────────────────
+#   지면 표면 토큰(walkway/grass/...) 또는 랜드마크 타입(bench/trash_can/...).
+support_class:
+  # seating: 앉도록 의도된 가구
+  bench:            seating
+  picnic_table:     seating
+  chair:            seating
+  # rest_ground: 쉬어도 되는 지면
+  grass:            rest_ground
+  lawn:             rest_ground
+  # transit: 통행 공간 (앉거나 눕도록 의도되지 않음)
+  walkway:          transit
+  sidewalk:         transit
+  road:             transit
+  parking:          transit
+  parking_space:    transit
+  # non_mount: 올라가면 안 되는 구조물/차량
+  trash_can:        non_mount
+  vending_machine:  non_mount
+  postbox:          non_mount
+  hydrant:          non_mount
+  car:              non_mount
+  # vehicle_fallen: 넘어진 탈것
+  bicycle:          vehicle_fallen
+  kick_scooter:     vehicle_fallen
+
+# ── (pose_class × support_class) → situation ──────────────────────────────
+#   표에 없는 조합은 default_situation 사용.
+rules:
+  upright:
+    seating:        abnormal      # 벤치/테이블 위에 서 있음
+    rest_ground:    normal
+    transit:        normal        # 통행로에서 서있기/걷기 = 정상
+    non_mount:      abnormal      # 차/쓰레기통 위에 서 있음
+    vehicle_fallen: abnormal
+  seated:
+    seating:        normal        # 벤치에 앉기 = 정상
+    rest_ground:    normal        # 잔디에 앉기 = 정상
+    transit:        abnormal      # 도로/통행로 한가운데 앉기
+    non_mount:      abnormal      # 쓰레기통/차 위에 앉기
+    vehicle_fallen: abnormal
+  low:                            # 웅크림
+    seating:        abnormal
+    rest_ground:    abnormal
+    transit:        abnormal
+    non_mount:      abnormal
+    vehicle_fallen: abnormal
+  prostrate:                      # 누움/엎어짐 (person_prone 은 incapacitation 우선)
+    seating:        abnormal
+    rest_ground:    normal        # 잔디에 누워 쉼 = 정상
+    transit:        emergency     # 통행로에 누워 있음 = 응급
+    non_mount:      emergency
+    vehicle_fallen: emergency
+
+default_situation: normal

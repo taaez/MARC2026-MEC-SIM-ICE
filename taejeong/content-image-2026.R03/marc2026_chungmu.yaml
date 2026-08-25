@@ -1,0 +1,1918 @@
+version: '2026.2'
+scenario:
+  name: MARC_2026_ChungMu
+  description: ''
+  time_constraint:
+    stage1: 10
+    total: 30
+voice_command:
+  text: ''
+playground:
+  id: chungmu
+  view_point:
+    eye:
+    - -70.38655
+    - 91.54392
+    - 30.22271
+    target:
+    - -68.84041
+    - 100.8804
+    - 26.99169
+cctv_rigs:
+- id: rig_7
+  type: wall_single
+  position:
+  - -31.61371
+  - 136.65105
+  - 20.95855
+  rotation:
+  - -0.0
+  - 0.0
+  - 138.595
+  ground_height: 16.8
+  resolved:
+    prim_path: /world/cctv_rigs/rig_7
+    missions:
+    - id: rig_7_a
+      mount: Mount_A
+      prim_path: /world/cctv_rigs/rig_7/Mounts/Mount_A/Camera_A
+      position:
+      - -32.14997
+      - 136.06095
+      - 20.60861
+      rotation:
+      - -52.493
+      - 41.785
+      - 152.913
+      focal_length: 5.0
+- id: rig_2
+  type: wall_dual
+  position:
+  - -71.55827
+  - 140.8798
+  - 21.69111
+  rotation:
+  - -0.0
+  - 0.0
+  - -130.434
+  ground_height: 16.4
+  resolved:
+    prim_path: /world/cctv_rigs/rig_2
+    missions:
+    - id: rig_2_b
+      mount: Mount_B
+      prim_path: /world/cctv_rigs/rig_2/Mounts/Mount_B/Camera_B
+      position:
+      - -71.21495
+      - 140.14378
+      - 21.4369
+      rotation:
+      - -59.418
+      - 14.393
+      - 171.135
+      focal_length: 5.0
+    - id: rig_2_c
+      mount: Mount_C
+      prim_path: /world/cctv_rigs/rig_2/Mounts/Mount_C/Camera_C
+      position:
+      - -70.77441
+      - 140.58268
+      - 21.43562
+      rotation:
+      - -31.054
+      - -53.927
+      - -126.77
+      focal_length: 5.0
+- id: rig_1
+  type: post_single
+  position:
+  - -58.4238
+  - 128.28775
+  - 16.17078
+  rotation:
+  - -0.0
+  - 0.0
+  - 175.239
+  ground_height: 16.6
+  resolved:
+    prim_path: /world/cctv_rigs/rig_1
+    missions:
+    - id: rig_1_a
+      mount: Mount_A
+      prim_path: /world/cctv_rigs/rig_1/Mounts/Mount_A/Camera_A
+      position:
+      - -58.47797
+      - 127.48975
+      - 19.54604
+      rotation:
+      - -65.984
+      - -2.045
+      - -179.089
+      focal_length: 5.0
+- id: rig_3
+  type: post_dual
+  position:
+  - -85.14366
+  - 98.0181
+  - 15.29776
+  rotation:
+  - -0.0
+  - 0.0
+  - -35.478
+  ground_height: 16.1
+  resolved:
+    prim_path: /world/cctv_rigs/rig_3
+    missions:
+    - id: rig_3_b
+      mount: Mount_B
+      prim_path: /world/cctv_rigs/rig_3/Mounts/Mount_B/Camera_B
+      position:
+      - -84.50272
+      - 98.49848
+      - 18.77523
+      rotation:
+      - 9.731
+      - -61.02
+      - -79.413
+      focal_length: 5.0
+    - id: rig_3_c
+      mount: Mount_C
+      prim_path: /world/cctv_rigs/rig_3/Mounts/Mount_C/Camera_C
+      position:
+      - -84.8471
+      - 98.78286
+      - 18.7825
+      rotation:
+      - 64.773
+      - -15.138
+      - -7.095
+      focal_length: 5.0
+missions:
+- id: rig_7_a
+  camera:
+    ground_height: 16.8
+  landmarks:
+  - name: normal_car_1_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_7_a/normal_car_1_01
+      position:
+      - -38.60969
+      - 130.67141
+      - 16.70481
+      rotation:
+      - -0.0
+      - 0.0
+      - -40.168
+  - name: sports_car_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_7_a/sports_car_01
+      position:
+      - -40.16271
+      - 132.34205
+      - 16.78703
+      rotation:
+      - -0.0
+      - 0.0
+      - -43.108
+  - name: kick_scooter_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_7_a/kick_scooter_01
+      position:
+      - -33.91696
+      - 131.129
+      - 16.93204
+      rotation:
+      - -0.0
+      - 0.0
+      - 0.0
+  - name: bicycle_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_7_a/bicycle_01
+      position:
+      - -48.56376
+      - 128.79317
+      - 17.02055
+      rotation:
+      - 53.577
+      - -31.64
+      - -36.621
+  - name: trash_can_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_7_a/trash_can_01
+      position:
+      - -38.18341
+      - 134.45073
+      - 16.8
+      rotation:
+      - -0.0
+      - 0.0
+      - 0.0
+  - name: hydrant_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_7_a/hydrant_01
+      position:
+      - -33.8053
+      - 130.52874
+      - 16.85787
+      rotation:
+      - -0.0
+      - 0.0
+      - 0.0
+  - name: police_car_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_7_a/police_car_01
+      position:
+      - -42.65816
+      - 118.29972
+      - 16.69391
+      rotation:
+      - -0.0
+      - 0.0
+      - 139.589
+  - name: suv_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_7_a/suv_01
+      position:
+      - -45.84909
+      - 121.93941
+      - 16.65651
+      rotation:
+      - -0.0
+      - 0.0
+      - -46.562
+  objects:
+  - type: tumbler
+    count: 3
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_7_a_tumbler_0
+        position:
+        - -38.00989
+        - 129.28084
+        - 16.76364
+        rotation:
+        - -129.44
+        - 14.982
+        - -80.884
+      - prim_path: /world/trash/rig_7_a_tumbler_3
+        position:
+        - -36.07784
+        - 128.70259
+        - 16.84848
+        rotation:
+        - -89.87
+        - -0.017
+        - 179.506
+      - prim_path: /world/trash/rig_7_a_tumbler_4
+        position:
+        - -44.37683
+        - 121.1243
+        - 16.67988
+        rotation:
+        - 18.648
+        - 87.174
+        - -17.944
+  - type: person_lying_down
+    character: female_student_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_7_a_person_lying_down_female_student_01_0
+        position:
+        - -35.31731
+        - 129.45959
+        - 16.82526
+        rotation:
+        - 93.277
+        - -60.764
+        - -177.128
+  - type: cracker_box
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_7_a_cracker_box_0
+        position:
+        - -35.9019
+        - 128.77072
+        - 16.78794
+        rotation:
+        - -178.679
+        - 1.875
+        - 179.482
+  - type: cola_can
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_7_a_cola_can_0
+        position:
+        - -37.24427
+        - 134.72346
+        - 16.94403
+        rotation:
+        - -86.344
+        - 3.036
+        - -176.149
+  - type: person_reaching
+    character: professor_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_7_a_person_reaching_professor_01_0
+        position:
+        - -41.07369
+        - 119.63766
+        - 16.74567
+        rotation:
+        - -3.812
+        - 5.127
+        - 151.276
+  - type: person_prone
+    character: male_student_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_7_a_person_prone_male_student_01_0
+        position:
+        - -49.27203
+        - 125.6504
+        - 16.73964
+        rotation:
+        - -94.503
+        - -3.04
+        - 179.742
+  - type: disposable_cup
+    count: 3
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_7_a_disposable_cup_0
+        position:
+        - -36.97198
+        - 135.06795
+        - 17.00372
+        rotation:
+        - -90.379
+        - -25.428
+        - -80.797
+      - prim_path: /world/trash/rig_7_a_disposable_cup_1
+        position:
+        - -37.0577
+        - 134.78226
+        - 16.95872
+        rotation:
+        - 9.361
+        - 52.207
+        - 76.279
+      - prim_path: /world/trash/rig_7_a_disposable_cup_2
+        position:
+        - -37.49937
+        - 134.29236
+        - 16.9522
+        rotation:
+        - -6.769
+        - 14.918
+        - 110.061
+  - type: person_sitting
+    character: student_weight_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_7_a_person_sitting_student_weight_01_0
+        position:
+        - -37.93124
+        - 134.61274
+        - 17.05
+        rotation:
+        - 11.767
+        - -5.565
+        - -22.861
+  - type: umbrella
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_7_a_umbrella_0
+        position:
+        - -42.84795
+        - 120.28879
+        - 16.7077
+        rotation:
+        - -84.264
+        - 82.866
+        - -96.017
+  _rig_id: rig_7
+  _mount: Mount_A
+  _camera_prim_path: /world/cctv_rigs/rig_7/Mounts/Mount_A/Camera_A
+  compositions: []
+- id: rig_2_b
+  camera:
+    ground_height: 16.3
+  landmarks:
+  - name: bench_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_b/bench_01
+      position:
+      - -76.86797
+      - 120.40862
+      - 15.93252
+      rotation:
+      - -0.0
+      - 0.0
+      - -130.176
+  - name: bench_02
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_b/bench_02
+      position:
+      - -69.30859
+      - 128.94792
+      - 16.2
+      rotation:
+      - -0.0
+      - 0.0
+      - -133.364
+  - name: kick_scooter_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_b/kick_scooter_01
+      position:
+      - -71.4853
+      - 123.55602
+      - 15.99798
+      rotation:
+      - -84.049
+      - -42.544
+      - -34.986
+  - name: normal_car_1_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_b/normal_car_1_01
+      position:
+      - -67.2993
+      - 127.51562
+      - 16.07594
+      rotation:
+      - -0.0
+      - 0.0
+      - -46.424
+  - name: trash_can_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_b/trash_can_01
+      position:
+      - -73.14668
+      - 124.85879
+      - 16.2
+      rotation:
+      - -82.003
+      - -41.37
+      - -103.669
+  objects:
+  - type: person_walking
+    character: female_student_01
+    count: 2
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_2_b_person_walking_female_student_01_0
+        position:
+        - -71.54459
+        - 132.08591
+        - 16.7
+        rotation:
+        - -1.817
+        - -2.186
+        - 179.169
+      - prim_path: /world/people/rig_2_b_person_walking_female_student_01_1
+        position:
+        - -74.63315
+        - 123.01358
+        - 16.12991
+        rotation:
+        - -2.826
+        - -0.304
+        - 135.067
+  - type: person_prone
+    character: student_weight_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_2_b_person_prone_student_weight_01_0
+        position:
+        - -71.18778
+        - 123.96041
+        - 16.30601
+        rotation:
+        - -94.947
+        - 24.616
+        - -177.955
+  - type: person_sitting
+    character: professor_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_2_b_person_sitting_professor_01_1
+        position:
+        - -73.61444
+        - 125.12314
+        - 15.80875
+        rotation:
+        - -10.502
+        - 7.706
+        - 146.22
+  - type: cracker_box
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_2_b_cracker_box_0
+        position:
+        - -74.61474
+        - 125.97629
+        - 15.95801
+        rotation:
+        - -178.542
+        - 3.411
+        - -179.515
+  - type: cola_can
+    count: 4
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_2_b_cola_can_0
+        position:
+        - -74.12251
+        - 126.14031
+        - 15.94471
+        rotation:
+        - -85.895
+        - 14.78
+        - -177.557
+      - prim_path: /world/trash/rig_2_b_cola_can_1
+        position:
+        - -74.14281
+        - 125.94306
+        - 15.94257
+        rotation:
+        - -86.654
+        - -2.821
+        - -176.536
+      - prim_path: /world/trash/rig_2_b_cola_can_2
+        position:
+        - -74.29728
+        - 126.62894
+        - 15.94177
+        rotation:
+        - -86.562
+        - -0.22
+        - -176.67
+      - prim_path: /world/trash/rig_2_b_cola_can_3
+        position:
+        - -74.48965
+        - 125.54778
+        - 15.92707
+        rotation:
+        - -80.846
+        - 56.65
+        - 176.952
+  - type: disposable_cup
+    count: 2
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_2_b_disposable_cup_0
+        position:
+        - -74.87177
+        - 125.97108
+        - 15.92446
+        rotation:
+        - -122.749
+        - 4.288
+        - 175.881
+      - prim_path: /world/trash/rig_2_b_disposable_cup_1
+        position:
+        - -74.70963
+        - 126.65607
+        - 15.9463
+        rotation:
+        - -158.343
+        - 8.414
+        - 178.574
+  - type: juice
+    count: 2
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_2_b_juice_0
+        position:
+        - -73.90101
+        - 126.32582
+        - 15.95719
+        rotation:
+        - -89.169
+        - -18.253
+        - 178.132
+      - prim_path: /world/trash/rig_2_b_juice_1
+        position:
+        - -75.28915
+        - 125.82285
+        - 15.90276
+        rotation:
+        - -88.546
+        - -0.355
+        - 177.905
+  - type: tissue
+    count: 3
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_2_b_tissue_0
+        position:
+        - -75.04852
+        - 126.80737
+        - 15.93818
+        rotation:
+        - -24.559
+        - -82.595
+        - -41.477
+      - prim_path: /world/trash/rig_2_b_tissue_2
+        position:
+        - -73.16086
+        - 127.2418
+        - 16.01042
+        rotation:
+        - -32.327
+        - -82.013
+        - -49.364
+      - prim_path: /world/trash/rig_2_b_tissue_3
+        position:
+        - -75.26941
+        - 126.03103
+        - 15.92459
+        rotation:
+        - 1.583
+        - -83.292
+        - -15.016
+  - type: umbrella
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_2_b_umbrella_0
+        position:
+        - -70.36832
+        - 128.36201
+        - 16.13025
+        rotation:
+        - 178.751
+        - 2.128
+        - -179.078
+  - type: person_reclining
+    character: female_student_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_2_b_person_reclining_female_student_01_0
+        position:
+        - -77.71742
+        - 120.52681
+        - 15.74613
+        rotation:
+        - 17.382
+        - 23.339
+        - -120.845
+  _rig_id: rig_2
+  _mount: Mount_B
+  _camera_prim_path: /world/cctv_rigs/rig_2/Mounts/Mount_B/Camera_B
+- id: rig_2_c
+  camera:
+    ground_height: 16.4
+  landmarks:
+  - name: suv_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_c/suv_01
+      position:
+      - -50.73163
+      - 141.54204
+      - 16.36816
+      rotation:
+      - -0.0
+      - 0.0
+      - -39.358
+  - name: bicycle_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_c/bicycle_01
+      position:
+      - -67.38833
+      - 135.92868
+      - 16.77818
+      rotation:
+      - -0.0
+      - 0.0
+      - -121.8
+  - name: bicycle_02
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_c/bicycle_02
+      position:
+      - -67.01522
+      - 135.76528
+      - 16.77818
+      rotation:
+      - -0.0
+      - 0.0
+      - -121.8
+  - name: bicycle_03
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_c/bicycle_03
+      position:
+      - -66.53778
+      - 135.03718
+      - 16.77818
+      rotation:
+      - -0.0
+      - 0.0
+      - -121.8
+  - name: bicycle_04
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_c/bicycle_04
+      position:
+      - -67.68694
+      - 136.14495
+      - 16.77818
+      rotation:
+      - -0.0
+      - 0.0
+      - -121.8
+  - name: vending_machine_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_c/vending_machine_01
+      position:
+      - -62.80626
+      - 135.53058
+      - 16.2
+      rotation:
+      - -0.0
+      - 0.0
+      - 137.775
+  - name: trash_can_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_2_c/trash_can_01
+      position:
+      - -63.80366
+      - 134.61723
+      - 16.2172
+      rotation:
+      - -0.0
+      - 0.0
+      - 0.0
+  objects:
+  - type: person_walking
+    character: female_student_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_2_c_person_walking_female_student_01_0
+        position:
+        - -61.13428
+        - 137.55521
+        - 16.27484
+        rotation:
+        - -2.142
+        - -1.869
+        - 170.02
+  - type: person_sitting
+    character: professor_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_2_c_person_sitting_professor_01_0
+        position:
+        - -62.77176
+        - 135.78356
+        - 17.93731
+        rotation:
+        - -10.466
+        - 7.754
+        - 145.958
+  - type: umbrella
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_2_c_umbrella_0
+        position:
+        - -61.045
+        - 136.08806
+        - 16.27506
+        rotation:
+        - 0.75
+        - -0.149
+        - -0.833
+  _rig_id: rig_2
+  _mount: Mount_C
+  _camera_prim_path: /world/cctv_rigs/rig_2/Mounts/Mount_C/Camera_C
+- id: rig_1_a
+  camera:
+    ground_height: 16.6
+  landmarks:
+  - name: bench_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_1_a/bench_01
+      position:
+      - -52.42612
+      - 113.37388
+      - 16.6
+      rotation:
+      - -0.0
+      - 0.0
+      - -134.317
+  - name: picnic_table_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_1_a/picnic_table_01
+      position:
+      - -58.92264
+      - 119.89141
+      - 16.35574
+      rotation:
+      - -0.0
+      - 0.0
+      - 84.594
+  - name: bench_02
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_1_a/bench_02
+      position:
+      - -56.91348
+      - 108.72769
+      - 16.6
+      rotation:
+      - -0.0
+      - 0.0
+      - -133.123
+  - name: bicycle_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_1_a/bicycle_01
+      position:
+      - -52.13792
+      - 111.08881
+      - 17.02162
+      rotation:
+      - -0.0
+      - 0.0
+      - -121.8
+  - name: trash_can_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_1_a/trash_can_01
+      position:
+      - -53.99992
+      - 111.80938
+      - 16.85219
+      rotation:
+      - -0.0
+      - -84.694
+      - 0.0
+  - name: bench_03
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_1_a/bench_03
+      position:
+      - -65.11757
+      - 107.5266
+      - 16.5904
+      rotation:
+      - -0.0
+      - 0.0
+      - 136.807
+  - name: bench_04
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_1_a/bench_04
+      position:
+      - -69.50056
+      - 111.90305
+      - 16.19283
+      rotation:
+      - -0.0
+      - 0.0
+      - 138.005
+  objects:
+  - type: mug
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_1_a_mug_0
+        position:
+        - -58.62067
+        - 119.96513
+        - 17.44791
+        rotation:
+        - -91.295
+        - 5.459
+        - -1.305
+  - type: cola_can
+    count: 2
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_1_a_cola_can_0
+        position:
+        - -55.25417
+        - 111.25921
+        - 16.67405
+        rotation:
+        - 8.157
+        - -85.808
+        - 98.041
+      - prim_path: /world/trash/rig_1_a_cola_can_1
+        position:
+        - -55.04443
+        - 112.39564
+        - 16.66025
+        rotation:
+        - 76.445
+        - -70.422
+        - 167.392
+  - type: juice
+    count: 2
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_1_a_juice_0
+        position:
+        - -59.291
+        - 119.04157
+        - 17.37936
+        rotation:
+        - -87.889
+        - -46.638
+        - -178.65
+      - prim_path: /world/trash/rig_1_a_juice_1
+        position:
+        - -58.86856
+        - 120.04489
+        - 17.38063
+        rotation:
+        - 88.018
+        - 31.854
+        - -0.59
+  - type: tissue
+    count: 2
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_1_a_tissue_0
+        position:
+        - -55.52884
+        - 111.7669
+        - 16.62395
+        rotation:
+        - -114.837
+        - -27.03
+        - -2.715
+      - prim_path: /world/trash/rig_1_a_tissue_1
+        position:
+        - -55.33483
+        - 112.18093
+        - 16.62136
+        rotation:
+        - -111.49
+        - 5.682
+        - 10.656
+  - type: tumbler
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_1_a_tumbler_0
+        position:
+        - -52.53231
+        - 113.348
+        - 16.9666
+        rotation:
+        - 1.258
+        - -4.986
+        - 0.017
+  - type: umbrella
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_1_a_umbrella_0
+        position:
+        - -57.39322
+        - 108.60841
+        - 16.6209
+        rotation:
+        - -1.33
+        - -1.19
+        - 0.119
+  - type: sunblock
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_1_a_sunblock_0
+        position:
+        - -57.85454
+        - 120.84175
+        - 16.40427
+        rotation:
+        - -173.136
+        - 5.927
+        - 81.16
+  - type: person_sitting
+    character: female_student_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_1_a_person_sitting_female_student_01_0
+        position:
+        - -52.94741
+        - 113.04589
+        - 16.17693
+        rotation:
+        - -12.918
+        - -1.469
+        - -171.523
+  - type: person_lying_down
+    character: professor_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_1_a_person_lying_down_professor_01_0
+        position:
+        - -62.45212
+        - 116.18793
+        - 16.6102
+        rotation:
+        - 93.936
+        - -66.001
+        - -176.392
+  - type: person_bending
+    character: student_weight_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_1_a_person_bending_student_weight_01_0
+        position:
+        - -55.23807
+        - 111.34714
+        - 16.77229
+        rotation:
+        - -90.647
+        - -63.366
+        - 103.147
+  - type: person_walking_away
+    character: female_student_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_1_a_person_walking_away_female_student_01_0
+        position:
+        - -58.25736
+        - 118.58498
+        - 16.38806
+        rotation:
+        - -7.712
+        - 1.139
+        - -160.654
+  - type: person_sitting
+    character: male_student_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_1_a_person_sitting_male_student_01_0
+        position:
+        - -59.79118
+        - 119.70697
+        - 16.02162
+        rotation:
+        - -11.131
+        - -6.758
+        - -147.017
+  _rig_id: rig_1
+  _mount: Mount_A
+  _camera_prim_path: /world/cctv_rigs/rig_1/Mounts/Mount_A/Camera_A
+- id: rig_3_b
+  camera:
+    ground_height: 16.1
+  landmarks:
+  - name: trash_can_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_3_b/trash_can_01
+      position:
+      - -76.58481
+      - 96.19682
+      - 15.70586
+      rotation:
+      - -0.0
+      - 0.0
+      - 0.0
+  - name: bicycle_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_3_b/bicycle_01
+      position:
+      - -78.86305
+      - 101.85303
+      - 16.11596
+      rotation:
+      - -114.927
+      - 85.147
+      - 41.874
+  - name: picnic_table_02
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_3_b/picnic_table_02
+      position:
+      - -80.72785
+      - 97.24997
+      - 15.65287
+      rotation:
+      - -0.0
+      - 0.0
+      - 103.674
+  objects:
+  - type: person_bending
+    character: professor_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_3_b_person_bending_professor_01_0
+        position:
+        - -76.88852
+        - 102.46404
+        - 16.05381
+        rotation:
+        - 89.546
+        - -15.672
+        - -79.183
+  - type: person_lying_down
+    character: student_weight_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_3_b_person_lying_down_student_weight_01_0
+        position:
+        - -80.93486
+        - 96.48996
+        - 16.82847
+        rotation:
+        - -91.706
+        - 20.331
+        - 0.604
+  - type: pencilcase
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_3_b_pencilcase_0
+        position:
+        - -77.25906
+        - 97.11535
+        - 15.86412
+        rotation:
+        - -174.952
+        - 3.48
+        - 179.373
+  - type: umbrella
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_3_b_umbrella_0
+        position:
+        - -77.6659
+        - 96.58378
+        - 15.80732
+        rotation:
+        - -178.102
+        - 2.996
+        - -154.816
+  - type: cola_can
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_3_b_cola_can_0
+        position:
+        - -78.95934
+        - 100.68587
+        - 15.74615
+        rotation:
+        - -89.379
+        - -22.348
+        - -177.016
+  - type: disposable_cup
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_3_b_disposable_cup_1
+        position:
+        - -78.87418
+        - 97.05801
+        - 15.73416
+        rotation:
+        - 148.324
+        - -43.494
+        - 42.258
+  - type: cracker_box
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_3_b_cracker_box_0
+        position:
+        - -77.97578
+        - 96.78448
+        - 15.83716
+        rotation:
+        - 81.116
+        - 73.163
+        - 103.519
+  _rig_id: rig_3
+  _mount: Mount_B
+  _camera_prim_path: /world/cctv_rigs/rig_3/Mounts/Mount_B/Camera_B
+- id: rig_3_c
+  camera:
+    ground_height: 15.9
+  landmarks:
+  - name: kick_scooter_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_3_c/kick_scooter_01
+      position:
+      - -85.24607
+      - 109.03265
+      - 15.53044
+      rotation:
+      - -0.0
+      - 0.0
+      - -90.0
+  - name: kick_scooter_02
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_3_c/kick_scooter_02
+      position:
+      - -84.97715
+      - 109.3379
+      - 15.54895
+      rotation:
+      - -0.0
+      - 0.0
+      - -90.0
+  - name: trash_can_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_3_c/trash_can_01
+      position:
+      - -86.20287
+      - 110.58636
+      - 15.34397
+      rotation:
+      - -0.0
+      - 0.0
+      - 0.0
+  - name: taxi_01
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_3_c/taxi_01
+      position:
+      - -83.61583
+      - 103.44018
+      - 15.45533
+      rotation:
+      - -0.0
+      - 0.0
+      - 141.776
+  - name: bench_02
+    label:
+      kr: ''
+      en: ''
+    resolved:
+      prim_path: /world/landmarks/rig_3_c/bench_02
+      position:
+      - -84.10907
+      - 112.51235
+      - 15.47582
+      rotation:
+      - -0.0
+      - 0.0
+      - 48.076
+  objects:
+  - type: person_reaching
+    character: student_weight_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_3_c_person_reaching_student_weight_01_0
+        position:
+        - -78.99035
+        - 105.80761
+        - 15.62853
+        rotation:
+        - 0.013
+        - -6.386
+        - -65.313
+  - type: person_bending
+    character: student_weight_01
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/people/rig_3_c_person_bending_student_weight_01_0
+        position:
+        - -84.92714
+        - 111.8766
+        - 15.9972
+        rotation:
+        - -89.225
+        - 55.657
+        - 100.3
+  - type: tumbler
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_3_c_tumbler_0
+        position:
+        - -85.89217
+        - 108.42254
+        - 15.52783
+        rotation:
+        - -177.28
+        - -25.345
+        - -179.735
+  - type: umbrella
+    count: 1
+    resolved:
+      instances:
+      - prim_path: /world/trash/rig_3_c_umbrella_0
+        position:
+        - -85.60271
+        - 108.66516
+        - 15.53514
+        rotation:
+        - -178.775
+        - -0.22
+        - -94.199
+  _rig_id: rig_3
+  _mount: Mount_C
+  _camera_prim_path: /world/cctv_rigs/rig_3/Mounts/Mount_C/Camera_C
+robot:
+  start_point:
+  - -64.56216
+  - 123.78838
+  - 16.11005
+  yaw: 47.418
+  resolved:
+    prim_path: /world/robot_station
+debug:
+  draw_mission_area: false
+  force_regenerate: false
+challenge_problems:
+- id: lf01_mug_table
+  kind: grounding
+  voice_command: Find the mug on the picnic table.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_1_a
+    landmark_name: picnic_table_01
+    target_type: mug
+    target_object_id: rig_1_a/mug_0
+    relation: 'on'
+    target_kind: object
+- id: lf02_tumbler_bench
+  kind: grounding
+  voice_command: Find the tumbler on the bench.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_1_a
+    landmark_name: bench_01
+    target_type: tumbler
+    target_object_id: rig_1_a/tumbler_0
+    relation: 'on'
+    target_kind: object
+- id: lf03_tumbler_hydrant
+  kind: grounding
+  voice_command: Find the tumbler near the fire hydrant in the parking lot.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: hydrant_01
+    target_type: tumbler
+    target_object_id: rig_7_a/tumbler_1
+    relation: near
+    target_kind: object
+- id: lf04_sunblock_table
+  kind: grounding
+  voice_command: Find the sunblock beside the picnic table.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_1_a
+    landmark_name: picnic_table_01
+    target_type: sunblock
+    target_object_id: rig_1_a/sunblock_0
+    relation: beside
+    target_kind: object
+- id: lf05_umbrella_vending
+  kind: grounding
+  voice_command: Find the umbrella beside the vending machine.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_2_c
+    landmark_name: vending_machine_01
+    target_type: umbrella
+    target_object_id: rig_2_c/umbrella_0
+    relation: beside
+    target_kind: object
+- id: lf06_umbrella_fallenbike
+  kind: grounding
+  voice_command: Find the umbrella next to the trash can.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_3_b
+    landmark_name: trash_can_01
+    target_type: umbrella
+    target_object_id: rig_3_b/umbrella_0
+    relation: near
+    target_kind: object
+- id: lf07_pencilcase_table
+  kind: grounding
+  voice_command: Find the pencil case near the picnic table.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_3_b
+    landmark_name: picnic_table_02
+    target_type: pencilcase
+    target_object_id: rig_3_b/pencilcase_0
+    relation: near
+    target_kind: object
+- id: lf08_umbrella_parking
+  kind: grounding
+  voice_command: Find the umbrella dropped in the empty parking space.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: police_car_01
+    target_type: umbrella
+    target_object_id: rig_7_a/umbrella_0
+    relation: near
+    target_kind: object
+- id: lf09_tumbler_parking
+  kind: grounding
+  voice_command: Find the tumbler dropped in the empty parking space.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: police_car_01
+    target_type: tumbler
+    target_object_id: rig_7_a/tumbler_2
+    relation: near
+    target_kind: object
+- id: lf10_tumbler_taxi
+  kind: grounding
+  voice_command: Find the tumbler on the road next to the taxi.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_3_c
+    landmark_name: taxi_01
+    target_type: tumbler
+    target_object_id: rig_3_c/tumbler_0
+    relation: near
+    target_kind: object
+- id: lf11_umbrella_taxi
+  kind: grounding
+  voice_command: Find the umbrella on the road next to the taxi.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_3_c
+    landmark_name: taxi_01
+    target_type: umbrella
+    target_object_id: rig_3_c/umbrella_0
+    relation: near
+    target_kind: object
+- id: hf01_vending_umbrella
+  kind: grounding
+  voice_command: After working out I grabbed a drink from the machine and left my
+    umbrella standing next to it.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_2_c
+    landmark_name: vending_machine_01
+    target_type: umbrella
+    target_object_id: rig_2_c/umbrella_0
+    relation: beside
+    target_kind: object
+- id: hf02_table_pencilcase
+  kind: grounding
+  voice_command: I was taking notes at an outdoor table and left my pencil case behind.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_3_b
+    landmark_name: picnic_table_02
+    target_type: pencilcase
+    target_object_id: rig_3_b/pencilcase_0
+    relation: near
+    target_kind: object
+- id: hf03_table_mug
+  kind: grounding
+  voice_command: I was reading with a coffee at an outdoor table and left my mug there.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_1_a
+    landmark_name: picnic_table_01
+    target_type: mug
+    target_object_id: rig_1_a/mug_0
+    relation: 'on'
+    target_kind: object
+- id: hf04_park_sunblock
+  kind: grounding
+  voice_command: I was resting in the sun at the park and left the sunblock I had
+    been using.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_1_a
+    landmark_name: picnic_table_01
+    target_type: sunblock
+    target_object_id: rig_1_a/sunblock_0
+    relation: beside
+    target_kind: object
+- id: hf05_bikerack_umbrella
+  kind: grounding
+  voice_command: After grabbing a drink from the vending machine I left my umbrella
+    propped against its side.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_2_c
+    landmark_name: vending_machine_01
+    target_type: umbrella
+    target_object_id: rig_2_c/umbrella_0
+    relation: beside
+    target_kind: object
+- id: hf06_fallenbike_umbrella
+  kind: grounding
+  voice_command: I stopped to throw something in the bin and left my umbrella leaning
+    against the trash can.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_3_b
+    landmark_name: trash_can_01
+    target_type: umbrella
+    target_object_id: rig_3_b/umbrella_0
+    relation: near
+    target_kind: object
+- id: hf07_parking_tumbler
+  kind: grounding
+  voice_command: I think I dropped my tumbler on the ground as I got out of my car
+    in the parking lot.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: police_car_01
+    target_type: tumbler
+    target_object_id: rig_7_a/tumbler_2
+    relation: near
+    target_kind: object
+- id: hf08_parking_umbrella
+  kind: grounding
+  voice_command: Getting out of my car I dropped my umbrella in the empty space next
+    to it; find it in the parking lot.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: police_car_01
+    target_type: umbrella
+    target_object_id: rig_7_a/umbrella_0
+    relation: near
+    target_kind: object
+- id: sar01_trash_sit
+  kind: grounding
+  voice_command: Find the person sitting on top of the trash can in the parking lot.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: trash_can_01
+    target_type: person_sitting
+    target_object_id: rig_7_a/person_sitting_0
+    target_kind: person
+    situation: abnormal
+    support: trash_can
+- id: sar02_vending_sit
+  kind: grounding
+  voice_command: Find the person sitting on top of the vending machine.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_2_c
+    landmark_name: vending_machine_01
+    target_type: person_sitting
+    target_object_id: rig_2_c/person_sitting_0
+    target_kind: person
+    situation: abnormal
+    support: vending_machine
+- id: sar03_bench_lie
+  kind: grounding
+  voice_command: Find the person lying face-down on the bench near the taxi.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_3_c
+    landmark_name: bench_02
+    target_type: person_bending
+    target_object_id: rig_3_c/person_bending_0
+    target_kind: person
+    situation: abnormal
+    support: bench
+- id: sar04_table_lie
+  kind: grounding
+  voice_command: Find the person lying on top of the picnic table.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_3_b
+    landmark_name: picnic_table_02
+    target_type: person_lying_down
+    target_object_id: rig_3_b/person_lying_down_0
+    target_kind: person
+    situation: abnormal
+    support: picnic_table
+- id: sar06_parking_collapsed
+  kind: grounding
+  voice_command: Find the person collapsed on the parking lot floor.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: hydrant_01
+    target_type: person_lying_down
+    target_object_id: rig_7_a/person_lying_down_0
+    target_kind: person
+    situation: emergency
+    support: parking
+- id: sar07_parking_prone
+  kind: grounding
+  voice_command: Find the person lying face-down and motionless in the parking lot.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: bicycle_01
+    target_type: person_prone
+    target_object_id: rig_7_a/person_prone_0
+    target_kind: person
+    situation: accident
+    support: parking
+- id: sar08_fallenbike_down
+  kind: grounding
+  voice_command: Find the person fallen on the ground next to the toppled bicycle.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_3_b
+    landmark_name: bicycle_01
+    target_type: person_bending
+    target_object_id: rig_3_b/person_bending_0
+    target_kind: person
+    situation: emergency
+    support: bicycle
+- id: sar09_park_bending
+  kind: grounding
+  voice_command: Find the person bent over and motionless near the trash can in the
+    park rest area.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_1_a
+    landmark_name: trash_can_01
+    target_type: person_bending
+    target_object_id: rig_1_a/person_bending_0
+    target_kind: person
+    situation: emergency
+    support: trash_can
+- id: sarH1_park_needhelp
+  kind: grounding
+  voice_command: People are relaxing at the park and one is even lying on the grass;
+    find the one near the trash can who is bent over and not moving and actually needs
+    help.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_1_a
+    landmark_name: trash_can_01
+    target_type: person_bending
+    target_object_id: rig_1_a/person_bending_0
+    target_kind: person
+    situation: emergency
+    support: trash_can
+- id: sarH2_parking_bikeacc
+  kind: grounding
+  voice_command: In the parking lot a person is down next to a bicycle and looks like
+    they had an accident; find them.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: bicycle_01
+    target_type: person_prone
+    target_object_id: rig_7_a/person_prone_0
+    target_kind: person
+    situation: accident
+    support: parking
+- id: sarH3_climbed_machine
+  kind: grounding
+  voice_command: Someone is up where people should not be; find the person who climbed
+    on top of the drink machine.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_2_c
+    landmark_name: vending_machine_01
+    target_type: person_sitting
+    target_object_id: rig_2_c/person_sitting_0
+    target_kind: person
+    situation: abnormal
+    support: vending_machine
+- id: sarH4_parking_trashsit
+  kind: grounding
+  voice_command: In the parking lot, find the person who climbed up and is sitting
+    on top of the trash can.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: trash_can_01
+    target_type: person_sitting
+    target_object_id: rig_7_a/person_sitting_0
+    target_kind: person
+    situation: abnormal
+    support: trash_can
+- id: sarH5_taxi_benchlie
+  kind: grounding
+  voice_command: Near the taxi, find the person lying down on top of the bench.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_3_c
+    landmark_name: bench_02
+    target_type: person_bending
+    target_object_id: rig_3_c/person_bending_0
+    target_kind: person
+    situation: abnormal
+    support: bench
+- id: sarH6_most_critical
+  kind: grounding
+  voice_command: Several people are in the parking lot; one is completely face-down
+    and immobile; find the most critical one.
+  time_limit: 30.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: bicycle_01
+    target_type: person_prone
+    target_object_id: rig_7_a/person_prone_0
+    target_kind: person
+    situation: accident
+    support: parking
+- id: rt01_parking_tumbler
+  kind: retrieval
+  voice_command: Pick up the tumbler dropped on the parking lot floor and bring it
+    to the owner.
+  time_limit: 600.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: police_car_01
+    target_type: tumbler
+    target_object_id: rig_7_a/tumbler_2
+    relation: near
+    target_kind: object
+- id: rt02_parking_umbrella
+  kind: retrieval
+  voice_command: Pick up the umbrella in the empty parking space and bring it to the
+    owner.
+  time_limit: 600.0
+  expected:
+    camera_id: rig_7_a
+    landmark_name: police_car_01
+    target_type: umbrella
+    target_object_id: rig_7_a/umbrella_0
+    relation: near
+    target_kind: object
+- id: rt03_vending_umbrella
+  kind: retrieval
+  voice_command: Pick up the umbrella beside the vending machine and bring it to the
+    owner.
+  time_limit: 600.0
+  expected:
+    camera_id: rig_2_c
+    landmark_name: vending_machine_01
+    target_type: umbrella
+    target_object_id: rig_2_c/umbrella_0
+    relation: beside
+    target_kind: object
+- id: rt04_taxi_tumbler
+  kind: retrieval
+  voice_command: Pick up the tumbler on the road next to the taxi and bring it to
+    the owner.
+  time_limit: 600.0
+  expected:
+    camera_id: rig_3_c
+    landmark_name: taxi_01
+    target_type: tumbler
+    target_object_id: rig_3_c/tumbler_0
+    relation: near
+    target_kind: object
+- id: rt04b_taxi_umbrella
+  kind: retrieval
+  voice_command: Pick up the umbrella on the road next to the taxi and bring it to
+    the owner.
+  time_limit: 600.0
+  expected:
+    camera_id: rig_3_c
+    landmark_name: taxi_01
+    target_type: umbrella
+    target_object_id: rig_3_c/umbrella_0
+    relation: near
+    target_kind: object
+- id: rtC2_fallenbike_pencil
+  kind: retrieval
+  voice_command: Pick up the pencil case near the picnic table and bring it to
+    the owner.
+  time_limit: 600.0
+  expected:
+    camera_id: rig_3_b
+    landmark_name: picnic_table_02
+    target_type: pencilcase
+    target_object_id: rig_3_b/pencilcase_0
+    relation: near
+    target_kind: object
+owner_zone:
+  id: owner_zone_1
+  marker_type: pickup_point
+  owner:
+    type: person_reaching
+    character: female_student_01
+  resolved:
+    prim_path: /world/owner_zone
+    position:
+    - -54.56651
+    - 142.79308
+    - 16.34423
+    rotation:
+    - -0.0
+    - 0.0
+    - 48.218

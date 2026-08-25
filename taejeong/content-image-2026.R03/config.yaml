@@ -1,0 +1,315 @@
+# ============================================================
+# MARC 2026 Platform Configuration
+# ============================================================
+# 플랫폼 공통 설정 파일. 시나리오 간 공유되는 정보를 정의한다.
+#
+# - 플랫폼 식별 정보 (ROS2 네임스페이스, 토큰 해시 시드)
+# - CCTV 카메라 기본값 (시나리오에서 미지정 시 적용)
+# - 미션 오브젝트 에셋 정의 (USD 파일, 스케일, 재활용 분류)
+# - 랜드마크 에셋 정의
+# ============================================================
+version: "2026.2"
+
+# ------------------------------------------------------------
+# 플랫폼 식별
+# ------------------------------------------------------------
+platform:
+  namespace: marc
+  # 토큰 해시 시드. token = MD5(team_id + hash_seed) 이므로 노출 시 임의 팀 토큰 위조 가능.
+  # ⚠️ 공개 저장소/배포 이미지에는 실제 시드를 두지 않는다. 아래는 연습/개발용 placeholder이며,
+  #    대회 서버는 환경변수 MARC_HASH_SEED 로 실제 시드를 주입한다(이 값보다 우선 적용).
+  hash_seed: "marc2026-dev-local-seed"
+
+# ------------------------------------------------------------
+# 로봇 (시나리오 무관 단일 모델)
+#   usd_file 경로는 {resources}/ 기준 상대 경로 (예: assets/robot/...)
+# ------------------------------------------------------------
+robot:
+  usd_file: assets/robot/metacombot2_USD/metacombot2.usd
+  # 런타임에서 로봇을 robot station(바닥 데칼) 위로 띄울 높이(m).
+  # 에디터는 station 위치/방향만 저작하고, 로봇은 런타임에서 station + spawn_height 에 배치된다.
+  # metacombot2.usd 는 prim 원점 기준 바닥(z_min)이 -0.3315m 라, station z 에 원점을 놓으면
+  # 차체가 0.33m 묻힌다. 바닥을 지면에 올리도록 0.34(=0.3315 + 1cm 침투여유)만큼 띄운다.
+  spawn_height: 0.5
+
+# ------------------------------------------------------------
+# CCTV 카메라 기본값 (HIKVISION DS-2CD2683G2-LIZS2U)
+#   센서: 1/2.8" Progressive Scan CMOS, 8MP
+#   렌즈: 가변초점 2.8~12mm, F1.6
+#   시나리오 camera 섹션에서 미지정된 값에 적용
+# ------------------------------------------------------------
+camera_defaults:
+  focal_length: 4.0             # mm (가변초점 2.8~12mm 중 기본값)
+  horizontal_aperture: 5.6      # mm (1/2.8" 센서)
+  ground_height: 1.0            # m
+  resolution: [3840, 2160]      # px (8MP, 16:9)
+
+# ------------------------------------------------------------
+# 미션 오브젝트 에셋 정의
+#   - 이 섹션의 키 목록 = 지원하는 오브젝트 유형 목록
+#   - usd_file 경로는 {resources}/assets 기준 상대 경로
+# ------------------------------------------------------------
+mission_object_assets:
+  master_chef_can:
+    type: ycb
+    usd_file: object/trash/master_chef_can/master_chef_can.usd
+    scale: [0.8, 0.8, 0.8]
+    recyclable: true
+    recycle_category: aluminum
+
+  cracker_box:
+    type: ycb
+    usd_file: object/trash/cracker_box/cracker_box.usd
+    scale: [0.8, 0.8, 0.8]
+    recyclable: true
+    recycle_category: paper
+
+  mug:
+    type: ycb
+    usd_file: object/cup/mug/mug.usd
+    scale: [1.5, 1.5, 1.5]
+    recyclable: false
+    recycle_category: none
+
+  wood_block:
+    type: ycb
+    usd_file: object/trash/wood_block/wood_block.usd
+    scale: [0.6, 0.6, 0.6]
+    recyclable: false
+    recycle_category: none
+
+  cola_can:
+    type: custom
+    usd_file: object/trash/cola/cola.usd
+    scale: [0.007, 0.007, 0.007]
+    recyclable: true
+    recycle_category: aluminum
+
+  disposable_cup:
+    type: custom
+    usd_file: object/trash/disposable_cup/disposable_cup.usd
+    scale: [0.003, 0.003, 0.003]
+    recyclable: true
+    recycle_category: plastic
+
+  juice:
+    type: custom
+    usd_file: object/trash/juice/juice.usd
+    scale: [0.007, 0.007, 0.007]
+    recyclable: true
+    recycle_category: plastic
+
+  tissue:
+    type: custom
+    usd_file: object/trash/tissue/tissue.usd
+    scale: [0.004, 0.004, 0.004]
+    recyclable: true
+    recycle_category: paper
+
+  pencilcase:
+    type: custom
+    usd_file: object/etc/pencilcase/pencilcase.usd
+    scale: [1, 1, 1]
+    recyclable: true
+    recycle_category: obj
+
+  tumbler:
+    type: custom
+    usd_file: object/tumbler/tumbler/tumbler.usd
+    scale: [1, 1, 1]
+    recyclable: true
+    recycle_category: obj
+
+  umbrella:
+    type: custom
+    usd_file: object/etc/umbrella/umbrella.usd
+    scale: [1, 1, 1]
+    recyclable: true
+    recycle_category: obj
+
+  long_umbrella:
+    type: custom
+    usd_file: object/etc/closedlongumbrella/closedlongumbrella.usd
+    scale: [1, 1, 1]
+    recyclable: true
+    recycle_category: obj
+
+  sunblock:
+    type: custom
+    usd_file: object/etc/sunblock/sunblock.usd
+    scale: [1, 1, 1]
+    recyclable: true
+    recycle_category: obj
+# ------------------------------------------------------------
+# Station (수거 거점) 에셋 정의
+#   - 시나리오의 station 'type' 값으로 에셋 매칭
+#     예: stations[].type: recycle_aluminum → station_assets.recycle_aluminum
+#   - category 는 mission_object_assets[*].recycle_category 와 매칭되며,
+#     일치하는 오브젝트를 station 근처에 두면 Stage2 채점 시 보너스 부여
+#   - usd_file 경로는 {resources}/assets 기준 상대 경로
+#   - TODO: 실제 USD 에셋 미준비 (AISL LAB [개발 2] 항목)
+#          현재는 매칭 키만 정의되어 있으며, USD 파일 없으면
+#          deploy_stations() 가 해당 station 을 skip 한다.
+# ------------------------------------------------------------
+station_assets:
+  recycle_aluminum:
+    usd_file: infra/recycle_bin/recycle_aluminum.usd
+    scale: [1.0, 1.0, 1.0]
+    category: aluminum
+
+  recycle_paper:
+    usd_file: infra/recycle_bin/recycle_paper.usd
+    scale: [1.0, 1.0, 1.0]
+    category: paper
+
+  recycle_plastic:
+    usd_file: infra/recycle_bin/recycle_plastic.usd
+    scale: [1.0, 1.0, 1.0]
+    category: plastic
+
+  recycle_general:
+    usd_file: infra/recycle_bin/recycle_general.usd
+    scale: [1.0, 1.0, 1.0]
+    category: none
+
+  lost_and_found_box:
+    usd_file: infra/lost_and_found/lost_and_found_box.usd
+    scale: [1.0, 1.0, 1.0]
+    category: obj
+
+# ------------------------------------------------------------
+# Owner Zone 마커 에셋 (Stage2 도착지 — 바닥 영역 시각용, 선택)
+#   - 채점은 마커에 의존하지 않으므로 마커 에셋은 선택이다(없으면 주인 사람 위치 기준).
+#   - 시나리오 owner_zone.marker_type 값으로 이 에셋을 매칭한다.
+#   - 두 가지 정의 방식:
+#       (A) texture: PNG 한 장으로 바닥 데칼을 절차 생성 (USD 저작 불필요, 추천)
+#             · texture: {resources}/assets 기준 PNG 상대경로 (알파 채널 = 마킹 모양)
+#             · size: 평면 가로(x)/세로(y) 크기, m
+#             · height_offset: 바닥에서 띄우는 높이 m (z-fighting 방지)
+#       (B) usd_file: 직접 저작한 마커 USD 를 spawn (+ scale)
+#   시나리오 YAML 예 (시나리오당 단일):
+#     owner_zone:
+#       id: main_exit
+#       position: [x, y, z]          # 생략 시 mission_area 내 랜덤
+#       marker_type: pickup_point    # owner_zone_assets 키 (선택)
+#       owner:                       # 주인 사람 (선택)
+#         type: person_standing      # people_poses.yaml 의 person_* 키
+#         character: male_student_01   # people_assets 키
+# ------------------------------------------------------------
+owner_zone_assets:
+  # PICK-UP POINT 바닥 데칼 (절차 생성 — PNG 한 장 필요)
+  pickup_point:
+    texture: infra/pickup_marker/PICKUP_decal.png
+    size: [1.6, 1.0]
+    height_offset: 0.02
+
+# ------------------------------------------------------------
+# Robot Station 바닥 데칼 (로봇 시작 지점 표시 — 순수 시각용)
+#   - 로봇과 별개 prim(/world/robot_station)이라 로봇이 출발해도 시작 지점에 남는다.
+#   - texture PNG 로 데칼을 절차 생성한다(충돌 없음 → 주행/채점 무관).
+#   - deploy_robot(configurations=...) 호출 시 자동 배치(시작 yaw 정렬).
+# ------------------------------------------------------------
+robot_station_marker:
+  texture: infra/robot_station/ROBOT_STATION_decal.png
+  size: [1.6, 1.0]
+  height_offset: 0.02
+
+# ------------------------------------------------------------
+# 랜드마크 에셋 정의
+#   - 시나리오의 landmark name 접두사로 에셋 매칭
+#     예: bench_01 → landmark_assets.bench
+#   - usd_file 경로는 {resources}/assets/landmarks 기준 상대 경로
+# ------------------------------------------------------------
+landmark_assets:
+  bench:
+    usd_file: landmark/furniture/bench/bench.usd
+    scale: [0.9, 0.9, 0.9]
+  bicycle:
+    usd_file: landmark/mobility/bicycle/bicycle.usd
+    scale: [1.0, 1.0, 1.0]
+    rotation: [-31.3, -83.1, -121.8]  # Roll, Pitch, Yaw
+  hydrant:
+    usd_file: landmark/street/hydrant/hydrant.usd
+    scale: [1.0, 1.0, 1.0]
+  kick_scooter:
+    usd_file: landmark/mobility/kick_scooter/kick_scooter.usd
+    scale: [1.2, 1.2, 1.2]
+  picnic_table:
+    usd_file: landmark/furniture/picnic_table/picnic_table.usd
+    scale: [1.0, 1.0, 1.0]
+
+  postbox:
+    usd_file: landmark/street/postbox/postbox.usd
+    scale: [1.0, 1.0, 1.0]
+
+  vending_machine:
+    usd_file: landmark/street/vending_machine/vending_machine.usd
+    scale: [1.0, 1.0, 1.0]
+
+  trash_can:
+    usd_file: landmark/street/trash_can/trash_can.usd
+    scale: [1.0, 1.0, 1.0]
+
+  # CC0 대체 차량 (Quaternius, CC0 1.0) - 라이선스 안전 자산. scale 은 인게임 튜닝 필요
+  police_car:
+    usd_file: landmark/car/police_car/police_car.usd
+    scale: [1.0, 1.0, 1.0]
+  normal_car_1:
+    usd_file: landmark/car/normal_car_1/normal_car_1.usd
+    scale: [1.0, 1.0, 1.0]
+  normal_car_2:
+    usd_file: landmark/car/normal_car_2/normal_car_2.usd
+    scale: [1.0, 1.0, 1.0]
+  sports_car:
+    usd_file: landmark/car/sports_car/sports_car.usd
+    scale: [1.0, 1.0, 1.0]
+  sports_car_2:
+    usd_file: landmark/car/sports_car_2/sports_car_2.usd
+    scale: [1.0, 1.0, 1.0]
+  suv:
+    usd_file: landmark/car/suv/suv.usd
+    scale: [1.0, 1.0, 1.0]
+  taxi:
+    usd_file: landmark/car/taxi/taxi.usd
+    scale: [1.0, 1.0, 1.0]
+
+# ------------------------------------------------------------
+# People (SAR 대상 사람) 에셋 정의
+#   - 캐릭터 = MakeHuman(CC0) 자체 제작, **game_engine rig(53 joints)**. (구 IsaacSim People
+#     Reallusion CC 101-joint 4종은 2026-07 전면 교체·제거됨 — 라이선스/용량, MAKEHUMAN_CHARACTER_MIGRATION.md)
+#   - SAR 대상 사람(쓰러짐·위급·이상행동) 및 디스트랙터(정상)는 [캐릭터 + 포즈] 조합으로 출제
+#   - 자세(포즈)는 skeleton 별로 분리: game_engine → scenarios/people_poses_game_engine.yaml
+#     (런타임 get_people_pose 가 아래 skeleton 값으로 선택). CC용 people_poses.yaml 은 레거시.
+#   - usd_file 경로는 {resources}/assets 기준 상대 경로. 캐릭터 USD/텍스처는 DVC 관리(`dvc pull`).
+#     저작 원천 = tools/pose_builder/source/<char>/ (자연화·검증 후 여기로 승격).
+#   - 시나리오 배치: objects[] 에 `type: person_*`(=people_poses 키) + `character`(=이 키) 로 출제.
+#     스키마: docs/PLATFORM_SCENARIO_DEFINITION.md §3.6.5 / 결정: docs/SCENARIO_FINAL_DECISION.md §2-②
+# ------------------------------------------------------------
+people_assets:
+
+  # ------------------------------------------------------------
+  # MakeHuman(CC0) 자체 제작 캐릭터 — game_engine rig(53 joints)
+  #   ⚠️ 위 IsaacSim People(Reallusion CC, 101 joints)과 스켈레톤이 다르다.
+  #      → 자세는 CC용 people_poses.yaml 이 아니라 **people_poses_game_engine.yaml** 에서 읽는다.
+  #        런타임 get_people_pose 가 아래 `skeleton: game_engine` 값으로 자세 소스를 고른다.
+  #   usd_file 은 다른 항목과 동일하게 resources/assets 기준(= DVC 승격 경로)이다.
+  #     저작 원천은 tools/pose_builder/source/<char>/ 이며, 자연화·검증 후 여기로 승격했다(dvc add/push).
+  #   상태: male_student_01 = Phase 3~7 구현·검증(2026-07). 나머지 3종은 검증 진행 중.
+  #   문서: dev-docs/MAKEHUMAN_CHARACTER_MIGRATION.md / dev-docs/APPENDIX_A_POSE_BUILDER.md
+  # ------------------------------------------------------------
+  male_student_01:
+    usd_file: people/male_student_01/male_student_01.usd
+    scale: [1.0, 1.0, 1.0]
+    skeleton: game_engine
+  female_student_01:
+    usd_file: people/female_student_01/female_student_01.usd
+    scale: [1.0, 1.0, 1.0]
+    skeleton: game_engine
+  professor_01:
+    usd_file: people/professor_01/professor_01.usd
+    scale: [1.0, 1.0, 1.0]
+    skeleton: game_engine
+  student_weight_01:
+    usd_file: people/student_weight_01/student_weight_01.usd
+    scale: [1.0, 1.0, 1.0]
+    skeleton: game_engine

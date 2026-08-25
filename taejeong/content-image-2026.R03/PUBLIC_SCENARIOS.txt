@@ -1,0 +1,22 @@
+# MARC 2026 — 공개(참가자 연습) 시나리오 허용목록 (allowlist)
+# ---------------------------------------------------------------
+# 이 파일에 나열된 항목만 참가자 배포 이미지(Dockerfile.practice)에 포함한다.
+# _roster.json(발급된 팀 토큰)은 절대 공개 이미지/채널에 포함하지 않는다.
+#
+# marc2026_chungmu = 참가자 제공 full set(정답 expected 포함). 참가자가 자기 환경에서
+# chungmu 를 띄우고 자가 채점 결과까지 확인하는 용도이므로 공개 대상이다.
+# marc2026_demo = 베이스라인 데모가 처음부터 끝까지 도는지 확인하는 데모 시나리오
+# (demo/mock_demo_data.yaml 이 이 시나리오에서 추출된다). 역시 공개 대상이다.
+# 한 줄당 파일명 하나. '#' 주석/빈 줄 무시.
+#
+# 아래 지원 파일은 런타임/채점이 직접 읽으므로 반드시 함께 포함해야 한다(누락 시 SAR 사람 배치·채점 불가):
+#   people_poses_game_engine.yaml = SAR 사람(game_engine rig) 배치 자세 소스(object_deployer/get_people_pose).
+#   situation_rules.yaml          = SAR situation(pose x support) 규칙표(stage1_scorer). 없으면 fallback-only 로 강등.
+# people_poses.yaml 은 레거시(CC rig)이나 호환을 위해 유지한다.
+
+config.yaml
+people_poses.yaml
+people_poses_game_engine.yaml
+situation_rules.yaml
+marc2026_chungmu.yaml
+marc2026_demo.yaml
