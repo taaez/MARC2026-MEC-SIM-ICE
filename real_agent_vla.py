@@ -96,7 +96,12 @@ class RealVLAGrounding:
 
     def __init__(self, client, det_weights: str = DET_WEIGHTS):
         self._client = client
-        self._det = YOLO(det_weights)
+        # MARC_RECORD_ONLY=1: 데이터 수집 전용 모드. YOLO 를 로드/추론하지 않고
+        # (weights 파일도 불필요) 라운드마다 CCTV 이미지+카메라 파라미터만
+        # MARC_RECORD_DIR 에 덤프한 뒤 빈 payload 를 즉시 제출해 다음 라운드로
+        # 넘어간다. 수집한 기록은 tools/run_offline_real_vla.py 로 재실행한다.
+        self._record_only = os.getenv("MARC_RECORD_ONLY", "").lower() in ("1", "true", "yes")
+        self._det = None if self._record_only else YOLO(det_weights)
         # tf2 needs client.node, which only exists after client.connect() -- init lazily
         # on first use rather than here (RealVLAGrounding is constructed before connect()).
         self._tf_buffer = None
@@ -138,6 +143,19 @@ class RealVLAGrounding:
             img = self._to_bgr(self._client.get_cctv_image(cam_id))
             if img is not None:
                 images[cam_id] = img
+
+        if self._record_only:
+            # 수집 전용: 추론 없이 기록만 남기고 빈 제출로 라운드를 넘긴다.
+            result = GroundingResult(
+                camera_id="", target_type=target_type,
+                anchor_coord=[0.0, 0.0, 0.0], target_coord=[0.0, 0.0, 0.0],
+                landmark=landmark,
+                relation=None if parsed.is_person else parsed.relation_hint,
+                situation=None,
+            )
+            self._record(stage, command, images, result.to_payload())
+            log.info("[vla] record-only round done (%d cameras)", len(images))
+            return result
 
         for cam_id in camera_ids:
             img = images.get(cam_id)

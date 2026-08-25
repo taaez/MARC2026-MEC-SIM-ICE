@@ -73,6 +73,18 @@ MARC_RECORD_DIR=../records MARC_ENTRYPOINT=participant_app_real_vla.py ./launch.
 라운드마다 `records/s1_<라운드>_<ts>/` 에 카메라별 PNG + `meta.json`(명령,
 카메라 K/R_cw/C_w/ground_z, 제출 payload)이 쌓인다.
 
+**수집 전용 모드** — 점수는 필요 없고 이미지/카메라 파라미터만 모으려면
+`MARC_RECORD_ONLY=1` 을 추가한다. YOLO 를 로드/추론하지 않으므로(weights 불필요)
+라운드당 수 초에 끝나고, 빈 payload 를 즉시 제출해 다음 라운드로 넘어간다:
+
+```bash
+MARC_RECORD_ONLY=1 MARC_RECORD_DIR=../records \
+MARC_ENTRYPOINT=participant_app_real_vla.py ./launch.sh <team_id>
+```
+
+이때 1단계 `marc.sh select` 에서 **Stage2 문제는 꺼 둘 것** — Stage2 가 켜져 있으면
+제출 후 주행/픽업 시퀀스(최대 30분)가 돌아 수집 시간이 크게 늘어난다.
+
 시작 로그에 `[entry] Stage 1/2 grounding = RealVLAGrounding` 이 찍히는지 확인.
 라운드별 점수는 동일하게 `results/scores.jsonl` 에 쌓인다:
 
