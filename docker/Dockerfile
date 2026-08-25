@@ -58,6 +58,7 @@ ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 \
 WORKDIR /agent
 COPY marc_sdk /agent/marc_sdk
 COPY stage1   /agent/stage1
+COPY taejeong /agent/taejeong
 COPY demo     /agent/demo
 COPY models   /agent/models
 
@@ -75,6 +76,12 @@ WORKDIR /agent/demo
 COPY docker/entrypoint.sh /agent/entrypoint.sh
 RUN chmod +x /agent/entrypoint.sh
 ENTRYPOINT ["/agent/entrypoint.sh"]
-# participant_app.py (팀 기본) 는 real_agent_vla(YOLO11) 로 연결돼 있다. 이 이미지는
-# GroundingDINO+Qwen2.5-VL 구현이므로 별도 진입점(participant_app_agent_vla.py)을 쓴다.
+# participant_app.py (팀 기본) 는 taejeong 파이프라인(YOLO + 명령파싱 + 기하)으로 연결돼 있다.
+# 이 이미지는 GroundingDINO+Qwen2.5-VL 구현용이라 별도 진입점을 쓴다.
+#
+# ⚠️ 제출 전 결정 필요: 루트 docker-compose.yml 이 이 Dockerfile 을 빌드하므로,
+#    지금 상태로 제출하면 DINO+Qwen 경로가 실행된다. taejeong 파이프라인을 제출하려면
+#    (a) 아래 CMD 를 participant_app.py 로 바꾸고,
+#    (b) YOLO 가중치(demo/weights/best.pt)를 이미지에 baking 하고,
+#    (c) 불필요해진 VLM/DET 빌드 ARG·전용 의존성을 정리해야 한다.
 CMD ["python3", "participant_app_agent_vla.py"]
