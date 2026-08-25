@@ -12,12 +12,16 @@
 | 학습된 가중치 | `demo/weights/best.pt` | **팀원에게 파일로 받아 직접 배치** (git 미포함) |
 | 명령 파싱 · 기하 · situation | `taejeong/*.py` | 우리 구현 |
 | ROS 배선 | `demo/taejeong_agent_vla.py` | 우리 구현 |
-| 진입점 | `demo/participant_app_taejeong.py` | 우리 구현 |
+| 진입점 | `demo/participant_app.py` (**기본**) | 우리 파이프라인으로 배선됨 |
 | 공식 정답 정의 | `taejeong/content-image-2026.R03/marc2026_chungmu.yaml` | content 이미지에서 추출 |
 
 `demo/mock_agent_vla.py` 는 건드리지 않는다. 대회 가이드가 요구하는 것은
-`process()` / `process_stage2()` 시그니처 유지이고, `TaejeongVLAGrounding` 이 이를 지킨다
-(팀의 기존 `real_agent_vla.py`, `agent_vla.py` 도 동일한 방식의 별도 파일이다).
+`process()` / `process_stage2()` 시그니처 유지이고, `TaejeongVLAGrounding` 이 이를 지킨다.
+
+`demo/real_agent_vla.py`(YOLO + 인라인 휴리스틱)는 **더 이상 실행 경로가 아니다** —
+`participant_app.py` 가 `TaejeongVLAGrounding` 을 쓰도록 바뀌었다. 파일 자체는 남겨뒀으나
+(`demo/train_yolo11.py` 가 아직 import 한다) 런타임에는 관여하지 않는다.
+Grounding DINO + Qwen 실험은 `MARC_ENTRYPOINT=participant_app_agent_vla.py` 로 계속 쓸 수 있다.
 
 ## 0. 사전 준비 (최초 1회)
 
@@ -61,8 +65,11 @@ Isaac Sim GUI 에서 **Play** 를 눌러야 CCTV/clock/TF 토픽이 살아난다
 
 ```bash
 cd demo
-MARC_ENTRYPOINT=participant_app_taejeong.py ./launch.sh <team_id>
+./launch.sh <team_id>
 ```
+
+`participant_app.py` 가 기본 진입점이고 이미 우리 파이프라인으로 배선돼 있으므로
+`MARC_ENTRYPOINT` 를 줄 필요가 없다.
 
 라운드별 점수가 `results/scores.jsonl` 에 쌓인다. 별도 터미널에서 실시간 확인:
 
