@@ -13,7 +13,10 @@
 
 from __future__ import annotations
 
-from grounding import Detection
+try:                              # package import (e.g. `from taejeong.yolo_adapter import ...`)
+    from .grounding import Detection
+except ImportError:               # run directly as a script from within taejeong/
+    from grounding import Detection
 
 
 def detections_from_result(result, min_conf: float = 0.25) -> list:

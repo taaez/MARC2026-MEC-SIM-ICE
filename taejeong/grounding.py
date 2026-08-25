@@ -31,9 +31,14 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from command_parser import LANDMARK_SYNONYMS, ParsedCommand
-from situation_resolver import POSE_CLASS as PERSON_POSE_CLASSES
-from situation_resolver import resolve_situation
+try:                              # package import (e.g. `from taejeong.grounding import ...`)
+    from .command_parser import LANDMARK_SYNONYMS, ParsedCommand
+    from .situation_resolver import POSE_CLASS as PERSON_POSE_CLASSES
+    from .situation_resolver import resolve_situation
+except ImportError:               # run directly as a script from within taejeong/
+    from command_parser import LANDMARK_SYNONYMS, ParsedCommand
+    from situation_resolver import POSE_CLASS as PERSON_POSE_CLASSES
+    from situation_resolver import resolve_situation
 
 RELATIONS = ("near", "beside", "behind", "front", "left", "right", "on", "above")
 
