@@ -1,7 +1,20 @@
-"""MARC 2026 SDK demo participant (baseline code).
+"""MARC 2026 participant app -- team default entry point.
 
-The baseline demo that wires the whole flow together with **marc_sdk** --
-Stage 1 grounding + Stage 2 occupancy A* driving (cmd_vel).
+Stage 1 grounding runs the taejeong pipeline (``taejeong_agent_vla`` ->
+``taejeong/``: closed-vocabulary command parsing, pure-geometry grounding, and
+the organizer's official pose x support situation rules), on top of the team's
+YOLO detector weights (``demo/weights/best.pt``, classes per
+``test/det_classes.py``). Stage 2 is the starter kit's occupancy A* driving
+(cmd_vel) + placo pick, unchanged.
+
+``demo/mock_agent_vla.py`` is intentionally left untouched: the guide's
+requirement is the ``process()`` / ``process_stage2()`` signature returning a
+``GroundingResult``, which ``TaejeongVLAGrounding`` satisfies -- so this file
+swaps the implementation without changing the protocol wiring.
+
+Per-round scores are appended to ``./results/scores.jsonl``
+(``MARC_SCORE_LOG``); ``taejeong/validation/`` reads that file for self-scoring
+against marc2026_chungmu. See ``taejeong/RUNBOOK.md``.
 The protocol/ROS wiring (register, subscribe/publish, world_pose, occupancy) is all
 handled by ``MARCClient``, so only the participant logic (mock VLA + nav) is connected
 through handlers.
@@ -17,6 +30,7 @@ Run:
 Precondition: the simulation platform must be running first.
 """
 
+import json
 import logging
 import math
 import os
@@ -24,7 +38,7 @@ import time
 
 from marc_sdk import MARCClient
 
-from real_agent_vla import RealVLAGrounding
+from taejeong_agent_vla import TaejeongVLAGrounding
 from mock_agent_navigation import (
     OccupancyGridPlanner, PathFollower, GoalSeekController,
     load_obstacles, obstacles_excluding_goal, load_mock_data,
@@ -75,7 +89,14 @@ class DemoParticipant:
 
     def __init__(self):
         self.client = MARCClient.from_env()
-        self.vla = RealVLAGrounding(self.client)
+        # Stage 1/2 grounding: taejeong pipeline (command_parser -> YOLO -> grounding
+        # geometry -> situation_resolver). YOLO weights load here, once, before connect().
+        self.vla = TaejeongVLAGrounding(self.client)
+        # Per-round detail-score JSONL log (see _on_score). Round -> voice_command so each
+        # score line can be joined back to the question that produced it; taejeong/validation
+        # reads this file for self-scoring.
+        self._round_commands = {}
+        self._score_log_path = os.environ.get("MARC_SCORE_LOG", "./results/scores.jsonl")
         # Stage 2 pickup goal -- filled from the approximate location hint in the reveal (msg 411).
         # If not received, fall back to the Stage 2 answer target (_stage2_target_xy).
         self._collect_xy = None
@@ -108,6 +129,7 @@ class DemoParticipant:
     def _on_mission(self, mission):
         log.info("[Stage1] round %s/%s: \"%s\"",
                  mission.round, mission.total_rounds, mission.voice_command)
+        self._round_commands[mission.round] = mission.voice_command
         result = self.vla.process(mission.voice_command, self.client.list_cctv())
         # result is a GroundingResult -- submit it directly.
         self.client.submit_grounding(result)
@@ -415,6 +437,26 @@ class DemoParticipant:
             log.info("[FINAL] %s", score.scores)
         else:
             log.info("[Score] round %s: total=%s", score.round, score.total)
+        self._append_score_log(score)
+
+    def _append_score_log(self, score):
+        """Append one JSONL line per score event (round, its voice_command, full scores dict).
+
+        Path from MARC_SCORE_LOG (default ./results/scores.jsonl). Logging must never
+        break the run loop, so failures are logged and swallowed.
+        """
+        try:
+            entry = {
+                "stage": score.stage,
+                "round": score.round,
+                "voice_command": self._round_commands.get(score.round),
+                "scores": score.scores,
+            }
+            os.makedirs(os.path.dirname(self._score_log_path) or ".", exist_ok=True)
+            with open(self._score_log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            log.warning("[Score] JSONL logging failed: %s", e)
 
     def _on_state_change(self, old, new):
         log.info("[STATE] %s -> %s", old, new)
