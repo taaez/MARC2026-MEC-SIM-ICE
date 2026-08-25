@@ -258,7 +258,7 @@ def main():
 
     t = sub.add_parser("train")
     t.add_argument("--data", required=True, help="path to data.yaml from convert")
-    t.add_argument("--epochs", type=int, default=100)
+    t.add_argument("--epochs", type=int, default=200)
     t.add_argument("--imgsz", type=int, default=1280)  # matches CCTV native resolution (1280x720)
     t.add_argument("--weights", default="yolo11n.pt")
     t.add_argument("--batch", type=int, default=16, help="lower this if training crashes with an OOM/dataloader error")
