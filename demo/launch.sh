@@ -9,8 +9,7 @@
 #   ./launch.sh u1                                       # if tokens.env exists, u1 -> U1_TOKEN
 #   ROS_DOMAIN_ID=0 ./launch.sh u2
 #   MARC_ENTRYPOINT=participant_app_agent_vla.py ./launch.sh u1   # run a different entry point
-#     default: participant_app.py = taejeong pipeline (YOLO + command parsing + geometry).
-#     participant_app_agent_vla.py = the Grounding DINO + Qwen2.5-VL experiment.
+#     (default: participant_app.py; both entry points live in this directory)
 #
 # ROS2 distribution:
 #   The runtime uses IsaacSim's built-in humble FastDDS. The client must also be humble
