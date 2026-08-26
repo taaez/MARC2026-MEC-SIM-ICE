@@ -27,15 +27,22 @@ target 미탐지(``grounding.resolve`` 가 None)일 때의 fallback 값은 실�
 (``demo_agents/taejeong_agent_vla.py._ground``)와 동일하게 재현한다: camera_id="",
 좌표=[0,0,0], 나머지 필드는 파싱된 값을 그대로 채워 제출한다.
 
-사용 (cd mec_sim_ice/taejeong/validation 후):
-  python3 offline_score.py --weights ../../demo_agents/weights/best.pt
+사용 — 인자 없이 그냥 실행하면 된다. 기본 경로가 CWD 가 아니라 이 스크립트
+위치 기준이라 **어느 디렉토리에서 실행하든** 동작한다:
 
-옵션(기본값은 이 폴더 기준 상대경로):
-  --records <dir>       기본 ../../records
-  --weights <best.pt>   기본 ../../demo_agents/weights/best.pt
-  --answer-key <jsonl>  기본 runs/chungmu_full39_2026-08-25.jsonl
+  python3 mec_sim_ice/score.py            # 리포 루트에서 (가장 짧은 형태)
+  python3 offline_score.py                # 이 폴더에서
+
+옵션(전부 선택):
+  --records <dir>       기본 mec_sim_ice/records
+  --weights <best.pt>   기본 mec_sim_ice/demo_agents/weights/best.pt
+  --answer-key <jsonl>  기본 validation/runs/chungmu_full39_2026-08-25.jsonl
   --conf 0.25 --imgsz 1280
   --json report.json    리포트를 JSON 으로도 저장 (score_report.py 와 동일 스키마)
+
+주의: macOS 는 "--" 를 em-dash("—") 로 자동 치환하는 경우가 있다. 옵션이
+"unrecognized arguments" 로 튕기면 대시가 한 글자로 바뀐 것이니 하이픈 두 개로
+다시 입력할 것 (main() 이 이 경우를 감지해 안내한다).
 """
 
 from __future__ import annotations
@@ -49,6 +56,8 @@ import sys
 
 _VALIDATION_DIR = os.path.dirname(os.path.abspath(__file__))
 _TAEJEONG_DIR = os.path.dirname(_VALIDATION_DIR)
+_MEC_ROOT = os.path.dirname(_TAEJEONG_DIR)          # mec_sim_ice/
+sys.path.insert(0, _VALIDATION_DIR)  # score_report
 sys.path.insert(0, _TAEJEONG_DIR)   # command_parser / grounding / yolo_adapter / run_offline
 
 from command_parser import parse_command          # noqa: E402
@@ -59,6 +68,13 @@ from yolo_adapter import infer_cameras              # noqa: E402
 from score_report import report                     # noqa: E402  (same dir)
 
 COORD_TOLERANCE_M = 5.0
+
+# 기본 경로는 CWD 가 아니라 **이 스크립트 위치** 기준으로 잡는다 — 어느
+# 디렉토리에서 실행하든 인자 없이 그냥 돌아가게 하려는 것.
+DEFAULT_RECORDS = os.path.join(_MEC_ROOT, "records")
+DEFAULT_WEIGHTS = os.path.join(_MEC_ROOT, "demo_agents", "weights", "best.pt")
+DEFAULT_ANSWER_KEY = os.path.join(_VALIDATION_DIR, "runs",
+                                  "chungmu_full39_2026-08-25.jsonl")
 
 
 def load_answer_key(path: str) -> dict:
@@ -137,13 +153,33 @@ def score_round(problem_id: str, weights: dict, expected: dict, submission: dict
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--records", default="../../records")
-    ap.add_argument("--weights", default="../../demo_agents/weights/best.pt")
-    ap.add_argument("--answer-key", default="runs/chungmu_full39_2026-08-25.jsonl")
+    ap.add_argument("--records", default=DEFAULT_RECORDS)
+    ap.add_argument("--weights", default=DEFAULT_WEIGHTS)
+    ap.add_argument("--answer-key", default=DEFAULT_ANSWER_KEY)
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--imgsz", type=int, default=1280)
     ap.add_argument("--json", default=None)
+
+    # macOS 는 입력 중 "--" 를 em-dash("—") 로 자동 치환하는 경우가 있다.
+    # 그대로 두면 argparse 가 "unrecognized arguments" 만 뱉어 원인을 알기 어렵다.
+    for a in sys.argv[1:]:
+        if a.startswith("—") or a.startswith("–"):
+            print(f"인자 {a!r} 가 하이픈 두 개(--)가 아니라 대시 한 글자입니다 "
+                  f"(macOS 자동 치환). '--{a.lstrip(chr(0x2013) + chr(0x2014))}' 로 "
+                  f"다시 입력하세요.", file=sys.stderr)
+            return 2
+
     args = ap.parse_args()
+
+    if not os.path.exists(args.weights):
+        print(f"가중치를 찾을 수 없습니다: {args.weights}\n"
+              f"  학습 담당 팀원에게 받은 best.pt 를 그 경로에 두거나 "
+              f"--weights 로 경로를 지정하세요 (git 에 포함되지 않는 파일입니다).",
+              file=sys.stderr)
+        return 2
+    if not os.path.isdir(args.records):
+        print(f"records 폴더를 찾을 수 없습니다: {args.records}", file=sys.stderr)
+        return 2
 
     answer_key = load_answer_key(args.answer_key)
 

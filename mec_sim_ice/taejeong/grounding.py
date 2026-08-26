@@ -50,9 +50,14 @@ CAR_CLASSES = {"police_car", "normal_car_1", "normal_car_2",
 #
 # 명령이 랜드마크를 말하지 않고 구역만 말하는 경우가 있다 ("Find the umbrella
 # dropped in the empty parking space."). 구역 자체는 탐지 대상이 아니지만, 그
-# 구역을 정의하는 지표 클래스는 탐지된다 — "주차 구역" 은 곧 "차량이 있는 곳"
-# 이다. 이 매핑은 씬 배치가 아니라 **단어의 일반적 의미**에서 나온 것이라
+# 구역을 정의하는 지표 클래스는 탐지된다 — "주차 구역" 은 곧 "차량이 밀집한
+# 곳" 이다. 이 매핑은 씬 배치가 아니라 **단어의 일반적 의미**에서 나온 것이라
 # 배경이 바뀌어도 성립한다 (특정 시나리오/좌표를 참조하지 않는다).
+#
+# "있다" 가 아니라 "가장 많다" 로 판정하는 것이 중요하다: 실측에서 차량은 6대
+# 중 4대 카메라에 흩어져 잡혔고(길가에 세워진 차 한 대는 주차장이 아니다),
+# 단순 존재로 게이트를 걸면 후보가 안 좁혀져 오히려 오답을 골랐다. 지표 최다
+# 카메라로 좁히면 연습 8문항 전부 정답 카메라가 유일하게 남는다.
 #
 # 안전성: 지표가 한 카메라에서도 안 잡히면 게이트가 그냥 풀려서 이 계층이 없을
 # 때와 똑같이 동작한다 (순수 폴백 — 더 맞힐 수는 있어도 나빠지지는 않는다).
@@ -495,13 +500,16 @@ def resolve(parsed: ParsedCommand,
     gate_kind = "landmark" if gated else None
 
     if not gated:
-        # 명령이 랜드마크 없이 구역만 말한 경우 — 그 구역의 지표 클래스가
-        # 보이는 카메라로 좁힌다 (AREA_INDICATOR_CLASSES 주석 참조).
+        # 명령이 랜드마크 없이 구역만 말한 경우 — 그 구역의 지표 클래스가 가장
+        # 많이 보이는 카메라로 좁힌다 (AREA_INDICATOR_CLASSES 주석 참조:
+        # "있다" 가 아니라 "밀집해 있다" 가 구역의 정의다).
         indicators = AREA_INDICATOR_CLASSES.get(parsed.area_hint or "")
         if indicators:
-            gated = [cid for cid, (_, dets, _) in per_cam.items()
-                     if any(d.label in indicators for d in dets)]
-            if gated:
+            counts = {cid: sum(1 for d in dets if d.label in indicators)
+                      for cid, (_, dets, _) in per_cam.items()}
+            top = max(counts.values(), default=0)
+            if top > 0:
+                gated = [cid for cid, n in counts.items() if n == top]
                 gate_kind = "area"
 
     gate_applied = bool(gated)
