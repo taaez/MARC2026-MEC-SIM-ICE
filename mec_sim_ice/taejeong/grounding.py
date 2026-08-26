@@ -46,6 +46,23 @@ RELATIONS = ("near", "beside", "behind", "front", "left", "right", "on", "above"
 CAR_CLASSES = {"police_car", "normal_car_1", "normal_car_2",
                "sports_car", "sports_car_2", "suv", "taxi", "car"}
 
+# 구역(command_parser.area_hint) → 그 구역을 정의하는 지표 클래스.
+#
+# 명령이 랜드마크를 말하지 않고 구역만 말하는 경우가 있다 ("Find the umbrella
+# dropped in the empty parking space."). 구역 자체는 탐지 대상이 아니지만, 그
+# 구역을 정의하는 지표 클래스는 탐지된다 — "주차 구역" 은 곧 "차량이 있는 곳"
+# 이다. 이 매핑은 씬 배치가 아니라 **단어의 일반적 의미**에서 나온 것이라
+# 배경이 바뀌어도 성립한다 (특정 시나리오/좌표를 참조하지 않는다).
+#
+# 안전성: 지표가 한 카메라에서도 안 잡히면 게이트가 그냥 풀려서 이 계층이 없을
+# 때와 똑같이 동작한다 (순수 폴백 — 더 맞힐 수는 있어도 나빠지지는 않는다).
+# "road" 는 연습 코퍼스에 근거 사례가 없어 일부러 비워 뒀다: 근거 없이 매핑을
+# 만들면 멀쩡한 카메라를 걸러낼 위험만 생긴다.
+AREA_INDICATOR_CLASSES = {
+    "parking": CAR_CLASSES,
+    "park": {"picnic_table", "bench"},
+}
+
 # pose 코스 버킷(command_parser) → 공식 pose 클래스 후보 집합.
 # 언어 표면형이 pose 클래스와 1:1 이 아니므로(실측: "lying face-down" 이
 # person_bending 인 예 존재) 버킷은 후보를 좁힐 뿐 단정하지 않는다.
@@ -325,108 +342,241 @@ def _target_ok(label: str, parsed: ParsedCommand) -> bool:
     return label == parsed.target_type
 
 
-def resolve(parsed: ParsedCommand,
-            detections: dict,               # {camera_id: [Detection, ...]}
-            cameras: dict,                  # {camera_id: CameraModel}
-            cfg: GroundingConfig = GroundingConfig(),
-            ground_surface_token: Optional[str] = None,
-            ) -> Optional[GroundingDecision]:
-    """모든 카메라의 탐지에서 (카메라, target, anchor) 최적 조합을 고르고
-    relation/situation/좌표를 계산한다. target 미탐지면 None (상위 폴백 몫).
+NEARISH_RELATIONS = ("on", "above", "beside", "near")
 
-    ground_surface_token: 사람이 랜드마크 위가 아닐 때 situation 규칙에 넣을
-    지면 토큰(grass/road/...). 판정 수단이 없으면 None → 공식 fallback 경로.
+
+def _support_adjusted(cam: CameraModel, tdet: Detection, t_loc: Located,
+                      a_loc: Located, cfg: GroundingConfig) -> Located:
+    """'on' 후보면 지지면(anchor 상면) 평면으로 target 을 재투영해 돌려준다.
+
+    채택 조건: 재투영이 target 을 anchor 중심으로 '끌어당기고'(진짜 on 이면
+    중심 부근에 떨어짐) footprint 안일 때만. 이미지상 겹칠 뿐 앞/뒤 지면에 서
+    있는 물체는 재투영하면 오히려 anchor 에서 멀어지므로 여기서 걸러진다.
     """
-    best = None      # (score, cam_id, target Located, anchor Located|None)
-    for cam_id, dets in detections.items():
-        cam = cameras.get(cam_id)
-        if cam is None:
-            continue
-        targets = [d for d in dets if _target_ok(d.label, parsed)]
-        anchors = [d for d in dets if _landmark_ok(d.label, parsed.landmark_type)]
-        for tdet in targets:
-            t_loc = locate(cam, tdet)
-            if t_loc is None:
-                continue
-            # 랜드마크 후보: 명령에 타입이 있으면 그 타입만, 없으면 전 랜드마크
-            # 중 3D 최근접 (팀 결정). 'on' 후보면 지지면 평면으로 target 재투영.
-            a_best, a_dist = None, float("inf")
-            for adet in anchors:
-                if adet is tdet:
-                    continue
-                a_loc = locate(cam, adet)
-                if a_loc is None:
-                    continue
-                t_here = t_loc
-                if _looks_on(a_loc, tdet):
-                    # 지지면(anchor 상면) 평면으로 재투영. 채택 조건: 재투영이
-                    # target 을 anchor 중심으로 '끌어당기고'(진짜 on 이면 중심
-                    # 부근에 떨어짐) footprint 안일 때만. 이미지상 겹칠 뿐
-                    # 앞/뒤 지면에 서 있는 물체는 재투영하면 오히려 anchor 에서
-                    # 멀어지므로 여기서 걸러진다.
-                    re_t = locate(cam, tdet, base_z=a_loc.top_z)
-                    if re_t is not None:
-                        d_ground = float(np.linalg.norm(
-                            t_loc.base[:2] - a_loc.base[:2]))
-                        d_top = float(np.linalg.norm(
-                            re_t.base[:2] - a_loc.base[:2]))
-                        if d_top < d_ground and \
-                                d_top <= a_loc.radius * (1.0 + cfg.on_xy_slack):
-                            t_here = re_t
-                d = float(np.linalg.norm(t_here.base[:2] - a_loc.base[:2]))
-                if d < a_dist:
-                    a_best, a_dist, t_loc_adj = a_loc, d, t_here
-            score = tdet.score
-            if a_best is not None:
-                score += 0.5                       # 랜드마크 동반 카메라 우대
-                if parsed.landmark_type is not None:
-                    score += 0.5                   # 텍스트 타입 일치 우대
-                score += 1.0 / (1.0 + a_dist)      # 가까울수록 우대
-            cand = (score, cam_id,
-                    t_loc if a_best is None else t_loc_adj, a_best)
-            if best is None or cand[0] > best[0]:
-                best = cand
+    if not _looks_on(a_loc, tdet):
+        return t_loc
+    re_t = locate(cam, tdet, base_z=a_loc.top_z)
+    if re_t is None:
+        return t_loc
+    d_ground = float(np.linalg.norm(t_loc.base[:2] - a_loc.base[:2]))
+    d_top = float(np.linalg.norm(re_t.base[:2] - a_loc.base[:2]))
+    if d_top < d_ground and d_top <= a_loc.radius * (1.0 + cfg.on_xy_slack):
+        return re_t
+    return t_loc
 
-    if best is None:
-        return None
-    _, cam_id, t_loc, a_loc = best
-    cam = cameras[cam_id]
 
+def _relation_fit(cam: CameraModel, a_loc: Located, t_loc: Located,
+                  cfg: GroundingConfig, hint: Optional[str]) -> tuple:
+    """이 (anchor, target) 쌍이 명령이 말한 관계를 얼마나 잘 실현하는가.
+
+    (주 점수, 부 점수) 튜플을 그대로 크기 비교해 순위를 매긴다. 두 값을 하나로
+    합치지 않는 이유: 근접 계열에서 '조금 더 먼데 버킷만 맞는' 후보가 더 가까운
+    후보를 이겨버리는 역전이 생기기 때문이다.
+
+    카메라 선택의 주 근거다. CCTV 들은 서로 다른 공간을 보므로(시야가 겹치지
+    않는다) 탐지 confidence 를 카메라 간에 비교하는 것은 근거가 없다 — 서로
+    다른 장면에서 나온 값이기 때문이다. 대신 '명령대로 배치된 쌍이 있는
+    카메라'를 고른다.
+    """
+    gap = (float(np.linalg.norm(t_loc.base[:2] - a_loc.base[:2]))
+           - a_loc.radius - t_loc.radius)
+    prox = max(0.0, 1.0 - max(0.0, gap) / max(cfg.near_gap_m, 1e-9))
+    if hint is None:
+        return (prox, 0.0)
+    geo = classify_relation(cam, a_loc, t_loc, cfg, hint=hint)
+    if hint in NEARISH_RELATIONS:
+        # on/above/beside/near 는 전부 '가깝다'의 변주다 (거리 임계로만 갈린다).
+        # 그래서 근접도를 주 신호로 두고 버킷 일치는 동점일 때만 쓴다.
+        return (prox, 1.0 if geo == hint else 0.0)
+    # 방향 관계(behind/front/left/right)는 범주적이다 — 맞는 쪽에 있는지가 핵심
+    # 이고 거리는 부차적이다.
+    return (1.0 if geo == hint else 0.0, prox)
+
+
+def _build_decision(parsed: ParsedCommand, cam: CameraModel, cam_id: str,
+                    t_loc: Optional[Located], a_loc: Optional[Located],
+                    cfg: GroundingConfig, ground_surface_token: Optional[str],
+                    extra_debug: dict) -> GroundingDecision:
+    """(카메라, target, anchor) → 제출 payload 재료. t_loc=None 이면 랜드마크만."""
     landmark = ""
-    relation: Optional[str] = None
-    situation: Optional[str] = None
     anchor_coord = [0.0, 0.0, 0.0]
     geo_rel = None
     if a_loc is not None:
         landmark = a_loc.det.label
         anchor_coord = a_loc.center
-        geo_rel = classify_relation(cam, a_loc, t_loc, cfg,
-                                    hint=parsed.relation_hint)
+        if t_loc is not None:
+            geo_rel = classify_relation(cam, a_loc, t_loc, cfg,
+                                        hint=parsed.relation_hint)
 
+    # target 미탐지 시 anchor 좌표를 target 좌표로 대신 낸다: 허용 반경(5m)에
+    # 비해 실측 anchor↔target 거리가 훨씬 짧아 부분점수를 크게 건진다.
+    target_coord = t_loc.center if t_loc is not None else list(anchor_coord)
+
+    relation: Optional[str] = None
+    situation: Optional[str] = None
     if parsed.is_person:
-        pose = t_loc.det.label if t_loc.det.label.startswith("person_") else None
+        pose = (t_loc.det.label if t_loc is not None
+                and t_loc.det.label.startswith("person_") else None)
         support = landmark if (geo_rel in ("on", "above") and landmark) \
             else ground_surface_token
+        # pose 미상이면 공식 fallback 경로로 기본 situation 이 나온다. 오답에
+        # 감점이 없으므로 None 을 내는 것보다 항상 낫다.
         situation = resolve_situation(pose or "", support).situation
         target_type = "person"
-        relation = None
     else:
-        target_type = parsed.target_type
         pose = None
+        target_type = parsed.target_type
         # 텍스트가 확정적이면 텍스트, 아니면 기하 판정 (기하 불가 시 텍스트 힌트)
         if parsed.relation_confident and parsed.relation_hint:
             relation = parsed.relation_hint
         else:
             relation = geo_rel or parsed.relation_hint or "near"
 
+    debug = {"geo_relation": geo_rel,
+             "text_relation": parsed.relation_hint,
+             "text_confident": parsed.relation_confident,
+             "target_base": ([float(v) for v in t_loc.base]
+                             if t_loc is not None else None),
+             "target_top_z": t_loc.top_z if t_loc is not None else None}
+    debug.update(extra_debug)
     return GroundingDecision(
         camera_id=cam_id, target_type=target_type, landmark=landmark,
         relation=relation, situation=situation,
-        target_coord=t_loc.center, anchor_coord=anchor_coord,
-        pose_type=pose,
-        debug={"geo_relation": geo_rel,
-               "text_relation": parsed.relation_hint,
-               "text_confident": parsed.relation_confident,
-               "target_base": [float(v) for v in t_loc.base],
-               "target_top_z": t_loc.top_z},
+        target_coord=target_coord, anchor_coord=anchor_coord,
+        pose_type=pose, debug=debug,
     )
+
+
+def resolve(parsed: ParsedCommand,
+            detections: dict,               # {camera_id: [Detection, ...]}
+            cameras: dict,                  # {camera_id: CameraModel}
+            cfg: GroundingConfig = GroundingConfig(),
+            ground_surface_token: Optional[str] = None,
+            ) -> Optional[GroundingDecision]:
+    """카메라 선택 → (target, anchor) 확정 → relation/situation/좌표 계산.
+
+    CCTV 들은 **서로 다른 공간**을 본다 (시야가 겹치지 않는다). 그래서 카메라
+    선택은 '여러 후보 중 점수 높은 것 고르기'가 아니라 '명령이 가리킨 물체
+    쌍이 실제로 있는 곳 찾기'다. 순서:
+
+      1. 카메라 게이트 — 명령이 랜드마크를 지목했으면 그것이 실제로 검출된
+         카메라만 후보로 남긴다. 랜드마크를 말하지 않고 구역만 말했으면
+         (area_hint) 그 구역의 지표 클래스가 보이는 카메라로 좁힌다. 둘 다
+         못 좁히면 게이트를 푼다 — 즉 게이트는 순수 폴백 계층이라 실패해도
+         이전 동작으로 되돌아갈 뿐 나빠지지 않는다.
+         (랜드마크를 여러 카메라가 볼 수 있다고 가정한다 — 유일성 가정 없음.)
+      2. 남은 후보에서 relation 기하 적합도가 가장 높은 (target, anchor) 쌍을
+         고른다. 탐지 confidence 는 동점 처리에만 쓴다 (1번 주석 참조).
+      3. target 을 못 찾으면 pose 조건을 풀어 재탐색하고, 그래도 없으면
+         랜드마크만으로라도 제출한다 — 빈 제출은 0점이 확정이지만 랜드마크만
+         맞아도 camera/landmark/anchor 배점이 살아있다.
+
+    ground_surface_token: 사람이 랜드마크 위가 아닐 때 situation 규칙에 넣을
+    지면 토큰(grass/road/...). 판정 수단이 없으면 None → 공식 fallback 경로.
+    """
+    per_cam = {}
+    for cam_id, dets in detections.items():
+        cam = cameras.get(cam_id)
+        if cam is None:
+            continue
+        per_cam[cam_id] = (
+            cam, dets,
+            [d for d in dets if _landmark_ok(d.label, parsed.landmark_type)],
+        )
+    if not per_cam:
+        return None
+
+    # -- 1) 카메라 게이트: 명시 랜드마크 → area_hint → 해제 --
+    # 사람 문제는 landmark 배점이 0 점이지만, 카메라를 좁혀 주는 단서는 사실상
+    # 랜드마크뿐이다 (그 0 점짜리 랜드마크가 camera/anchor/target 배점을 연다).
+    # 그래서 배점과 무관하게 동일하게 건다.
+    gated = ([cid for cid, (_, _, adets) in per_cam.items() if adets]
+             if parsed.landmark_type is not None else [])
+    gate_kind = "landmark" if gated else None
+
+    if not gated:
+        # 명령이 랜드마크 없이 구역만 말한 경우 — 그 구역의 지표 클래스가
+        # 보이는 카메라로 좁힌다 (AREA_INDICATOR_CLASSES 주석 참조).
+        indicators = AREA_INDICATOR_CLASSES.get(parsed.area_hint or "")
+        if indicators:
+            gated = [cid for cid, (_, dets, _) in per_cam.items()
+                     if any(d.label in indicators for d in dets)]
+            if gated:
+                gate_kind = "area"
+
+    gate_applied = bool(gated)
+    if not gated:
+        gated = list(per_cam)          # 단서 미지목/미검출 → 게이트 해제
+
+    # -- 2) relation 적합도로 (카메라, target, anchor) 선택 --
+    def search(target_ok):
+        # 후보 = (관계적합도_주, 관계적합도_부, 탐지conf, cam_id, t_loc, a_loc).
+        # 앞 3개까지만 비교한다 — conf 는 관계 적합도가 동점일 때의 최후 수단.
+        best = None
+        for cam_id in gated:
+            cam, dets, adets = per_cam[cam_id]
+            for tdet in (d for d in dets if target_ok(d)):
+                t0 = locate(cam, tdet)
+                if t0 is None:
+                    continue
+                paired = False
+                for adet in adets:
+                    if adet is tdet:
+                        continue
+                    a_loc = locate(cam, adet)
+                    if a_loc is None:
+                        continue
+                    paired = True
+                    t_loc = _support_adjusted(cam, tdet, t0, a_loc, cfg)
+                    fit = _relation_fit(cam, a_loc, t_loc, cfg,
+                                        parsed.relation_hint)
+                    cand = (fit[0], fit[1], tdet.score, cam_id, t_loc, a_loc)
+                    if best is None or cand[:3] > best[:3]:
+                        best = cand
+                if not paired:
+                    # 랜드마크가 없는 카메라 (게이트가 풀렸을 때만 여기 온다).
+                    # 비교 근거가 confidence 뿐이라 적합도 0 으로 최하위에 둔다.
+                    cand = (0.0, 0.0, tdet.score, cam_id, t0, None)
+                    if best is None or cand[:3] > best[:3]:
+                        best = cand
+        return best
+
+    best = search(lambda d: _target_ok(d.label, parsed))
+    relaxed = False
+    if best is None and parsed.is_person and parsed.pose_hint:
+        # 완화 재탐색: pose 버킷 제약을 풀고 사람 클래스 전체를 후보로 본다.
+        best = search(lambda d: d.label in PERSON_POSE_CLASSES
+                      or d.label == "person")
+        relaxed = best is not None
+
+    gate_info = {"gate_applied": gate_applied, "gate_kind": gate_kind,
+                 "gate_cameras": sorted(gated)}
+    if best is not None:
+        fit_a, fit_b, _, cam_id, t_loc, a_loc = best
+        return _build_decision(
+            parsed, per_cam[cam_id][0], cam_id, t_loc, a_loc, cfg,
+            ground_surface_token,
+            dict(gate_info, selection="pair", relation_fit=(fit_a, fit_b),
+                 pose_relaxed=relaxed))
+
+    # -- 3) target 미탐지 → 랜드마크만으로 제출 --
+    anchor_best = None                 # (det_score, cam_id, a_loc)
+    for cam_id in gated:
+        cam, _, adets = per_cam[cam_id]
+        for adet in adets:
+            a_loc = locate(cam, adet)
+            if a_loc is None:
+                continue
+            if anchor_best is None or adet.score > anchor_best[0]:
+                anchor_best = (adet.score, cam_id, a_loc)
+    if anchor_best is None:
+        return None                    # 타겟도 랜드마크도 없음 → 상위 폴백
+    _, cam_id, a_loc = anchor_best
+    return _build_decision(
+        parsed, per_cam[cam_id][0], cam_id, None, a_loc, cfg,
+        ground_surface_token,
+        dict(gate_info, selection="anchor_only",
+             # 게이트가 카메라를 1대로 좁혔다 = 이 씬에서 그 랜드마크 클래스가
+             # 한 카메라에만 보인다 = 변별력이 높다 → 카메라를 신뢰할 수 있다.
+             # 여러 대로 남았으면 추측이므로 낮은 신뢰로 표시만 해 둔다.
+             landmark_discriminative=gate_applied and len(gated) == 1))
