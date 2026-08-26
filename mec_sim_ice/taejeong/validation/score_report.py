@@ -56,13 +56,10 @@ def classify(d: dict) -> str:
     return "정상"
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("scores")
-    ap.add_argument("--json", default=None, help="리포트를 JSON 으로도 저장")
-    args = ap.parse_args()
-
-    rounds, final = load(args.scores)
+def report(rounds: list, final: dict | None = None, json_path: str | None = None) -> int:
+    """rounds: [{"scores": {...}}, ...] (scores.jsonl 한 줄과 같은 스키마).
+    라이브 실행이 아니라 메모리에서 바로 만든 rounds 로도 호출할 수 있다
+    (offline_score.py 가 이렇게 재사용한다)."""
     if not rounds:
         print("라운드 기록이 없습니다.")
         return 1
@@ -71,19 +68,27 @@ def main() -> int:
     print(f"자가 채점 리포트 — {len(rounds)} 라운드")
     print("=" * 78)
     if final:
-        print(f"Stage1 평균 : {final.get('stage1_average')}")
-        print(f"Stage2      : {final.get('stage2')}")
-        print(f"총점        : {final.get('total')} / {final.get('max_total')}")
+        if final.get("stage1_average") is not None:
+            print(f"Stage1 평균 : {final.get('stage1_average')}")
+        if final.get("stage2") is not None:
+            print(f"Stage2      : {final.get('stage2')}")
+        if final.get("total") is not None:
+            print(f"총점        : {final.get('total')} / {final.get('max_total')}")
         print()
 
-    # -- 항목별 평균 --
-    print("[항목별 평균 점수]  (1.0 = 만점)")
+    # -- 항목별 평균 (실제 배점 반영: camera 10 / object_type 15 / landmark 10 /
+    #    relation 10 / anchor 15 / target 40 -- person 문제는 landmark/relation 배점이
+    #    0 이라 그 필드는 집계에서 빠진다) --
+    print("[항목별 평균 점수]  (배점 기준, 만점 = 그 필드의 배점)")
     for f in FIELDS:
-        vals = [d["scores"].get(f, 0) for d in rounds if f in d["scores"]]
-        if not vals:
+        applicable = [d for d in rounds if d["scores"].get("weights", {}).get(f, 0) > 0]
+        if not applicable:
             continue
-        perfect = sum(1 for v in vals if v >= 0.999)
-        print(f"  {f:12s} {sum(vals)/len(vals):.3f}   만점 {perfect}/{len(vals)}")
+        max_pts = applicable[0]["scores"]["weights"][f] * 100.0
+        earned = [d["scores"].get(f, 0) * max_pts for d in applicable]
+        perfect = sum(1 for e in earned if e >= max_pts - 1e-6)
+        print(f"  {f:12s} 평균 {sum(earned)/len(earned):5.2f} / {max_pts:4.1f}점   "
+              f"만점 {perfect}/{len(applicable)}건  (해당 {len(applicable)}/{len(rounds)}문항)")
     print()
 
     # -- 실패 원인 분류 --
@@ -132,18 +137,27 @@ def main() -> int:
             print(f"  {want} → {got}   {n}회")
         print()
 
-    # -- 문항별 표 --
-    print("[문항별 상세]  (점수 낮은 순)")
-    print(f"  {'problem_id':26s} {'점수':>6s}  cam obj lmk rel  anchor target")
-    for d in sorted(rounds, key=lambda x: x["scores"]["total"]):
+    # -- 문항별 표 (문항 번호순. 각 칸 = 획득점수/배점, "–" = 이 문제 유형엔 배점 없음) --
+    print("[문항별 상세]  (문항 번호순 -- 각 칸: 획득점수/배점)")
+    print(f"  {'problem_id':26s} {'총점':>6s}  {'camera':>7s} {'type':>7s} "
+          f"{'landmark':>9s} {'relation':>9s} {'anchor':>10s} {'target':>10s}")
+
+    def cell(s: dict, f: str, decimals: int) -> str:
+        mx = s.get("weights", {}).get(f, 0) * 100.0
+        if mx <= 0:
+            return "–"
+        earned = s.get(f, 0) * mx
+        return f"{earned:.{decimals}f}/{mx:.0f}"
+
+    for d in sorted(rounds, key=lambda x: x["scores"]["problem_id"]):
         s = d["scores"]
         print(f"  {s['problem_id']:26s} {s['total']:6.2f}  "
-              f"{s.get('camera',0):3.0f} {s.get('object_type',0):3.0f} "
-              f"{s.get('landmark',0):3.0f} {s.get('relation',0):3.0f}  "
-              f"{s.get('anchor',0):6.3f} {s.get('target',0):6.3f}")
+              f"{cell(s, 'camera', 0):>7s} {cell(s, 'object_type', 0):>7s} "
+              f"{cell(s, 'landmark', 0):>9s} {cell(s, 'relation', 0):>9s} "
+              f"{cell(s, 'anchor', 1):>10s} {cell(s, 'target', 1):>10s}")
 
-    if args.json:
-        report = {
+    if json_path:
+        out = {
             "final": final,
             "field_averages": {f: (sum(d["scores"].get(f, 0) for d in rounds) / len(rounds))
                                for f in FIELDS},
@@ -154,10 +168,20 @@ def main() -> int:
                         "fields": {f: d["scores"].get(f) for f in FIELDS}}
                        for d in rounds],
         }
-        with open(args.json, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=2)
-        print(f"\nJSON 리포트 저장: {args.json}")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+        print(f"\nJSON 리포트 저장: {json_path}")
     return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("scores")
+    ap.add_argument("--json", default=None, help="리포트를 JSON 으로도 저장")
+    args = ap.parse_args()
+
+    rounds, final = load(args.scores)
+    return report(rounds, final, args.json)
 
 
 if __name__ == "__main__":

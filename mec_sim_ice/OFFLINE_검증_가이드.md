@@ -93,15 +93,27 @@ command: Find the tumbler on the bench.
 | 도구 | 재실행 대상 |
 |---|---|
 | `mec_sim_ice/tools/run_offline_real_vla.py` | `mec_sim_ice/real_agent_vla.py` (RealVLA) |
-| `mec_sim_ice/taejeong/run_offline.py` | taejeong 파이프라인 (command_parser → yolo_adapter → grounding) |
+| `mec_sim_ice/taejeong/run_offline.py` | taejeong 파이프라인 (command_parser → yolo_adapter → grounding) — 라운드별 payload만 출력 |
+| `mec_sim_ice/taejeong/validation/offline_score.py` | taejeong 파이프라인 + **그 자리에서 채점까지** (camera/object_type/landmark/relation/anchor/target 표, `score_report.py` 와 동일 포맷) |
 | `mec_sim_ice/tools/eval_offline.py` | `mec_sim_ice/stage1/` 파이프라인 (Grounding DINO 실험 계열) |
 
-예) taejeong 파이프라인:
+예) taejeong 파이프라인 (payload만, 채점 없음):
 
 ```bash
 cd mec_sim_ice/taejeong
 python3 run_offline.py --records ../records --weights ../demo_agents/weights/best.pt
 ```
+
+예) taejeong 파이프라인 + 즉시 채점 (권장 — chungmu 39문항 정답이 `validation/runs/`에 이미 있음):
+
+```bash
+cd mec_sim_ice/taejeong/validation
+python3 offline_score.py --weights ../../demo_agents/weights/best.pt
+```
+
+anchor/카테고리 필드 점수는 과거 39건 전수 대조로 검증된 정확한 공식이고, target(좌표) 점수는
+근사치다 (자세한 이유는 스크립트 docstring 참고). 결과 표는 문제번호·카메라·target·landmark·
+relation·anchor·target 좌표 정답 여부를 `score_report.py` 와 같은 포맷으로 터미널에 바로 찍는다.
 
 ## 5. 한계 — 오프라인 점수는 근사치다
 
