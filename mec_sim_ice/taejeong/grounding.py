@@ -68,6 +68,11 @@ AREA_INDICATOR_CLASSES = {
     "park": {"picnic_table", "bench"},
 }
 
+# "그 구역"으로 인정할 지표 밀집도 — 1등 카메라의 지표 수가 2등의 이 배 이상.
+# 길가에 세워진 차 한 대는 주차장이 아니고, 4대 대 3대로 갈리는 두 곳 중 어느
+# 쪽도 주차장이라 단정할 수 없다. 애매하면 게이트를 걸지 않는다(폴백).
+AREA_DOMINANCE_RATIO = 2.0
+
 # pose 코스 버킷(command_parser) → 공식 pose 클래스 후보 집합.
 # 언어 표면형이 pose 클래스와 1:1 이 아니므로(실측: "lying face-down" 이
 # person_bending 인 예 존재) 버킷은 후보를 좁힐 뿐 단정하지 않는다.
@@ -198,9 +203,20 @@ class Located:
 
     @property
     def center(self) -> list:
-        """제출 좌표 정의(팀 결정): 중심점 = 접촉점 (x,y) + z 는 (base+top)/2."""
+        """중심점 = 접촉점 (x,y) + z 는 (base+top)/2. target 좌표에 쓴다."""
         return [float(self.base[0]), float(self.base[1]),
                 float((self.base[2] + self.top_z) / 2.0)]
+
+    @property
+    def ground_point(self) -> list:
+        """접촉점 (x, y, base_z). anchor(랜드마크) 좌표에 쓴다.
+
+        실측(clean 12라운드 스윕): 랜드마크 정답 좌표는 중심점이 아니라 **지면
+        접촉점**이다. 자판기·택시처럼 큰 랜드마크에서 center 를 쓰면 물체 높이의
+        절반이 그대로 z 오차가 된다 -- 평균 오차 1.00m -> 0.64m (점수 0.800 ->
+        0.872). target(작은 물체)은 반대로 center 가 맞아 그대로 둔다.
+        """
+        return [float(self.base[0]), float(self.base[1]), float(self.base[2])]
 
 
 def locate(cam: CameraModel, det: Detection,
@@ -408,7 +424,7 @@ def _build_decision(parsed: ParsedCommand, cam: CameraModel, cam_id: str,
     geo_rel = None
     if a_loc is not None:
         landmark = a_loc.det.label
-        anchor_coord = a_loc.center
+        anchor_coord = a_loc.ground_point
         if t_loc is not None:
             geo_rel = classify_relation(cam, a_loc, t_loc, cfg,
                                         hint=parsed.relation_hint)
@@ -495,22 +511,45 @@ def resolve(parsed: ParsedCommand,
     # 사람 문제는 landmark 배점이 0 점이지만, 카메라를 좁혀 주는 단서는 사실상
     # 랜드마크뿐이다 (그 0 점짜리 랜드마크가 camera/anchor/target 배점을 연다).
     # 그래서 배점과 무관하게 동일하게 건다.
-    gated = ([cid for cid, (_, _, adets) in per_cam.items() if adets]
-             if parsed.landmark_type is not None else [])
-    gate_kind = "landmark" if gated else None
+    landmark_gated = ([cid for cid, (_, _, adets) in per_cam.items() if adets]
+                      if parsed.landmark_type is not None else [])
 
-    if not gated:
-        # 명령이 랜드마크 없이 구역만 말한 경우 — 그 구역의 지표 클래스가 가장
-        # 많이 보이는 카메라로 좁힌다 (AREA_INDICATOR_CLASSES 주석 참조:
-        # "있다" 가 아니라 "밀집해 있다" 가 구역의 정의다).
-        indicators = AREA_INDICATOR_CLASSES.get(parsed.area_hint or "")
-        if indicators:
-            counts = {cid: sum(1 for d in dets if d.label in indicators)
-                      for cid, (_, dets, _) in per_cam.items()}
-            top = max(counts.values(), default=0)
-            if top > 0:
-                gated = [cid for cid, n in counts.items() if n == top]
-                gate_kind = "area"
+    # 구역 게이트 — 그 구역의 지표 클래스가 **밀집한** 카메라
+    # (AREA_INDICATOR_CLASSES 주석 참조: "있다" 가 아니라 "밀집해 있다" 가
+    # 구역의 정의다).
+    #
+    # 밀집의 판정은 AREA_DOMINANCE_RATIO 로 명시한다: 1등이 2등의 그 배 이상일
+    # 때만 "그 구역"으로 인정한다. 근거는 씬이 아니라 **말의 의미**다 -- 차가
+    # 4대와 3대로 갈리는 두 곳 중 어느 쪽도 "주차장"이라 단정할 수 없고, 그런
+    # 애매한 신호로 카메라를 걸러내면 새 배경에서 정답을 배제할 수 있다.
+    # 애매하면 게이트를 걸지 않아 이 계층이 없을 때와 같아진다.
+    area_gated = []
+    indicators = AREA_INDICATOR_CLASSES.get(parsed.area_hint or "")
+    if indicators:
+        counts = {cid: sum(1 for d in dets if d.label in indicators)
+                  for cid, (_, dets, _) in per_cam.items()}
+        top = max(counts.values(), default=0)
+        if top > 0:
+            leaders = [cid for cid, n in counts.items() if n == top]
+            runner_up = max((n for cid, n in counts.items() if cid not in leaders),
+                            default=0)
+            if top >= AREA_DOMINANCE_RATIO * runner_up:
+                area_gated = leaders
+
+    # 두 단서는 서로 독립이므로 **둘 다 있으면 교집합**을 쓴다. 랜드마크가
+    # 여러 카메라에 보이는 경우("trash can" 은 흔하다) 구역이 그중 하나로
+    # 좁혀 준다 -- 실측에서 카메라 오선택의 절반이 이 조합으로 풀렸다.
+    # 교집합이 비면 랜드마크 게이트로 되돌아가므로 나빠지는 경로가 없다.
+    if landmark_gated and area_gated:
+        both = [cid for cid in landmark_gated if cid in area_gated]
+        gated, gate_kind = ((both, "landmark+area") if both
+                            else (landmark_gated, "landmark"))
+    elif landmark_gated:
+        gated, gate_kind = landmark_gated, "landmark"
+    elif area_gated:
+        gated, gate_kind = area_gated, "area"
+    else:
+        gated, gate_kind = [], None
 
     gate_applied = bool(gated)
     if not gated:
