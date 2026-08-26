@@ -110,7 +110,8 @@ def main() -> int:
     check("T6-mug-xy", close(d.target_coord[0], 6, 0.35)
           and close(d.target_coord[1], 0, 0.35), d.target_coord)
     check("T6-mug-z", 0.85 <= d.target_coord[2] <= 1.25, d.target_coord)
-    check("T6-table-z", 0.35 <= d.anchor_coord[2] <= 0.75, d.anchor_coord)
+    # anchor 는 중심점이 아니라 지면 접촉점 (Located.ground_point 주석의 실측 근거)
+    check("T6-table-z", abs(d.anchor_coord[2]) <= 0.15, d.anchor_coord)
 
     # T6b. 대조: 'on' 재투영 없이 지면 평면에 꽂으면 xy 가 크게 밀린다
     naive = locate(cam, dets[1]).base
@@ -255,6 +256,35 @@ def main() -> int:
     check("T17-landmark-beats-area",
           d.camera_id == "cam_a" and d.debug.get("gate_kind") == "landmark",
           f"{d.camera_id} gate={d.debug.get('gate_kind')}")
+
+    # T18. 두 단서가 모두 있고 **양립하면** 교집합으로 좁힌다. 랜드마크가 여러
+    #      카메라에 보이는 흔한 경우("trash can")를 구역이 갈라 준다.
+    #      cam_a: trash_can 은 있지만 구역 지표(차량) 없음 + 높은 conf
+    #      cam_b: trash_can + 차량 밀집 ← 정답
+    dets_a18 = [synth_det(cam, "umbrella", (5, 0), 0.9, 0.05, score=0.95),
+                synth_det(cam, "trash_can", (5.3, 0), 1.0, 0.3, score=0.95)]
+    dets_b18 = [synth_det(cam_b, "umbrella", (6, 0), 0.9, 0.05, score=0.35),
+                synth_det(cam_b, "trash_can", (6.3, 0), 1.0, 0.3, score=0.35),
+                synth_det(cam_b, "police_car", (7.5, 1.5), 1.5, 1.0, score=0.9),
+                synth_det(cam_b, "suv", (8.5, -1.5), 1.6, 1.0, score=0.9)]
+    d = resolve(parsed17, {"cam_a": dets_a18, "cam_b": dets_b18},
+                {"cam_a": cam, "cam_b": cam_b}, cfg)
+    check("T18-landmark-and-area-intersect",
+          d.camera_id == "cam_b" and d.debug.get("gate_kind") == "landmark+area",
+          f"{d.camera_id} gate={d.debug.get('gate_kind')}")
+
+    # T19. 구역 지표가 **애매하면**(밀집이라 할 수 없으면) 구역 게이트가 풀려
+    #      랜드마크 게이트만 남는다 — 새 배경 안전장치(AREA_DOMINANCE_RATIO).
+    #      cam_a 차량 2대 vs cam_b 3대: 어느 쪽도 "그 주차장"이라 단정 못 한다.
+    dets_a19 = dets_a18 + [
+        synth_det(cam, "taxi", (7.5, 1.5), 1.5, 1.0, score=0.9),
+        synth_det(cam, "suv", (8.5, -1.5), 1.6, 1.0, score=0.9)]
+    dets_b19 = dets_b18 + [synth_det(cam_b, "taxi", (9.5, 0.5), 1.5, 1.0, score=0.9)]
+    d = resolve(parsed17, {"cam_a": dets_a19, "cam_b": dets_b19},
+                {"cam_a": cam, "cam_b": cam_b}, cfg)
+    check("T19-ambiguous-area-releases-gate",
+          d.debug.get("gate_kind") == "landmark",
+          f"gate={d.debug.get('gate_kind')} cams={d.debug.get('gate_cameras')}")
 
     print("PASS" if fails == 0 else f"FAIL ({fails})")
     return 1 if fails else 0

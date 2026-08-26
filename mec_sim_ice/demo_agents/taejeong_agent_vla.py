@@ -29,7 +29,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 DET_WEIGHTS = os.environ.get("TAEJEONG_DET_WEIGHTS",
                              os.path.join(_HERE, "weights", "best.pt"))
 DET_IMGSZ = 1280   # CCTV native resolution (1280x720)
-DET_CONF = 0.35
+# 0.35 -> 0.25: 오프라인 실측에서 0.35 는 53.48, 0.25 이하는 57.80 이었다
+# (39문항 동일 records). 탐지 recall 이 이 파이프라인의 병목이라 임계값이
+# 그대로 점수다. 0.10/0.15/0.25 는 결과가 완전히 동일해서, 오검출 여지가
+# 가장 적은 0.25 를 고른다 (채점 스크립트 기본값과도 일치).
+DET_CONF = 0.25
 
 
 class TaejeongVLAGrounding:
