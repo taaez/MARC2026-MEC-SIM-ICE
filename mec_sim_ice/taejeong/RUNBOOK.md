@@ -7,13 +7,17 @@
 
 | 구성 | 파일 | 출처 |
 |---|---|---|
-| 탐지 클래스 정의 (34종) | `test/det_classes.py` | 팀원 `feature/init` 브랜치 |
-| 학습 스크립트 | `test/train_yolo11.py` | 팀원 `feature/init` 브랜치 |
-| 학습된 가중치 | `demo/weights/best.pt` | **팀원에게 파일로 받아 직접 배치** (git 미포함) |
-| 명령 파싱 · 기하 · situation | `taejeong/*.py` | 우리 구현 |
-| ROS 배선 | `demo/taejeong_agent_vla.py` | 우리 구현 |
+| 탐지 클래스 정의 (34종) | `mec_sim_ice/test/det_classes.py` | 팀원 `feature/init` 브랜치 |
+| 학습 스크립트 | `mec_sim_ice/test/train_yolo11.py` | 팀원 `feature/init` 브랜치 |
+| 학습된 가중치 | `mec_sim_ice/demo_agents/weights/best.pt` | **팀원에게 파일로 받아 직접 배치** (git 미포함) |
+| 명령 파싱 · 기하 · situation | `mec_sim_ice/taejeong/*.py` | 우리 구현 |
+| ROS 배선 | `mec_sim_ice/demo_agents/taejeong_agent_vla.py` | 우리 구현 |
 | 진입점 | `demo/participant_app.py` (**기본**) | 우리 파이프라인으로 배선됨 |
-| 공식 정답 정의 | `taejeong/content-image-2026.R03/marc2026_chungmu.yaml` | content 이미지에서 추출 |
+| 공식 정답 정의 | `mec_sim_ice/taejeong/content-image-2026.R03/marc2026_chungmu.yaml` | content 이미지에서 추출 |
+
+(리포 정리로 대회측 원본 `demo/`/`marc_sdk/`/`simulation-platform/`/`manipulation/` 은 그대로 두고,
+팀 제작 코드/문서/기록은 전부 `mec_sim_ice/` 아래로 옮겼다. 단, `demo/participant_app.py` 는
+organizer 템플릿을 그 자리에서 직접 수정해 쓰는 파일이라 `demo/`에 남아 있다.)
 
 `demo/mock_agent_vla.py` 는 건드리지 않는다. 대회 가이드가 요구하는 것은
 `process()` / `process_stage2()` 시그니처 유지이고, `TaejeongVLAGrounding` 이 이를 지킨다.
@@ -30,18 +34,18 @@ Grounding DINO + Qwen 실험은 `MARC_ENTRYPOINT=participant_app_agent_vla.py` �
 
 ```bash
 git pull                                  # ptj/stage1-vla-integration 브랜치에서
-mkdir -p demo/weights
-cp <팀원에게 받은 best.pt> demo/weights/best.pt
+mkdir -p mec_sim_ice/demo_agents/weights
+cp <팀원에게 받은 best.pt> mec_sim_ice/demo_agents/weights/best.pt
 ```
 
 인터페이스 정합성 확인 — 가중치 클래스가 `det_classes.py` 와 맞는지 검사한다:
 
 ```bash
-cd taejeong
+cd mec_sim_ice/taejeong
 python3 check_interfaces.py \
     --det-classes ../test/det_classes.py \
-    --weights ../demo/weights/best.pt \
-    --sdk ..
+    --weights ../demo_agents/weights/best.pt \
+    --sdk ../..
 ```
 
 `PASS` 가 아니면 실행하지 말고 원인부터 해결한다.
@@ -88,14 +92,14 @@ tail -f results/scores.jsonl
 **(a) 결과가 진짜 chungmu 문제셋인지 먼저 검증** — 시나리오 혼선·문항 정의 변경을 잡는다:
 
 ```bash
-cd taejeong/validation
-python3 verify_run.py ../../results/scores.jsonl
+cd mec_sim_ice/taejeong/validation
+python3 verify_run.py ../../../results/scores.jsonl
 ```
 
 **(b) 항목별 정확도와 실패 원인 분류:**
 
 ```bash
-python3 score_report.py ../../results/scores.jsonl --json report.json
+python3 score_report.py ../../../results/scores.jsonl --json report.json
 ```
 
 출력 내용:
@@ -108,7 +112,7 @@ python3 score_report.py ../../results/scores.jsonl --json report.json
 **(c) 보존할 실행은 runs/ 로 복사** — 개선 전후 비교용:
 
 ```bash
-cp ../../results/scores.jsonl runs/chungmu_$(date +%Y-%m-%d_%H%M).jsonl
+cp ../../../results/scores.jsonl runs/chungmu_$(date +%Y-%m-%d_%H%M).jsonl
 ```
 
 ## 기준선 (2026-08-25, 39문항 전체)

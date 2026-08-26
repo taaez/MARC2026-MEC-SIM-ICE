@@ -21,6 +21,11 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SDK_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"   # starter kit root (parent of marc_sdk)
+# Team code lives under mec_sim_ice/ after the repo cleanup (organizer's demo/ stays
+# untouched). taejeong_agent_vla.py/agent_vla.py/etc. moved to mec_sim_ice/demo_agents/,
+# and they import the mec_sim_ice/stage1 + mec_sim_ice/taejeong packages.
+TEAM_ROOT="${SDK_ROOT}/mec_sim_ice"
+TEAM_AGENTS_DIR="${TEAM_ROOT}/demo_agents"
 
 # -- team id (required; issued by the organizers, no default) --
 USER_ID="${1:-${MARC_TEAM_ID:-}}"
@@ -72,9 +77,11 @@ else
 fi
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 
-# -- PYTHONPATH: marc_sdk (=SDK_ROOT) + demo local modules (=SCRIPT_DIR) --
+# -- PYTHONPATH: marc_sdk (=SDK_ROOT) + demo local modules (=SCRIPT_DIR) + team code
+#    (=TEAM_ROOT, for `import stage1`/`import taejeong`) + team local modules (=TEAM_AGENTS_DIR,
+#    for `import agent_vla`/`import taejeong_agent_vla` etc.) --
 # (If the SDK is pip installed, SDK_ROOT is unnecessary, but it is kept so the repo runs directly)
-export PYTHONPATH="${SDK_ROOT}:${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${SDK_ROOT}:${SCRIPT_DIR}:${TEAM_ROOT}:${TEAM_AGENTS_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 echo "=========================================="
 echo "  MARC 2026 SDK Demo Participant"
@@ -97,5 +104,17 @@ if ! "${RUN_PY}" -c "import placo" >/dev/null 2>&1; then
     fi
 fi
 
+# -- locate the entry point script: organizer's demo/ first, then the team's
+#    mec_sim_ice/demo_agents/ (e.g. participant_app_agent_vla.py) --
+ENTRY_NAME="${MARC_ENTRYPOINT:-participant_app.py}"
+if [ -f "${SCRIPT_DIR}/${ENTRY_NAME}" ]; then
+    ENTRY_PATH="${SCRIPT_DIR}/${ENTRY_NAME}"
+elif [ -f "${TEAM_AGENTS_DIR}/${ENTRY_NAME}" ]; then
+    ENTRY_PATH="${TEAM_AGENTS_DIR}/${ENTRY_NAME}"
+else
+    echo "ERROR: entrypoint not found: ${ENTRY_NAME} (looked in ${SCRIPT_DIR} and ${TEAM_AGENTS_DIR})" >&2
+    exit 1
+fi
+
 cd "${SCRIPT_DIR}"
-exec "${RUN_PY}" "${MARC_ENTRYPOINT:-participant_app.py}"
+exec "${RUN_PY}" "${ENTRY_PATH}"

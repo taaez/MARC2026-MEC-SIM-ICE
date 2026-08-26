@@ -45,9 +45,12 @@ sys.path.insert(0, _HERE)  # taejeong/ package lives next to this file
 
 # det_classes.py stages in test/ until the training pipeline is verified, then
 # moves to demo/ (test/README.md) -- look in both so this file survives the move.
-for _sub in ("test", "demo"):
-    if os.path.exists(os.path.join(_HERE, _sub, "det_classes.py")):
-        sys.path.insert(0, os.path.join(_HERE, _sub))
+# (repo cleanup: this file + test/ now live under mec_sim_ice/, while demo/ stays at
+# the repo root -- so the demo/ candidate is one level up from _HERE.)
+for _candidate in (os.path.join(_HERE, "test"), os.path.join(_HERE, "demo"),
+                   os.path.join(os.path.dirname(_HERE), "demo")):
+    if os.path.exists(os.path.join(_candidate, "det_classes.py")):
+        sys.path.insert(0, _candidate)
         break
 from det_classes import LANDMARK_CLASSES, POSE_CLASSES  # noqa: E402
 

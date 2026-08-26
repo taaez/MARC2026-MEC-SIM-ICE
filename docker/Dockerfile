@@ -55,12 +55,16 @@ ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 \
     MARC_VLM_MODEL=${VLM_MODEL} MARC_DET_MODEL=${DET_MODEL}
 
 # --- [SDK] marc_sdk + 에이전트 코드 (원본 demo/Dockerfile 과 동일한 /agent 레이아웃) ---
+# 팀 제작 코드는 리포 정리로 mec_sim_ice/ 아래에 있다 (organizer 원본 demo/ 와는 별도).
+# demo/ 와 mec_sim_ice/demo_agents/ 를 같은 /agent/demo 로 순서대로 COPY 해서 원래
+# 하나였던 디렉토리처럼 합친다 (agent_vla.py 등 로컬 임포트가 그대로 동작).
 WORKDIR /agent
-COPY marc_sdk /agent/marc_sdk
-COPY stage1   /agent/stage1
-COPY taejeong /agent/taejeong
-COPY demo     /agent/demo
-COPY models   /agent/models
+COPY marc_sdk           /agent/marc_sdk
+COPY mec_sim_ice/stage1   /agent/stage1
+COPY mec_sim_ice/taejeong /agent/taejeong
+COPY demo                /agent/demo
+COPY mec_sim_ice/demo_agents /agent/demo
+COPY mec_sim_ice/models   /agent/models
 
 # 런타임 플랫폼과 같은 RMW (FastDDS). import 경로: marc_sdk·stage1(/agent) + demo 로컬 모듈(/agent/demo).
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
@@ -82,6 +86,6 @@ ENTRYPOINT ["/agent/entrypoint.sh"]
 # ⚠️ 제출 전 결정 필요: 루트 docker-compose.yml 이 이 Dockerfile 을 빌드하므로,
 #    지금 상태로 제출하면 DINO+Qwen 경로가 실행된다. taejeong 파이프라인을 제출하려면
 #    (a) 아래 CMD 를 participant_app.py 로 바꾸고,
-#    (b) YOLO 가중치(demo/weights/best.pt)를 이미지에 baking 하고,
+#    (b) YOLO 가중치(mec_sim_ice/demo_agents/weights/best.pt)를 이미지에 baking 하고,
 #    (c) 불필요해진 VLM/DET 빌드 ARG·전용 의존성을 정리해야 한다.
 CMD ["python3", "participant_app_agent_vla.py"]

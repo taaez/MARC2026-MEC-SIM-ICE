@@ -6,8 +6,8 @@
 
 채점식(실측 역산): 좌표 점수 = max(0, 1 - 3D오차 / COORD_TOLERANCE_M)
 
-사용:
-    python3 score_report.py ../../results/scores.jsonl
+사용 (cd mec_sim_ice/taejeong/validation 후):
+    python3 score_report.py ../../../results/scores.jsonl
     python3 score_report.py <scores.jsonl> --json report.json   # 기계가 읽을 형태로도 저장
 """
 

@@ -6,17 +6,31 @@
 - 개발자 가이드(정본 문서): https://marc-challenge.github.io/marc-dev-guide/
 - 대회 홈페이지: https://marc-challenge.github.io/
 
+> **리포 정리 (2026-08-26):** 대회측이 제공한 파일/폴더(아래 1~4절)는 원래 위치 그대로
+> 두고, **우리 팀이 만든 코드/문서/기록은 전부 `mec_sim_ice/`로 모았다** (이 문서 자체도
+> 그 안에 있다). 단 두 종류는 팀 것이지만 빌드·제출 구조상 루트 고정이 필요해 그대로
+> 뒀다: 제출 진입점 `docker-compose.yml`/`docker/` (대회측이 clone 직후 그대로
+> `docker compose up` 실행) 와 `problems.yaml` (organizer `simulation-platform/`가
+> `../problems.yaml` 고정 경로로 마운트). `demo/`는 organizer 원본이지만
+> `participant_app.py`/`Dockerfile`/`launch.sh`는 그 자리에서 직접 수정해 쓰는 파일이라
+> 함께 남아 있다 — 팀이 새로 만든 대체 진입점(`agent_vla.py`,
+> `participant_app_agent_vla.py` 등)만 `mec_sim_ice/demo_agents/`로 옮겼다.
+> 자세한 팀 구조는 [`mec_sim_ice/` 절](#5-mec_sim_ice--팀-제작-코드문서기록) 참고.
+
 ## 최상위 구조
 
 ```
 marc-starter-kit/
-├── README.md                  # 전체 킷 개요 + Quick start
-├── NOTICES.md                 # 라이선스/저작권/실행환경(인터넷 정책) 고지
-├── problems.yaml               # 문제(미션) 정의 데이터
-├── simulation-platform/        # 시뮬레이터(Isaac Sim) Docker 레시피 + 실행 스크립트
-├── marc_sdk/                   # 참가자 SDK (ROS 2 통신 래퍼)
-├── demo/                       # 실행 가능한 레퍼런스(모의) 에이전트
-└── manipulation/                # 로봇 팔 기구학/pick-and-place 레퍼런스
+├── README.md                  # 전체 킷 개요 + Quick start        [대회측 원본]
+├── NOTICES.md                 # 라이선스/저작권/실행환경(인터넷 정책) 고지  [대회측 원본]
+├── problems.yaml               # 문제(미션) 정의 데이터           [팀 설정, 루트 고정 필요]
+├── docker-compose.yml          # 팀 제출 진입점 (docker compose up)  [팀 제작, 루트 고정 필요]
+├── docker/                     # 팀 제출 Dockerfile/entrypoint    [팀 제작, 루트 고정 필요]
+├── simulation-platform/        # 시뮬레이터(Isaac Sim) Docker 레시피 + 실행 스크립트  [대회측 원본]
+├── marc_sdk/                   # 참가자 SDK (ROS 2 통신 래퍼)          [대회측 원본]
+├── demo/                       # 실행 가능한 레퍼런스(모의) 에이전트    [대회측 원본 + 팀이 그 자리에서 수정한 파일]
+├── manipulation/                # 로봇 팔 기구학/pick-and-place 레퍼런스  [대회측 원본]
+└── mec_sim_ice/                 # 팀이 만든 모든 것 (코드/문서/기록) — 아래 5절
 ```
 
 ## 1. `simulation-platform/` — 시뮬레이션 플랫폼
@@ -87,6 +101,32 @@ Joint-angle 제어만 허용되는 6축 로봇 팔로 pick-and-place를 풀기 �
 - **최소 활용**: `arm_kin`(FK/Jacobian/DLS)과 URDF만 재료로 가져가 직접 팔 제어 로직 설계
 
 의존성: `placo` (pip install placo, Pinocchio 기반). 빌드 시점에 이미지에 baked-in 필요 (채점 런타임은 인터넷 미연결).
+
+## 5. `mec_sim_ice/` — 팀 제작 코드/문서/기록
+
+대회측 원본(1~4절)과 구분해서 **우리 팀이 만든 것만** 모아 둔 폴더.
+
+```
+mec_sim_ice/
+├── stage1/            # Grounding DINO + Qwen2.5-VL 파이프라인 (geometry/pipeline/agent)
+├── taejeong/           # 텍스트 파싱 + 순수 기하 기반 파이프라인 (팀 기본, RUNBOOK.md 포함)
+├── demo_agents/         # organizer demo/ 의 대체 진입점 (agent_vla.py, taejeong_agent_vla.py,
+│                        # participant_app_agent_vla.py, participant_app_real_vla.py, weights/)
+│                        # -- launch.sh/Dockerfile 이 demo/ 와 병합해서 쓴다
+├── test/                # YOLO11 학습 스테이징 (det_classes.py, train_yolo11.py)
+├── tests/                # 단위 테스트 (pytest, ROS 불필요)
+├── tools/                 # 오프라인 재실행/평가 스크립트 (eval_offline.py 등)
+├── scripts/                # 환경 점검/링크 진단/오프라인 검증 셸 스크립트
+├── models/                  # 파인튜닝 YOLO 가중치 배치 위치
+├── records/                  # Isaac Sim 세션에서 수집한 라운드별 기록 (오프라인 재현용)
+├── real_agent_vla.py          # YOLO11 기반 RealVLA grounding (RUNBOOK_real_vla.md)
+├── problems.yaml.bak           # problems.yaml 백업
+└── *.md                        # 설계/브리프/런북/세션 리포트 문서
+```
+
+각 서브디렉토리의 내부 구조는 대회측 원본과 별개로 팀이 자유롭게 정한 것이라 필요 시
+계속 바뀔 수 있다. 대회측 원본(1~4절)을 수정해야 할 일이 생기면, 원본을 직접 고치지
+말고 `mec_sim_ice/`에 별도 파일로 얹거나 이 문서에 그 사실을 기록해 둘 것.
 
 ## 기타
 
