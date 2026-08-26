@@ -6,11 +6,11 @@
 (그 파일의 ROS 의존은 지연 import) 로직이 어긋날 일이 없고, 카메라 루프와
 pixel->world 만 여기서 미러링한다 (`keep in sync with RealVLAGrounding._ground`).
 
-사용 (ultralytics + PyYAML + Pillow 만 있으면 됨 -- ROS/Isaac Sim 불필요):
-  python tools/run_offline_real_vla.py --records ./records \
-      --weights demo/weights/best.pt \
-      [--gt demo/mock_demo_data.yaml]                # 좌표 포함 GT (payload 형식)
-      [--gt taejeong/content-image-2026.R03/marc2026_chungmu.yaml]  # 공식 expected (해석 필드만)
+사용 (리포 루트에서, ultralytics + PyYAML + Pillow 만 있으면 됨 -- ROS/Isaac Sim 불필요):
+  python mec_sim_ice/tools/run_offline_real_vla.py --records ./mec_sim_ice/records \
+      --weights mec_sim_ice/demo_agents/weights/best.pt \
+      [--gt demo/mock_demo_data.yaml]                # 좌표 포함 GT (payload 형식, organizer demo/ 는 루트에 그대로 있음)
+      [--gt mec_sim_ice/taejeong/content-image-2026.R03/marc2026_chungmu.yaml]  # 공식 expected (해석 필드만)
       [--conf 0.35] [--imgsz 1280]
 
 출력: 라운드별 제출 payload + (GT 지정 시) 필드별 정답 여부와 좌표 오차

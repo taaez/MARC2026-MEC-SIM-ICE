@@ -1,14 +1,14 @@
 """
 tools/eval_offline.py  --  MARC_RECORD_DIR 로 덤프한 라운드를 Isaac Sim 없이 재실행한다.
 
-사용:
-  python tools/eval_offline.py --records ./records                 # 파이프라인 재실행, payload 비교
-  python tools/eval_offline.py --records ./records --gt demo/mock_demo_data.yaml
+사용 (리포 루트에서):
+  python mec_sim_ice/tools/eval_offline.py --records ./mec_sim_ice/records         # 파이프라인 재실행, payload 비교
+  python mec_sim_ice/tools/eval_offline.py --records ./mec_sim_ice/records --gt demo/mock_demo_data.yaml
         # mock 데이터(GT+노이즈)와 해석/좌표를 비교. lf/hf 쌍 교차로 노이즈 의심 항목은 표시만 한다.
-  python tools/eval_offline.py --records ./records --dry            # 모델 로드 없이 기하/파서만 검사
+  python mec_sim_ice/tools/eval_offline.py --records ./mec_sim_ice/records --dry   # 모델 로드 없이 기하/파서만 검사
 
 기록 구조 (agent_vla._record):
-  records/s1_001_<ts>/{<camera_id>.png ..., meta.json{command, cameras{K,R_cw,C_w,ground_z}, payload}}
+  mec_sim_ice/records/s1_001_<ts>/{<camera_id>.png ..., meta.json{command, cameras{K,R_cw,C_w,ground_z}, payload}}
 """
 from __future__ import annotations
 

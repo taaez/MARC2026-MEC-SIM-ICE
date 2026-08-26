@@ -31,10 +31,14 @@ WORKDIR /agent
 
 # context = starter kit root -> copy marc_sdk (library) + taejeong (Stage 1 pipeline) + demo (agent)
 # taejeong/ is imported as a package (`from taejeong.grounding import ...`) by
-# demo/taejeong_agent_vla.py, so it must land under /agent (which is on PYTHONPATH below).
-COPY marc_sdk /agent/marc_sdk
-COPY taejeong /agent/taejeong
-COPY demo     /agent/demo
+# taejeong_agent_vla.py, so it must land under /agent (which is on PYTHONPATH below).
+# Team code lives under mec_sim_ice/ after the repo cleanup (organizer's own demo/ is
+# copied separately, then mec_sim_ice/demo_agents/ merges the team's local modules
+# -- taejeong_agent_vla.py, agent_vla.py, weights/ -- into the same /agent/demo dir).
+COPY marc_sdk             /agent/marc_sdk
+COPY mec_sim_ice/taejeong /agent/taejeong
+COPY demo                 /agent/demo
+COPY mec_sim_ice/demo_agents /agent/demo
 
 # Same RMW as the runtime platform (FastDDS). Import paths for marc_sdk (/agent) + demo local modules (/agent/demo).
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
@@ -44,8 +48,9 @@ WORKDIR /agent/demo
 
 # Bake the COCO-pretrained pose weights into the image at build time (runtime has no
 # internet). Downloaded into this WORKDIR so YOLO('yolo11n-pose.pt') finds it locally
-# at runtime instead of retrying the download. demo/weights/best.pt (the fine-tuned
-# detector) must already exist under demo/ before building -- see demo/train_yolo11.py.
+# at runtime instead of retrying the download. mec_sim_ice/demo_agents/weights/best.pt
+# (the fine-tuned detector) must already exist before building -- see
+# mec_sim_ice/test/train_yolo11.py.
 RUN python3 -c "from ultralytics import YOLO; YOLO('yolo11n-pose.pt')"
 
 # The ros:humble ENTRYPOINT (/ros_entrypoint.sh) sources /opt/ros/humble/setup.bash

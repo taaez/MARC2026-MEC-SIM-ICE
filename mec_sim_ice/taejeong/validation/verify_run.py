@@ -4,8 +4,8 @@
 공식 marc2026_chungmu.yaml 과 문항 단위로 대조한다. 시나리오가 섞였거나
 problems.yaml 선택이 잘못됐거나 문항 정의가 바뀐 경우를 잡아낸다.
 
-사용:
-    python3 verify_run.py ../../results/scores.jsonl
+사용 (cd mec_sim_ice/taejeong/validation 후):
+    python3 verify_run.py ../../../results/scores.jsonl
     python3 verify_run.py <scores.jsonl> --scenario <chungmu.yaml 경로>
 """
 
