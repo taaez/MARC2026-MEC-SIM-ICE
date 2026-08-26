@@ -30,6 +30,11 @@ organizer 템플릿을 그 자리에서 직접 수정해 쓰는 파일이라 `de
 
 Grounding DINO + Qwen 실험은 `MARC_ENTRYPOINT=participant_app_agent_vla.py` 로 계속 쓸 수 있다.
 
+**Isaac Sim 없이 바로 재채점하고 싶으면** (코드만 고쳐가며 반복할 때) `validation/offline_score.py`
+를 쓴다 — `records/s1_*` 를 지금 코드로 재실행하고, 과거 라이브 실행이 남긴 정답(좌표 포함)으로
+그 자리에서 채점해 문항별 표를 터미널에 바로 찍는다. 자세한 건 `validation/offline_score.py`
+의 모듈 docstring과 `../OFFLINE_검증_가이드.md` 참고.
+
 ## 0. 사전 준비 (최초 1회)
 
 ```bash
