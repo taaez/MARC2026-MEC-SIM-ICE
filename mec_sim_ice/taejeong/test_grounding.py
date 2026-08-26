@@ -174,10 +174,87 @@ def main() -> int:
           and set(p["interpretation"]) == {"target_type", "landmark", "relation", "situation"}
           and set(p["grounding"]) == {"anchor_coord", "target_coord"}, p.keys())
 
-    # T12. target 미탐지 → None (상위 폴백 몫)
+    # T12. target 미탐지 + 랜드마크는 있음 → 빈 제출 대신 랜드마크만으로 제출.
+    #      (camera/landmark/anchor 배점이 살아있고, 오답에 감점이 없으므로
+    #       포기하는 것보다 항상 낫다. target 좌표는 anchor 좌표로 대신 낸다.)
     d = resolve(parsed, {"cam_a": [synth_det(cam, "bench", (6, 1), 0.8, 0.5)]},
                 {"cam_a": cam}, cfg)
-    check("T12-no-target", d is None, d)
+    check("T12-anchor-only-camera", d is not None and d.camera_id == "cam_a",
+          d)
+    check("T12-anchor-only-landmark", d is not None and d.landmark == "bench",
+          d.landmark if d else None)
+    check("T12-anchor-only-coord",
+          d is not None and d.target_coord == d.anchor_coord
+          and d.anchor_coord != [0.0, 0.0, 0.0], d.anchor_coord if d else None)
+    check("T12-anchor-only-flag",
+          d is not None and d.debug.get("selection") == "anchor_only",
+          d.debug.get("selection") if d else None)
+
+    # T13. target 도 랜드마크도 없음 → 그때만 None (상위 폴백 몫)
+    d = resolve(parsed, {"cam_a": []}, {"cam_a": cam}, cfg)
+    check("T13-nothing-at-all", d is None, d)
+
+    # T14. 같은 랜드마크 클래스가 여러 카메라에 있을 때 (chungmu 의 trash_can 은
+    #      3대, picnic_table/bench/bicycle 은 2대에 있다) 탐지 confidence 가
+    #      카메라 선택을 뒤집으면 안 된다. CCTV 들은 서로 다른 공간을 보므로
+    #      confidence 는 카메라 간 비교 근거가 못 되고, 명령이 말한 배치를
+    #      실제로 실현하는 쪽(= 더 가까운 쌍)이 정답이다.
+    #      cam_a: 자신감 높은 umbrella 가 trash_can 에서 2.5m
+    #      cam_b: 자신감 낮은 umbrella 가 trash_can 에서 0.3m  ← 이쪽이 정답
+    parsed14 = parse_command("Find the umbrella beside the trash can.")
+    dets_a = [synth_det(cam, "umbrella", (5, 0), 0.9, 0.05, score=0.95),
+              synth_det(cam, "trash_can", (5, 2.5), 1.0, 0.3, score=0.9)]
+    #      (옛 점수식 conf+1.0+1/(1+dist) 로는 cam_a 2.212 > cam_b 2.163 이라
+    #       오답을 골랐다 — 즉 이 판단이 conf 노이즈에 좌우됐다.)
+    dets_b = [synth_det(cam_b, "umbrella", (6, 0), 0.9, 0.05, score=0.40),
+              synth_det(cam_b, "trash_can", (6.3, 0), 1.0, 0.3, score=0.9)]
+    d = resolve(parsed14, {"cam_a": dets_a, "cam_b": dets_b},
+                {"cam_a": cam, "cam_b": cam_b}, cfg)
+    check("T14-conf-does-not-outrank-relation", d.camera_id == "cam_b",
+          f"{d.camera_id} fit={d.debug.get('relation_fit')}")
+
+    # T15. 명령이 랜드마크 없이 구역만 말하는 경우 (chungmu 39문항 중 8개가
+    #      이렇다: "Find the umbrella dropped in the empty parking space.").
+    #      구역의 지표 클래스(주차장=차량)가 보이는 카메라로 좁혀야 한다.
+    #      cam_a: 자신감 높은 umbrella, 차량 없음  ← 예전엔 conf 로 여기가 뽑혔다
+    #      cam_b: 자신감 낮은 umbrella + police_car ← 정답
+    parsed15 = parse_command("Find the umbrella dropped in the empty parking space.")
+    check("T15-parses-area", parsed15.area_hint == "parking"
+          and parsed15.landmark_type is None,
+          f"area={parsed15.area_hint} lm={parsed15.landmark_type}")
+    dets_a = [synth_det(cam, "umbrella", (5, 0), 0.9, 0.05, score=0.95),
+              synth_det(cam, "bench", (5, 2.0), 0.5, 0.5, score=0.9)]
+    dets_b = [synth_det(cam_b, "umbrella", (6, 0), 0.9, 0.05, score=0.35),
+              synth_det(cam_b, "police_car", (6.5, 1.0), 1.5, 1.0, score=0.9)]
+    d = resolve(parsed15, {"cam_a": dets_a, "cam_b": dets_b},
+                {"cam_a": cam, "cam_b": cam_b}, cfg)
+    check("T15-area-gate-camera", d.camera_id == "cam_b",
+          f"{d.camera_id} gate={d.debug.get('gate_kind')}")
+    check("T15-area-gate-kind", d.debug.get("gate_kind") == "area",
+          d.debug.get("gate_kind"))
+
+    # T16. 구역 지표가 어느 카메라에도 없으면 게이트가 풀려야 한다 (순수 폴백:
+    #      새 배경에 주차장이 없으면 이 계층은 개입하지 않고 이전 동작 그대로).
+    dets_b_nocar = [synth_det(cam_b, "umbrella", (6, 0), 0.9, 0.05, score=0.35),
+                    synth_det(cam_b, "bench", (6.5, 1.0), 0.5, 0.5, score=0.9)]
+    d = resolve(parsed15, {"cam_a": dets_a, "cam_b": dets_b_nocar},
+                {"cam_a": cam, "cam_b": cam_b}, cfg)
+    check("T16-no-indicator-releases-gate",
+          d is not None and d.debug.get("gate_applied") is False,
+          f"gate_applied={d.debug.get('gate_applied') if d else None}")
+
+    # T17. 명시 랜드마크가 area 보다 우선한다 (더 구체적인 단서이므로).
+    #      "trash can" 을 말했으므로 차량이 있는 cam_b 가 아니라 cam_a 여야 한다.
+    parsed17 = parse_command("Find the umbrella beside the trash can in the parking lot.")
+    dets_a17 = [synth_det(cam, "umbrella", (5, 0), 0.9, 0.05, score=0.4),
+                synth_det(cam, "trash_can", (5.3, 0), 1.0, 0.3, score=0.9)]
+    dets_b17 = [synth_det(cam_b, "umbrella", (6, 0), 0.9, 0.05, score=0.95),
+                synth_det(cam_b, "police_car", (6.5, 1.0), 1.5, 1.0, score=0.9)]
+    d = resolve(parsed17, {"cam_a": dets_a17, "cam_b": dets_b17},
+                {"cam_a": cam, "cam_b": cam_b}, cfg)
+    check("T17-landmark-beats-area",
+          d.camera_id == "cam_a" and d.debug.get("gate_kind") == "landmark",
+          f"{d.camera_id} gate={d.debug.get('gate_kind')}")
 
     print("PASS" if fails == 0 else f"FAIL ({fails})")
     return 1 if fails else 0
