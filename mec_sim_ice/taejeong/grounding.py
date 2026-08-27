@@ -220,13 +220,18 @@ class Located:
 
 
 def locate(cam: CameraModel, det: Detection,
-           base_z: Optional[float] = None) -> Optional[Located]:
+           base_z: Optional[float] = None, push: float = 1.0) -> Optional[Located]:
     """탐지 bbox → Located. base_z 지정 시 그 평면(예: 랜드마크 상면) 기준.
 
     bbox 하단 중앙의 역투영은 물체의 '카메라 쪽 가장자리' 접촉점이므로,
     footprint 반경만큼 카메라 반대 방향으로 밀어 footprint **중심**을 얻는다
     (넓은 물체에서 중요 — 벤치·테이블은 반경이 수십 cm). 상단 z 추정은 먼 쪽
     가장자리에서 매칭한다 (estimate_top_z 참조).
+
+    ``push`` 는 그 보정량의 배수다 (``GroundingConfig.footprint_push``). 반경을
+    bbox '가로 폭'에서 얻어 '깊이 방향'으로 미는 것은 footprint 가 정사각형이라는
+    가정이라, 실제 물체 형상에 따라 과/소보정이 난다 — 그 계통 편향을 흡수하는
+    보정 계수다. 1.0 = 정사각형 가정 그대로.
     """
     x1, y1, x2, y2 = det.bbox
     near = pixel_to_plane(cam, (x1 + x2) / 2.0, y2, plane_z=base_z)
@@ -241,9 +246,9 @@ def locate(cam: CameraModel, det: Detection,
     away = near[:2] - cam.C_w[:2]
     n = float(np.linalg.norm(away))
     away = away / n if n > 1e-9 else np.zeros(2)
-    center_xy = near[:2] + radius * away
+    center_xy = near[:2] + push * radius * away
     base = np.array([center_xy[0], center_xy[1], float(near[2])])
-    far_xy = near[:2] + 2.0 * radius * away
+    far_xy = near[:2] + 2.0 * push * radius * away
     top_z = max(estimate_top_z(cam, det.bbox, far_xy, float(base[2])),
                 float(base[2]))
     return Located(det=det, base=base, top_z=top_z, radius=radius)
@@ -261,6 +266,7 @@ class GroundingConfig:
     on_z_tol_m: float = 0.45         # 'on' 판정: target 바닥과 anchor 상면 z 차 허용
     above_clearance_m: float = 0.15  # anchor 상면보다 이만큼 높이 떠 있으면 above
     directional_min_gap_m: float = 0.15  # 방향 relation 을 고려할 최소 수평 거리
+    footprint_push: float = 1.0      # locate(): 접촉점 → 중심 보정 계수 (radius 배수)
 
 
 def classify_relation(cam: CameraModel, anchor: Located, target: Located,
@@ -376,7 +382,7 @@ def _support_adjusted(cam: CameraModel, tdet: Detection, t_loc: Located,
     """
     if not _looks_on(a_loc, tdet):
         return t_loc
-    re_t = locate(cam, tdet, base_z=a_loc.top_z)
+    re_t = locate(cam, tdet, base_z=a_loc.top_z, push=cfg.footprint_push)
     if re_t is None:
         return t_loc
     d_ground = float(np.linalg.norm(t_loc.base[:2] - a_loc.base[:2]))
@@ -555,23 +561,28 @@ def resolve(parsed: ParsedCommand,
     if not gated:
         gated = list(per_cam)          # 단서 미지목/미검출 → 게이트 해제
 
+    # 랜드마크의 Located 는 target 과 무관하므로 카메라당 한 번만 계산한다
+    # (아래 이중 루프 안에서 매 target 마다 다시 구하면 같은 값을 T배 반복한다).
+    a_locs = {cid: [(adet, loc) for adet, loc in
+                    ((a, locate(per_cam[cid][0], a, push=cfg.footprint_push))
+                     for a in per_cam[cid][2])
+                    if loc is not None]
+              for cid in gated}
+
     # -- 2) relation 적합도로 (카메라, target, anchor) 선택 --
     def search(target_ok):
         # 후보 = (관계적합도_주, 관계적합도_부, 탐지conf, cam_id, t_loc, a_loc).
         # 앞 3개까지만 비교한다 — conf 는 관계 적합도가 동점일 때의 최후 수단.
         best = None
         for cam_id in gated:
-            cam, dets, adets = per_cam[cam_id]
+            cam, dets, _adets = per_cam[cam_id]
             for tdet in (d for d in dets if target_ok(d)):
-                t0 = locate(cam, tdet)
+                t0 = locate(cam, tdet, push=cfg.footprint_push)
                 if t0 is None:
                     continue
                 paired = False
-                for adet in adets:
+                for adet, a_loc in a_locs[cam_id]:
                     if adet is tdet:
-                        continue
-                    a_loc = locate(cam, adet)
-                    if a_loc is None:
                         continue
                     paired = True
                     t_loc = _support_adjusted(cam, tdet, t0, a_loc, cfg)
@@ -609,11 +620,7 @@ def resolve(parsed: ParsedCommand,
     # -- 3) target 미탐지 → 랜드마크만으로 제출 --
     anchor_best = None                 # (det_score, cam_id, a_loc)
     for cam_id in gated:
-        cam, _, adets = per_cam[cam_id]
-        for adet in adets:
-            a_loc = locate(cam, adet)
-            if a_loc is None:
-                continue
+        for adet, a_loc in a_locs[cam_id]:
             if anchor_best is None or adet.score > anchor_best[0]:
                 anchor_best = (adet.score, cam_id, a_loc)
     if anchor_best is None:
