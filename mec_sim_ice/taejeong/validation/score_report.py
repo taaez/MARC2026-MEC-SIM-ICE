@@ -59,22 +59,100 @@ def classify(d: dict) -> str:
 def report(rounds: list, final: dict | None = None, json_path: str | None = None) -> int:
     """rounds: [{"scores": {...}}, ...] (scores.jsonl 한 줄과 같은 스키마).
     라이브 실행이 아니라 메모리에서 바로 만든 rounds 로도 호출할 수 있다
-    (offline_score.py 가 이렇게 재사용한다)."""
+    (offline_score.py 가 이렇게 재사용한다).
+
+    ``stage`` 가 2 인 라운드(Stage2 = retrieval 문항)는 별도 섹션으로 갈라서 집계한다 --
+    Stage1 평균에 섞이면 대회의 Stage1 점수와 다른 숫자가 나오기 때문이다.
+    """
     if not rounds:
         print("라운드 기록이 없습니다.")
         return 1
 
+    s1 = [d for d in rounds if d.get("stage") != 2]
+    s2 = [d for d in rounds if d.get("stage") == 2]
+
     print("=" * 78)
-    print(f"자가 채점 리포트 — {len(rounds)} 라운드")
+    print(f"자가 채점 리포트 — {len(rounds)} 라운드"
+          + (f"  (Stage1 {len(s1)} / Stage2 {len(s2)})" if s2 else ""))
     print("=" * 78)
-    if final:
+    # 평균은 항상 이 리포트가 실제로 채점한 라운드에서 다시 계산한다. final 에 담긴
+    # 플랫폼 값은 집계 범위가 다를 수 있어(예: Stage2 문항까지 포함한 39라운드 평균)
+    # 그대로 쓰면 섹션 평균과 어긋난다 -- 아래 "라이브 실측" 로 따로 보여준다.
+    if s1:
+        print(f"Stage1 평균          : {sum(d['scores']['total'] for d in s1) / len(s1):6.2f}"
+              f"   ({len(s1)}문항)")
+    if s2:
+        print(f"Stage2 grounding 평균 : {sum(d['scores']['total'] for d in s2) / len(s2):6.2f}"
+              f"   ({len(s2)}문항)")
+        print("  └ Stage2 의 주행/집기/배달 실행 점수는 물리 시뮬이 필요해 오프라인에서")
+        print("    채점할 수 없다. 위 숫자는 Stage2 의 **인식(grounding) 부분만**이다.")
+    # offline_score.py 가 자기가 계산한 값을 넣어 보낸 경우는 "실측"이 아니다.
+    if final and final.get("source") != "offline":
+        live = []
         if final.get("stage1_average") is not None:
-            print(f"Stage1 평균 : {final.get('stage1_average')}")
+            live.append(f"Stage1 평균 {final['stage1_average']:.2f}"
+                        f"({final.get('stage1_rounds', '?')}라운드)")
         if final.get("stage2") is not None:
-            print(f"Stage2      : {final.get('stage2')}")
+            live.append(f"Stage2 {final['stage2']}")
         if final.get("total") is not None:
-            print(f"총점        : {final.get('total')} / {final.get('max_total')}")
-        print()
+            live.append(f"총점 {final['total']} / {final.get('max_total')}")
+        if live:
+            print(f"\n[플랫폼 실측]  {'  |  '.join(live)}")
+    print()
+
+    if s2:
+        _section("Stage 1 (grounding 문항)", s1)
+        _section("Stage 2 (retrieval 문항 -- grounding 부분만)", s2)
+    else:
+        _section(None, s1)
+
+    if json_path:
+        out = {
+            "final": final,
+            "stage1": _summary(s1),
+            "stage2_grounding": _summary(s2) if s2 else None,
+            # 하위 호환: 기존 스키마를 읽는 도구가 있어 전체 합산도 남겨둔다.
+            "field_averages": {f: (sum(d["scores"].get(f, 0) for d in rounds) / len(rounds))
+                               for f in FIELDS},
+            "rounds": [{"problem_id": d["scores"]["problem_id"],
+                        "stage": d.get("stage", 1),
+                        "record": d.get("record"),
+                        "total": d["scores"]["total"],
+                        "cause": classify(d),
+                        "fields": {f: d["scores"].get(f) for f in FIELDS}}
+                       for d in rounds],
+        }
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+        print(f"\nJSON 리포트 저장: {json_path}")
+    return 0
+
+
+def _summary(rounds: list) -> dict | None:
+    """섹션 하나의 기계 판독용 요약."""
+    if not rounds:
+        return None
+    buckets = defaultdict(list)
+    for d in rounds:
+        buckets[classify(d)].append(d)
+    return {
+        "rounds": len(rounds),
+        "average": sum(d["scores"]["total"] for d in rounds) / len(rounds),
+        "field_averages": {f: (sum(d["scores"].get(f, 0) for d in rounds) / len(rounds))
+                           for f in FIELDS},
+        "causes": {c: [d["scores"]["problem_id"] for d in ds] for c, ds in buckets.items()},
+    }
+
+
+def _section(title: str | None, rounds: list) -> None:
+    """한 단계(Stage1/Stage2)에 대한 상세 표를 찍는다."""
+    if not rounds:
+        return
+    if title:
+        print("-" * 78)
+        print(f"### {title} — {len(rounds)}문항  "
+              f"평균 {sum(d['scores']['total'] for d in rounds) / len(rounds):.2f}점")
+        print("-" * 78)
 
     # -- 항목별 평균 (실제 배점 반영: camera 10 / object_type 15 / landmark 10 /
     #    relation 10 / anchor 15 / target 40 -- person 문제는 landmark/relation 배점이
@@ -155,32 +233,31 @@ def report(rounds: list, final: dict | None = None, json_path: str | None = None
               f"{cell(s, 'camera', 0):>7s} {cell(s, 'object_type', 0):>7s} "
               f"{cell(s, 'landmark', 0):>9s} {cell(s, 'relation', 0):>9s} "
               f"{cell(s, 'anchor', 1):>10s} {cell(s, 'target', 1):>10s}")
-
-    if json_path:
-        out = {
-            "final": final,
-            "field_averages": {f: (sum(d["scores"].get(f, 0) for d in rounds) / len(rounds))
-                               for f in FIELDS},
-            "causes": {c: [d["scores"]["problem_id"] for d in ds] for c, ds in buckets.items()},
-            "rounds": [{"problem_id": d["scores"]["problem_id"],
-                        "total": d["scores"]["total"],
-                        "cause": classify(d),
-                        "fields": {f: d["scores"].get(f) for f in FIELDS}}
-                       for d in rounds],
-        }
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, indent=2)
-        print(f"\nJSON 리포트 저장: {json_path}")
-    return 0
+    print()
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("scores")
     ap.add_argument("--json", default=None, help="리포트를 JSON 으로도 저장")
+    ap.add_argument("--scenario", default=None,
+                    help="시나리오 yaml. 주면 문항 종류(kind: retrieval)로 Stage1/Stage2 를 "
+                         "갈라서 따로 집계한다. 플랫폼이 Stage2 문항을 Stage1 라운드로 "
+                         "출제한 기록도 이걸로 제대로 분리된다")
     args = ap.parse_args()
 
     rounds, final = load(args.scores)
+
+    if args.scenario:
+        # 라이브 기록의 `stage` 는 "몇 단계에서 출제됐나"라서, Stage2 문항이 Stage1
+        # 라운드로 나온 기록에서는 전부 1 이다. 문항 종류로 다시 매긴다.
+        from chungmu_gt import problem_kinds
+        kinds = problem_kinds(args.scenario)
+        for d in rounds:
+            pid = d.get("scores", {}).get("problem_id")
+            if kinds.get(pid) == "retrieval":
+                d["stage"] = 2
+
     return report(rounds, final, args.json)
 
 
