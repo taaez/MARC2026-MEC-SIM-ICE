@@ -29,14 +29,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /agent
 
-# context = starter kit root -> copy marc_sdk (library) + taejeong (Stage 1 pipeline) + demo (agent)
+# context = starter kit root -> copy marc_sdk (library) + taejeong (Stage 1 pipeline)
+# + manipulation (arm kit, for the world->arm_base tf helper) + demo (agent)
 # taejeong/ is imported as a package (`from taejeong.grounding import ...`) by
 # taejeong_agent_vla.py, so it must land under /agent (which is on PYTHONPATH below).
+# manipulation/ is imported as a package too (`from manipulation import transform_via_tf2`).
 # Team code lives under mec_sim_ice/ after the repo cleanup (organizer's own demo/ is
 # copied separately, then mec_sim_ice/demo_agents/ merges the team's local modules
 # -- taejeong_agent_vla.py, agent_vla.py, weights/ -- into the same /agent/demo dir).
 COPY marc_sdk             /agent/marc_sdk
 COPY mec_sim_ice/taejeong /agent/taejeong
+COPY manipulation         /agent/manipulation
 COPY demo                 /agent/demo
 COPY mec_sim_ice/demo_agents /agent/demo
 
