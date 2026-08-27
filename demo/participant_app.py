@@ -48,6 +48,7 @@ from mock_agent_navigation import (
 # The fixed-keyframe mock in mock_agent_manipulation.py remains as a dependency-free
 # fallback reference.
 from arm_pick import run_pick_sequence
+from manipulation import transform_via_tf2
 
 log = logging.getLogger("participant_app")
 
@@ -66,7 +67,10 @@ GOAL_TOLERANCE = 0.7           # reached test (m)
 # Stop the chassis this far (m) in front of the object, then close the last stretch with a
 # straight approach (the planner cannot enter a tight spot fully). Avoids driving over the object.
 TUMBLER_STANDOFF_M = 0.58
-# car_base(world_pose) -> arm_base forward offset. arm_base is ~0.18 m ahead of the chassis pose.
+# car_base(world_pose) -> arm_base forward offset. Used ONLY by the offline fallback in
+# _object_arm_xy when tf2 is unavailable (no ROS / no live platform); live runs read the
+# real offset from the world->arm_base_link tf instead. Unverified assumption -- see
+# manipulation/world_to_arm_base.py for why the URDF cannot supply it.
 ARM_BASE_FWD = 0.18
 # Grasp point relative to the object along +fwd. Negative = slightly past the object center
 # so the gripper closes around its body (a small backoff grabbed only the edge -> dropped in
@@ -97,6 +101,20 @@ class DemoParticipant:
         # reads this file for self-scoring.
         self._round_commands = {}
         self._score_log_path = os.environ.get("MARC_SCORE_LOG", "./results/scores.jsonl")
+        # world -> arm_base_link tf, used by _object_arm_xy for the real (not assumed)
+        # chassis->arm mount offset/rotation. The listener must be kept alive (held as an
+        # attribute) or it stops receiving tf broadcasts.
+        # Offline harnesses (taejeong/validation/stage2_sim.py) run without ROS, so a
+        # missing tf2_ros is not fatal here -- _object_arm_xy falls back to the pose-based
+        # computation when the buffer is None.
+        try:
+            from tf2_ros import Buffer, TransformListener
+            self._tf_buffer = Buffer()
+            self._tf_listener = TransformListener(self._tf_buffer, self.client.node)
+        except Exception as e:
+            log.warning("[Stage2] tf2 unavailable (%s) -- falling back to "
+                        "ARM_BASE_FWD pose math in _object_arm_xy", e)
+            self._tf_buffer = self._tf_listener = None
         # Stage 2 pickup goal -- filled from the approximate location hint in the reveal (msg 411).
         # If not received, fall back to the Stage 2 answer target (_stage2_target_xy).
         self._collect_xy = None
@@ -263,12 +281,27 @@ class DemoParticipant:
         return (x + dx * f, y + dy * f)
 
     def _object_arm_xy(self, obj_xy):
-        """Object world XY -> arm_base frame (fwd, lat) using the current robot pose.
+        """Object world XY -> arm_base frame (fwd, lat).
 
-        Rotate the world offset into the car_base frame, then shift by the
-        car_base->arm_base forward offset. Lets the closed-loop pick aim at the real
-        object regardless of small nav misalignment.
+        Preferred path is the real world->arm_base_link tf: it needs no ARM_BASE_FWD
+        assumption, so the result stays correct whatever angle/offset the arm is actually
+        mounted at on the chassis. The gen3 URDF has no arm_base link at all (the full
+        robot assembly is platform-only), so the mount offset is *only* knowable at
+        runtime -- see manipulation/world_to_arm_base.py.
+
+        When tf2 is unavailable (offline harness: no ROS, no live platform) we fall back
+        to the previous pose-based computation with the ARM_BASE_FWD assumption. That
+        fallback is an approximation, but it lets taejeong/validation/stage2_sim.py run
+        the whole Stage 2 flow without Isaac Sim. Live runs always take the tf2 path.
         """
+        if self._tf_buffer is not None:
+            try:
+                fwd, lat = transform_via_tf2(self._tf_buffer, (obj_xy[0], obj_xy[1], 0.0))
+                return (fwd - GRASP_FWD_BACKOFF, lat)
+            except Exception as e:
+                log.warning("[Stage2] tf2 world->arm_base_link transform failed: %s "
+                            "-- falling back to pose math", e)
+
         pose = self.client.get_world_pose()
         if pose is None:
             return None

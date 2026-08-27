@@ -150,9 +150,15 @@ def install_shims():
     - marc_sdk           : MARCClient -> 가짜. from_env() 는 현재 가짜 인스턴스를 준다
     - mock_agent_navigation : 3.9 안전 로드 (participant_app 이 from-import 하기 전에 선점)
     - taejeong_agent_vla : 스텁
+
+    sys.path 에 세 곳을 넣는다:
+      demo/          -- arm_pick, arm_kin, mock_agent_navigation 을 top-level 로 import
+      manipulation/  -- 위와 같은 모듈의 원본 위치
+      리포 루트      -- participant_app 의 `from manipulation import transform_via_tf2`
+                        (cfc3668) 가 **패키지**로 import 하므로 루트가 필요하다
     """
     _shim_sensor_msgs()
-    for p in (_DEMO_DIR, os.path.join(_REPO_ROOT, "manipulation")):
+    for p in (_DEMO_DIR, os.path.join(_REPO_ROOT, "manipulation"), _REPO_ROOT):
         if p not in sys.path:
             sys.path.insert(0, p)
 
