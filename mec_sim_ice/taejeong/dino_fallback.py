@@ -71,11 +71,22 @@ class DinoFallbackDetector:
         # NVIDIA(CUDA, 채점 서버/랩 데스크탑) -> Apple Silicon(MPS, 로컬 Mac 테스트) -> CPU.
         self.device = ("cuda" if torch.cuda.is_available()
                       else "mps" if torch.backends.mps.is_available() else "cpu")
+        # torch_dtype 을 안 정해주면 fp32 로 로드된다 -- vlm_fallback.py 는 이미
+        # bf16 인데 DINO 만 그대로였다. 실측(2026-08-29, 윈도우 RTX 4070): 타일링
+        # 폴백(_dino_best_box_tiled, 8타일 배치)이 걸린 pencilcase 한 카메라가
+        # 2분 넘게 걸렸다 -- fp32 는 텐서 코어(fp16/bf16 전용 가속)를 못 써서
+        # CUDA 에서 수 배 느리다. CUDA만 bf16 로 낮춘다 -- MPS 는 이 모델의
+        # 일부 연산(행렬곱 커널)이 bf16 조합에서 바로 assert 로 죽는 걸 실측으로
+        # 확인해서(2026-08-29, MPSNDArrayMatrixMultiplication dtype mismatch)
+        # 제외, CPU 도 가속기가 없어 낮출 이득이 없다.
+        self.dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
         self.processor = _from_pretrained_local_first(AutoProcessor, self.model_name)
         self.model = _from_pretrained_local_first(
-            AutoModelForZeroShotObjectDetection, self.model_name).to(self.device).eval()
+            AutoModelForZeroShotObjectDetection, self.model_name,
+            torch_dtype=self.dtype).to(self.device).eval()
         self.box_thr, self.text_thr = box_thr, text_thr
-        log.info("[dino-fallback] loaded %s on %s", self.model_name, self.device)
+        log.info("[dino-fallback] loaded %s on %s (dtype=%s)",
+                 self.model_name, self.device, self.dtype)
 
     def best_box(self, img_bgr: np.ndarray, phrases: Sequence[str]) -> Optional[_DinoBox]:
         """phrases 중 아무거나 매치되는 것 중 가장 점수 높은 박스 하나. 없으면 None.
@@ -138,6 +149,9 @@ class DinoFallbackDetector:
         text = phrase.strip().rstrip(".") + "."
         inputs = self.processor(images=pils, text=[text] * len(pils),
                                 return_tensors="pt", padding=True).to(self.device)
+        # processor 는 pixel_values 를 항상 fp32 로 낸다 -- 모델을 bf16 으로
+        # 낮춰도 여기서 안 맞춰주면 forward 에서 dtype 불일치 에러가 난다.
+        inputs["pixel_values"] = inputs["pixel_values"].to(self.dtype)
         with torch.inference_mode():
             out = self.model(**inputs)
         target_sizes = [pil.size[::-1] for pil in pils]
@@ -162,6 +176,7 @@ class DinoFallbackDetector:
         pil = Image.fromarray(img_rgb)
         text = phrase.strip().rstrip(".") + "."
         inputs = self.processor(images=pil, text=text, return_tensors="pt").to(self.device)
+        inputs["pixel_values"] = inputs["pixel_values"].to(self.dtype)
         with torch.inference_mode():
             out = self.model(**inputs)
         res = self.processor.post_process_grounded_object_detection(
