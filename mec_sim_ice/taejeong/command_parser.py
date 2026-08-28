@@ -127,30 +127,36 @@ def parse_command(command: str) -> ParsedCommand:
 
     stage2 = bool(re.search(r"\bpick up\b|\bbring it to\b|\bbring them to\b", text))
 
-    is_person = any(re.search(r"\b" + w + r"\b", text) for w in PERSON_WORDS)
+    person_word_hit = any(re.search(r"\b" + w + r"\b", text) for w in PERSON_WORDS)
+    objs = _find_mentions(text, OBJECT_SYNONYMS)
+    cues["object_mentions"] = [(k, p) for _, k, p in objs]
+    pose_cue = any(re.search(pat, text) for _, pat in POSE_BUCKETS)
+    # "someone/a person" 같은 단어가 있다고 무조건 사람 문제로 확정하지 않는다.
+    # 서사형 분실물 문제도 3인칭 화자로 쓰일 수 있다("Someone dropped their
+    # tumbler near the bike rack." -- 타겟은 tumbler지 사람이 아님). 자세
+    # 단서(sar/sarH의 특징, 예: "collapsed", "climbed")가 있거나 아는 물건이
+    # 아예 문장에 없을 때만 사람 문제로 본다 -- 그 외엔 물건 쪽이 진짜 타겟이다.
+    is_person = person_word_hit and (pose_cue or not objs)
 
     # ── target ──
     if is_person:
         target = "person"
+    elif not objs:
+        target = None                 # 어휘 밖 → 상위에서 DINO/VLM 폴백
+    elif len(objs) == 1:
+        target = objs[0][1]
     else:
-        objs = _find_mentions(text, OBJECT_SYNONYMS)
-        cues["object_mentions"] = [(k, p) for _, k, p in objs]
-        if not objs:
-            target = None                 # 어휘 밖 → 상위에서 DINO/VLM 폴백
-        elif len(objs) == 1:
-            target = objs[0][1]
-        else:
-            # 다중 물체 언급: find/pick up/left/dropped + my/the 에 붙은 쪽 우선
-            def score(hit):
-                s, _, p = hit
-                pre = text[max(0, s - 28):s]
-                sc = 0
-                if re.search(r"(find|pick up|left|dropped|lost)\b[^.;]*?(my|the)\s*$", pre):
-                    sc += 2
-                if re.search(r"\bmy\s*$", pre):
-                    sc += 1
-                return sc
-            target = max(objs, key=score)[1]
+        # 다중 물체 언급: find/pick up/left/dropped + my/the 에 붙은 쪽 우선
+        def score(hit):
+            s, _, p = hit
+            pre = text[max(0, s - 28):s]
+            sc = 0
+            if re.search(r"(find|pick up|left|dropped|lost)\b[^.;]*?(my|the)\s*$", pre):
+                sc += 2
+            if re.search(r"\bmy\s*$", pre):
+                sc += 1
+            return sc
+        target = max(objs, key=score)[1]
 
     # ── landmark (타입 힌트) ──
     lms = _find_mentions(text, LANDMARK_SYNONYMS)
