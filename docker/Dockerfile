@@ -36,15 +36,22 @@ COPY docker/requirements.txt /tmp/requirements.txt
 RUN pip3 install -r /tmp/requirements.txt
 
 # --- 모델 가중치 baking (여기가 핵심: 런타임 다운로드 금지) ---
-# 제출 기본값 = 7B (48GB 채점 머신 기준). 로컬 8GB 개발 빌드는 ARG 로 3B 지정.
-ARG VLM_MODEL=Qwen/Qwen2.5-VL-7B-Instruct
+# 제출 기본값 = 3B (2026-08-28 변경, 근거: VRAM 예산을 12GB 이내로 맞춰야 함 --
+# 7B fp16(~14~16GB)로는 DINO(~1GB)와 합쳐 16GB를 넘겨 초과. 7B+4bit(~5~6GB)도
+# 대안이지만 CUDA 전용이라 로컬(Mac/MPS)에서 검증이 안 된다. VLM 이 지금
+# 하는 일은 crop 이미지 검증 없이(폐기됨, taejeong/fallback.py 참고) 텍스트
+# 분류 두 건뿐이라(OOV 물체명 재해석, "behind" 구동사/공간관계 중의성 판정)
+# 3B로도 충분하다는 게 이번 세션 실측(전 케이스 3B로 진행, 문제 없었음)으로
+# 확인됐다. 3B fp16 + DINO fp16 ≈ 6~8GB, 12GB 예산에 여유 있게 들어간다.
+# 필요하면 여기 ARG 또는 --build-arg VLM_MODEL=... 로 7B/4bit 조합도 그대로 가능.
+ARG VLM_MODEL=Qwen/Qwen2.5-VL-3B-Instruct
 ARG DET_MODEL=IDEA-Research/grounding-dino-base
 ENV HF_HOME=/opt/hf
 RUN python3 - <<'EOF'
 import os
 from huggingface_hub import snapshot_download
 for repo in [os.environ.get("DET_MODEL", "IDEA-Research/grounding-dino-base"),
-             os.environ.get("VLM_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct")]:
+             os.environ.get("VLM_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")]:
     print("downloading", repo, flush=True)
     snapshot_download(repo, allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.py", "*.tiktoken"])
 EOF
