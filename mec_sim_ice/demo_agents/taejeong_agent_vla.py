@@ -27,20 +27,11 @@ from ultralytics import YOLO
 
 from marc_sdk import GroundingResult
 
-from taejeong.command_parser import (
-    LANDMARK_SYNONYMS,
-    OBJECT_SYNONYMS,
-    parse_command,
-)
+from taejeong.command_parser import parse_command
 from taejeong.dino_fallback import DinoFallbackDetector
 from taejeong.dino_fallback import is_disabled as dino_disabled
-from taejeong.grounding import (
-    Detection,
-    _landmark_ok,
-    _target_ok,
-    camera_from_ros,
-    resolve,
-)
+from taejeong.fallback import dino_augment, vlm_assist
+from taejeong.grounding import camera_from_ros, resolve
 from taejeong.vlm_fallback import VlmTargetResolver
 from taejeong.vlm_fallback import is_disabled as vlm_disabled
 from taejeong.yolo_adapter import infer_cameras
@@ -107,7 +98,7 @@ class TaejeongVLAGrounding:
 
     def _ground(self, command: str, camera_ids: list) -> GroundingResult:
         parsed = parse_command(command)
-        target_phrases = self._vlm_assist(command, parsed)
+        target_phrases = vlm_assist(command, parsed, self._vlm)
 
         images = {}
         for cam_id in camera_ids:
@@ -117,7 +108,7 @@ class TaejeongVLAGrounding:
 
         detections = infer_cameras(self._det, images, min_conf=self._conf,
                                    imgsz=self._imgsz)
-        self._dino_augment(parsed, images, detections, target_phrases)
+        dino_augment(parsed, images, detections, target_phrases, self._dino)
 
         cameras = {}
         for cam_id in images:
@@ -139,78 +130,6 @@ class TaejeongVLAGrounding:
                 situation=None,
             )
         return GroundingResult.from_payload(decision.to_payload())
-
-    # -- VLM/DINO 폴백 (규칙/YOLO 가 실패한 지점만 보충; 정상 경로 비용 0) --
-
-    def _vlm_assist(self, command: str, parsed):
-        """VLM 보조 2건: behind 중의 중재 + OOV target 재해석 (parsed 제자리 수정).
-
-        반환: DINO 검색용 target phrase 목록. 아는 클래스면 동의어 사전, 진짜
-        신규 물체면 VLM 이 만든 검색어 1개, 해석 불능/사람 문제면 None.
-        """
-        if (self._vlm is not None and not parsed.is_person
-                and parsed.relation_hint == "behind" and not parsed.relation_confident):
-            # 구동사 leave-behind vs 공간관계 -- command_parser 가 confident 를
-            # 낮춘 중의 문장만 온다. phrasal 이면 물건은 그 자리 근처에 남은 것.
-            spatial = self._vlm.behind_is_spatial(command)
-            if spatial is False:
-                parsed.relation_hint = "near"
-                log.info("[taejeong] VLM arbitration: 'behind' is phrasal -> near")
-            elif spatial is True:
-                log.info("[taejeong] VLM arbitration: 'behind' is spatial -> keep hint")
-        if parsed.is_person:
-            return None
-        if parsed.target_type is None and self._vlm is not None:
-            matched, phrase = self._vlm.resolve(command, OBJECT_SYNONYMS.keys())
-            if matched:
-                parsed.target_type = matched     # 사전 미등재 표현 -> 아는 클래스로 복귀
-                log.info("[taejeong] VLM fallback resolved OOV wording -> %r", matched)
-            elif phrase:
-                # 진짜 신규 물체: phrase 를 클래스명처럼 쓴다. type 점수는 어차피
-                # 닫힌 어휘 밖이라 못 얻지만, resolve() 의 _target_ok 가 label
-                # 일치로 DINO 탐지를 통과시키려면 target_type 과 label 이 같아야
-                # 하고, 그래야 좌표 점수는 살릴 수 있다.
-                parsed.target_type = phrase
-                log.info("[taejeong] VLM fallback: unknown object, DINO phrase=%r", phrase)
-                return [phrase]
-        if parsed.target_type:
-            return OBJECT_SYNONYMS.get(parsed.target_type,
-                                       [parsed.target_type.replace("_", " ")])
-        return None
-
-    def _dino_augment(self, parsed, images: dict, detections: dict, target_phrases):
-        """YOLO 가 어디서도 못 찾은 target/landmark 를 DINO 로 보충.
-
-        detections dict 에 Detection 을 추가할 뿐 별도 제출 경로가 없다 --
-        resolve() 의 카메라 게이트/기하 판정/relation 적합도가 폴백 탐지에도
-        똑같이 적용된다. 사람 문제는 pose 분류가 필요해 대상 밖.
-        """
-        if self._dino is None or parsed.is_person:
-            return
-        if target_phrases and not any(_target_ok(d.label, parsed)
-                                      for dets in detections.values() for d in dets):
-            for cam_id, img in images.items():
-                box = self._dino.best_box(img, target_phrases)
-                if box is not None:
-                    detections.setdefault(cam_id, []).append(Detection(
-                        label=parsed.target_type, bbox=tuple(box.xyxy[0]),
-                        score=float(box.conf[0])))
-                    log.info("[taejeong] DINO fallback rescued target %r on %s",
-                             parsed.target_type, cam_id)
-        lm = parsed.landmark_type
-        if lm and not any(_landmark_ok(d.label, lm)
-                          for dets in detections.values() for d in dets):
-            # 제너릭 "car" 힌트도 그대로 label 로 쓴다 -- grounding.CAR_CLASSES 에
-            # "car" 가 포함돼 _landmark_ok 를 통과하고, situation 규칙의 support
-            # 토큰 정규화도 "car" 를 안다.
-            phrases = LANDMARK_SYNONYMS.get(lm, [lm.replace("_", " ")])
-            for cam_id, img in images.items():
-                box = self._dino.best_box(img, phrases)
-                if box is not None:
-                    detections.setdefault(cam_id, []).append(Detection(
-                        label=lm, bbox=tuple(box.xyxy[0]), score=float(box.conf[0])))
-                    log.info("[taejeong] DINO fallback rescued landmark %r on %s",
-                             lm, cam_id)
 
     # -- camera model from live sensors --
 

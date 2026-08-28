@@ -76,8 +76,11 @@ sys.path.insert(0, _VALIDATION_DIR)  # score_report
 sys.path.insert(0, _TAEJEONG_DIR)   # command_parser / grounding / yolo_adapter / run_offline
 
 from command_parser import parse_command          # noqa: E402
+from dino_fallback import DinoFallbackDetector      # noqa: E402
+from fallback import dino_augment, vlm_assist       # noqa: E402
 from grounding import resolve                      # noqa: E402
 from run_offline import load_round                 # noqa: E402
+from vlm_fallback import VlmTargetResolver          # noqa: E402
 from yolo_adapter import infer_cameras              # noqa: E402
 
 from chungmu_gt import DEFAULT_SCENARIO, load_gt    # noqa: E402  (same dir)
@@ -322,6 +325,11 @@ def main() -> int:
                          "기본은 실행 -- stage2_sim.py 로 participant_app 을 그대로 굴린다")
     ap.add_argument("--stage2-occupancy", default=None,
                     help="Stage2 실행 시뮬이 쓸 실제 점유지도 npz (없으면 합성 지도)")
+    ap.add_argument("--fallback", action="store_true",
+                    help="DINO/VLM 폴백 사용 (taejeong/dino_fallback.py, vlm_fallback.py -- "
+                         "YOLO 가 놓친 target/landmark 재탐색 + behind 중의 중재 + OOV target "
+                         "재해석). 기본은 미사용이라 기존 runs/*.jsonl 기준선과 그대로 비교 "
+                         "가능; 켜려면 torch/transformers 필요, 로컬 8GB 는 MARC_VLM_4BIT=1 권장.")
 
     # macOS 는 입력 중 "--" 를 em-dash("—") 로 자동 치환하는 경우가 있다.
     # 그대로 두면 argparse 가 "unrecognized arguments" 만 뱉어 원인을 알기 어렵다.
@@ -349,6 +357,19 @@ def main() -> int:
     from ultralytics import YOLO
     model = YOLO(args.weights)
 
+    dino = vlm = None
+    if args.fallback:
+        try:
+            dino = DinoFallbackDetector()
+        except Exception as e:  # noqa: BLE001
+            print(f"[fallback] DINO 로드 실패, target/landmark 재탐색 없이 진행: {e}",
+                  file=sys.stderr)
+        try:
+            vlm = VlmTargetResolver()
+        except Exception as e:  # noqa: BLE001
+            print(f"[fallback] VLM 로드 실패, behind 중재/OOV 재해석 없이 진행: {e}",
+                  file=sys.stderr)
+
     # s1_* 는 Stage1 단계에서, s2_* 는 Stage2 단계에서 뜬 기록이다. 어느 단계에서 떴는지와
     # 무관하게 **문항 종류**(시나리오의 kind)로 Stage1/Stage2 를 가른다 -- 2026-08-25 기록
     # 세션은 39문항을 전부 Stage1 라운드로 출제해서 Stage2 문항(rt*)까지 s1_034~s1_039 에
@@ -368,7 +389,10 @@ def main() -> int:
         problem_id, expected, weights, kind = hit
 
         parsed = parse_command(cmd)
+        target_phrases = vlm_assist(cmd, parsed, vlm) if args.fallback else None
         dets = infer_cameras(model, images, min_conf=args.conf, imgsz=args.imgsz)
+        if args.fallback:
+            dino_augment(parsed, images, dets, target_phrases, dino)
         decision = resolve(parsed, dets, cams)
         submission = (flatten_payload(decision.to_payload()) if decision is not None
                       else fallback_submission(parsed))
