@@ -108,7 +108,7 @@ class TaejeongVLAGrounding:
 
         detections = infer_cameras(self._det, images, min_conf=self._conf,
                                    imgsz=self._imgsz)
-        dino_augment(parsed, images, detections, target_phrases, self._dino)
+        dino_augment(parsed, images, detections, target_phrases, self._dino, self._vlm)
 
         cameras = {}
         for cam_id in images:

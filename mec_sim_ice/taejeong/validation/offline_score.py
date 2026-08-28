@@ -77,10 +77,12 @@ sys.path.insert(0, _TAEJEONG_DIR)   # command_parser / grounding / yolo_adapter 
 
 from command_parser import parse_command          # noqa: E402
 from dino_fallback import DinoFallbackDetector      # noqa: E402
+from dino_fallback import is_disabled as dino_disabled  # noqa: E402
 from fallback import dino_augment, vlm_assist       # noqa: E402
 from grounding import resolve                      # noqa: E402
 from run_offline import load_round                 # noqa: E402
 from vlm_fallback import VlmTargetResolver          # noqa: E402
+from vlm_fallback import is_disabled as vlm_disabled  # noqa: E402
 from yolo_adapter import infer_cameras              # noqa: E402
 
 from chungmu_gt import DEFAULT_SCENARIO, load_gt    # noqa: E402  (same dir)
@@ -329,7 +331,14 @@ def main() -> int:
                     help="DINO/VLM 폴백 사용 (taejeong/dino_fallback.py, vlm_fallback.py -- "
                          "YOLO 가 놓친 target/landmark 재탐색 + behind 중의 중재 + OOV target "
                          "재해석). 기본은 미사용이라 기존 runs/*.jsonl 기준선과 그대로 비교 "
-                         "가능; 켜려면 torch/transformers 필요, 로컬 8GB 는 MARC_VLM_4BIT=1 권장.")
+                         "가능; 켜려면 torch/transformers 필요, 로컬 8GB 는 MARC_VLM_4BIT=1 권장. "
+                         "MARC_DISABLE_VLM=1 / MARC_DISABLE_DINO_FALLBACK=1 로 개별 차단 가능.")
+    ap.add_argument("--dino-box-thr", type=float, default=None,
+                    help="DINO box confidence 임계값 (기본 DinoFallbackDetector 기본값 0.3). "
+                         "실측(2026-08-28)상 소형물체(pencilcase) score가 0.11까지 나와 "
+                         "기본값에선 폴백이 사실상 발동 안 함 -- 낮춰서 스윕할 때 씀.")
+    ap.add_argument("--dino-text-thr", type=float, default=None,
+                    help="DINO text 임계값 (기본 0.25).")
 
     # macOS 는 입력 중 "--" 를 em-dash("—") 로 자동 치환하는 경우가 있다.
     # 그대로 두면 argparse 가 "unrecognized arguments" 만 뱉어 원인을 알기 어렵다.
@@ -358,12 +367,18 @@ def main() -> int:
     model = YOLO(args.weights)
 
     dino = vlm = None
-    if args.fallback:
+    if args.fallback and not dino_disabled():
         try:
-            dino = DinoFallbackDetector()
+            dino_kw = {}
+            if args.dino_box_thr is not None:
+                dino_kw["box_thr"] = args.dino_box_thr
+            if args.dino_text_thr is not None:
+                dino_kw["text_thr"] = args.dino_text_thr
+            dino = DinoFallbackDetector(**dino_kw)
         except Exception as e:  # noqa: BLE001
             print(f"[fallback] DINO 로드 실패, target/landmark 재탐색 없이 진행: {e}",
                   file=sys.stderr)
+    if args.fallback and not vlm_disabled():
         try:
             vlm = VlmTargetResolver()
         except Exception as e:  # noqa: BLE001
@@ -392,7 +407,7 @@ def main() -> int:
         target_phrases = vlm_assist(cmd, parsed, vlm) if args.fallback else None
         dets = infer_cameras(model, images, min_conf=args.conf, imgsz=args.imgsz)
         if args.fallback:
-            dino_augment(parsed, images, dets, target_phrases, dino)
+            dino_augment(parsed, images, dets, target_phrases, dino, vlm)
         decision = resolve(parsed, dets, cams)
         submission = (flatten_payload(decision.to_payload()) if decision is not None
                       else fallback_submission(parsed))
