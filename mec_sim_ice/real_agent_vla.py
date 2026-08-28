@@ -97,6 +97,20 @@ DET_WEIGHTS = os.environ.get("VLA_DET_WEIGHTS",
 DET_IMGSZ = 1280   # CCTV native resolution (1280x720)
 DET_CONF = 0.35
 
+# CCTV 프레임을 기다리는 시간. 세션 시작 직후에는 아직 아무 프레임도 안 와 있다:
+#   * CCTV image/camera_info 토픽의 QoS 는 BEST_EFFORT + VOLATILE(비래칭, protocol.py
+#     QOS_IMAGE) 이라, 구독을 붙여도 **다음 발행이 올 때까지** get_cctv_image() 는 None 이다.
+#     (ground_height 만 TRANSIENT_LOCAL 이라 즉시 읽힌다 -- 그래서 카메라가 '발견'됐다고
+#     이미지가 있는 게 아니다.)
+#   * client.list_cctv() 는 '구독됨'만 뜻하고 데이터 준비 신호가 아니다. 카메라 발견은
+#     client.py 의 2초 주기 _discover_cctv 타이머가 한다.
+# 그래서 한 번만 긁고 포기하면 세션 앞쪽 라운드가 통째로 빈 제출이 된다 -- 실측으로
+# 2026-08-25 수집 세션의 1~4라운드(lf01~lf04)가 이미지 0장으로 기록됐고 35.00 고정이었다
+# (프레임은 1라운드 기준 6~8초 뒤에 도착했다). 첫 라운드만 길게 기다리고, 그 뒤에는
+# 짧게 재시도한다. 라운드 제한시간이 보통 60s 라 워밍업 30s 는 충분히 안전하다.
+CAM_WARMUP_S = float(os.environ.get("MARC_CAM_WARMUP_S", "30"))  # 첫 프레임을 받을 때까지
+CAM_RETRY_S = float(os.environ.get("MARC_CAM_RETRY_S", "3"))     # 그 이후 라운드
+
 
 class RealVLAGrounding:
     """Stage 1 / Stage 2 grounding via YOLO11 detection on DET_CLASSES.
@@ -141,6 +155,10 @@ class RealVLAGrounding:
         # tools/run_offline_real_vla.py (or tools/eval_offline.py).
         self._record_dir = os.getenv("MARC_RECORD_DIR")
         self._round = 0
+        # 한 번이라도 프레임을 받았는지. 라운드 번호가 아니라 이 플래그로 워밍업을
+        # 판단한다 -- 1라운드가 빨리 성공하면 안 기다리고, 앞 라운드가 계속 실패하면
+        # 성공할 때까지 계속 길게 기다린다.
+        self._cams_warm = False
 
     def _tf(self):
         if self._tf_buffer is None:
@@ -158,6 +176,54 @@ class RealVLAGrounding:
     def process_stage2(self, task_description: str) -> GroundingResult:
         self._round += 1
         return self._ground(task_description, self._client.list_cctv(), "s2")
+
+    def _observe_images(self, camera_ids: list) -> dict:
+        """CCTV 프레임이 다 들어올 때까지 기다렸다가 긁는다. {camera_id: BGR ndarray}.
+
+        왜 기다려야 하는지는 CAM_WARMUP_S 주석 참고 (요약: 이미지 토픽이 비래칭이라
+        구독 직후엔 None 이고, list_cctv() 는 데이터 준비 신호가 아니다).
+
+        종료 조건 두 가지:
+          * 알려진 카메라 전부의 프레임을 받았고, 그 개수가 CAM_SETTLE_S 동안 더
+            안 늘었다 -- 카메라 발견 자체가 2초 타이머라 순차적으로 늘어날 수 있어,
+            '지금 아는 카메라가 다 찼다'만으로 끊으면 6대 중 3대만 받고 나갈 수 있다.
+          * 제한시간(첫 프레임 전 CAM_WARMUP_S, 그 뒤 CAM_RETRY_S) 초과.
+
+        client.sleep() 은 sim 시간 기반이고, 조기 반환은 Stage2 주행 중에만 걸리므로
+        (client.py: ``self._stage2_active and not self.is_running``) 여기서는 안전하다.
+        """
+        budget = CAM_RETRY_S if self._cams_warm else CAM_WARMUP_S
+        # 아직 카메라 구성을 모르는 첫 워밍업에서만 '개수가 안 늘 때까지' 더 본다.
+        # 한 번 데워진 뒤에는 카메라 집합이 확정이라, 다 차는 즉시 나가면 된다
+        # (안 그러면 매 라운드 CAM_RETRY_S 를 통째로 낭비한다).
+        settle_ticks = 0 if self._cams_warm else 25   # 2.5s > _discover_cctv 주기 2.0s
+        images, stable = {}, 0
+        for _ in range(max(1, int(budget / 0.1))):
+            # camera_ids 가 비어 있을 수 있다: participant_app 은 list_cctv() 를 넘기는데
+            # 세션 시작 직후엔 아직 아무 카메라도 발견 안 됐을 수 있다. 매 틱 다시 묻는다.
+            ids = list(camera_ids) or self._client.list_cctv()
+            before = len(images)
+            for cam_id in ids:
+                if cam_id in images:
+                    continue
+                img = self._to_bgr(self._client.get_cctv_image(cam_id))
+                if img is not None:
+                    images[cam_id] = img
+            filled = bool(ids) and len(images) == len(ids)
+            stable = stable + 1 if (filled and len(images) == before) else 0
+            if filled and stable >= settle_ticks:
+                break
+            self._client.sleep(0.1)
+
+        if images:
+            if not self._cams_warm:
+                log.info("[vla] CCTV warm-up done: %d camera(s) ready", len(images))
+            self._cams_warm = True
+        else:
+            log.error("[vla] round %d: no CCTV frame after %.0fs -- submitting empty "
+                      "grounding. (discovered=%s)", self._round, budget,
+                      self._client.list_cctv())
+        return images
 
     def _ground(self, command: str, camera_ids: list, stage: str = "s1") -> GroundingResult:
         parsed = parse_command(command)
@@ -193,11 +259,7 @@ class RealVLAGrounding:
         # Grab every camera frame up front (not lazily inside the match loop) so a
         # MARC_RECORD_DIR dump always contains the full round regardless of which
         # camera matched first.
-        images = {}
-        for cam_id in camera_ids:
-            img = self._to_bgr(self._client.get_cctv_image(cam_id))
-            if img is not None:
-                images[cam_id] = img
+        images = self._observe_images(camera_ids)
 
         if self._record_only:
             # 수집 전용: 추론 없이 기록만 남기고 빈 제출로 라운드를 넘긴다.
@@ -212,10 +274,10 @@ class RealVLAGrounding:
             log.info("[vla] record-only round done (%d cameras)", len(images))
             return result
 
-        for cam_id in camera_ids:
-            img = images.get(cam_id)
-            if img is None:
-                continue
+        # camera_ids 가 아니라 images 를 돈다: 세션 시작 직후엔 participant_app 이 넘긴
+        # camera_ids 가 빈 리스트일 수 있고(_observe_images 가 그 사이 발견된 카메라까지
+        # 채워 온다), images 의 키가 곧 '프레임이 있는 카메라'라 조건도 하나 준다.
+        for cam_id, img in images.items():
             det = self._det.predict(img, imgsz=DET_IMGSZ, conf=DET_CONF, verbose=False)[0]
 
             if parsed.is_person:
@@ -259,10 +321,7 @@ class RealVLAGrounding:
             # 자유 검색어만 있는 완전 신규 물체) 그 phrase 하나로 검색(관대).
             target_phrases = (self._dino_phrases(target_type, OBJECT_SYNONYMS) if target_type
                               else [vlm_search_phrase])
-            for cam_id in camera_ids:
-                img = images.get(cam_id)
-                if img is None:
-                    continue
+            for cam_id, img in images.items():   # YOLO 루프와 같은 이유로 images 기준
                 target_box = self._dino.best_box(img, target_phrases)
                 if target_box is None:
                     continue

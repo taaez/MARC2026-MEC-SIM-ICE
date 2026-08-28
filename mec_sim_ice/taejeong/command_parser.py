@@ -91,6 +91,14 @@ AREA_HINTS = [
     ("road",    r"\broad\b|\bstreet\b|sidewalk|walkway"),
 ]
 
+# 명령이 대상의 위치를 "빈 자리 / 열린 바닥" 으로 **명시**하는 표현.
+#   "in the empty parking space" / "dropped on the parking lot floor"
+# 이건 랜드마크를 지목하지 않은 채로 위치의 성질을 말하는 것이다: 그 물체는
+# 무언가 **옆에 붙어 있지 않다**. 사전적 의미이며 특정 씬을 참조하지 않는다.
+# (랜드마크가 지목된 명령에서는 무시된다 -- 거기선 관계가 이미 확정돼 있다.)
+OPEN_SPACE_PAT = (r"\bempty\b|\bvacant\b|\bunoccupied\b"
+                  r"|\bon the (\w+ )*(floor|ground)\b")
+
 
 @dataclass
 class ParsedCommand:
@@ -102,6 +110,7 @@ class ParsedCommand:
     pose_hint: str | None            # 사람 고르기용 코스 버킷 (situation 판정 아님)
     stage2: bool
     area_hint: str | None            # 카메라 우선순위 힌트
+    open_space: bool = False         # "빈 자리/바닥" 명시 (OPEN_SPACE_PAT 주석 참조)
     cues: dict = field(default_factory=dict)   # 디버깅: 무엇이 어디서 매칭됐나
 
 
@@ -248,10 +257,14 @@ def parse_command(command: str) -> ParsedCommand:
             area_hint = area
             break
 
+    open_space = bool(re.search(OPEN_SPACE_PAT, text))
+    cues["open_space"] = open_space
+
     return ParsedCommand(
         target_type=target, is_person=is_person, landmark_type=landmark,
         relation_hint=relation, relation_confident=confident,
-        pose_hint=pose_hint, stage2=stage2, area_hint=area_hint, cues=cues,
+        pose_hint=pose_hint, stage2=stage2, area_hint=area_hint,
+        open_space=open_space, cues=cues,
     )
 
 
