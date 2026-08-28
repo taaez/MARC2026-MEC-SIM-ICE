@@ -36,6 +36,19 @@ _TILE_COLS, _TILE_ROWS, _TILE_OVERLAP = 4, 2, 0.2
 # whole-frame confidence 가 이미 이 값 이상이면 타일링을 건너뛴다(비용 절감).
 _TILE_UNCERTAIN_THR = 0.3
 
+# landmark 구제 전용 최소 confidence -- DinoFallbackDetector 기본 box_thr(0.3)보다
+# 높게 잡는다. 실측(2026-08-29, s1_007/s1_014, landmark="picnic_table"):
+# LANDMARK_SYNONYMS 의 범용 동의어 "table" 이 테이블과 무관한 물체에 낮은 확신으로
+# 걸렸다 -- taxi(0.479), vending machine(0.501/0.51), bench(0.592/0.60), 벤치류
+# (0.49/0.54) 가 전부 "table" 매치로 잡혔는데, 진짜 피크닉 테이블은 rig_1_a
+# (0.932)/rig_3_b(0.737)로 뚜렷하게 높았다. 오탐 최고치(0.60)와 진탐 최저치
+# (0.737) 사이에 여유를 두려고 0.6 이 아니라 0.65 로 잡는다(0.6은 실측 오탐과
+# 바로 붙어 있어 위험했다). target 재탐색(위 _TILE_UNCERTAIN_THR)은 반대로 낮은
+# 확신(실측 0.11까지)도 진짜인 경우가 있어 그대로 두고, landmark 쪽에만 별도로
+# 더 높은 문턱을 둔다 -- 랜드마크는 설계상 "숨어있지 않은, 흔히 보이는 기준
+# 물체"라 확신이 낮으면 진짜 없을 확률이 높다.
+_LANDMARK_MIN_CONF = 0.65
+
 
 class _ShiftedBox:
     """타일 로컬 좌표 박스를 전역 좌표로 옮긴 duck-typed 박스 -- dino_fallback.
@@ -207,10 +220,16 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
             if any(_landmark_ok(d.label, lm) for d in detections.get(cam_id, [])):
                 continue                  # 이 카메라는 YOLO 가 이미 찾음 -- 스킵
             box = dino.best_box(img, phrases)
+            if box is not None and float(box.conf[0]) < _LANDMARK_MIN_CONF:
+                log.info("[fallback] DINO landmark %r on %s 기각 (conf=%.2f < %.2f, "
+                         "동의어 오탐 의심)", lm, cam_id, float(box.conf[0]),
+                         _LANDMARK_MIN_CONF)
+                box = None
             if box is not None:
                 detections.setdefault(cam_id, []).append(Detection(
                     label=lm, bbox=tuple(box.xyxy[0]), score=float(box.conf[0])))
-                log.info("[fallback] DINO rescued landmark %r on %s", lm, cam_id)
+                log.info("[fallback] DINO rescued landmark %r on %s (conf=%.2f)",
+                         lm, cam_id, float(box.conf[0]))
 
     target_scope = images
     if lm:
