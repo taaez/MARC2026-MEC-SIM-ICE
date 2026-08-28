@@ -78,12 +78,25 @@ def report(rounds: list, final: dict | None = None, json_path: str | None = None
     # 평균은 항상 이 리포트가 실제로 채점한 라운드에서 다시 계산한다. final 에 담긴
     # 플랫폼 값은 집계 범위가 다를 수 있어(예: Stage2 문항까지 포함한 39라운드 평균)
     # 그대로 쓰면 섹션 평균과 어긋난다 -- 아래 "라이브 실측" 로 따로 보여준다.
+    def _avg(rs):
+        return sum(d["scores"]["total"] for d in rs) / len(rs)
+
+    def _borrow_note(rs):
+        """대여 프레임으로 채점한 문항이 섞였으면 실측만의 평균을 함께 보여준다."""
+        measured = [d for d in rs if not d.get("borrowed")]
+        if len(measured) == len(rs):
+            return ""
+        if not measured:
+            return f"  [전부 대여 프레임 {len(rs)}문항]"
+        return (f"   [실측 레코드 {len(measured)}문항 {_avg(measured):.2f} "
+                f"+ 프레임 대여 {len(rs) - len(measured)}문항]")
+
     if s1:
-        print(f"Stage1 평균          : {sum(d['scores']['total'] for d in s1) / len(s1):6.2f}"
-              f"   ({len(s1)}문항)")
+        print(f"Stage1 평균          : {_avg(s1):6.2f}"
+              f"   ({len(s1)}문항){_borrow_note(s1)}")
     if s2:
-        print(f"Stage2 grounding 평균 : {sum(d['scores']['total'] for d in s2) / len(s2):6.2f}"
-              f"   ({len(s2)}문항)")
+        print(f"Stage2 grounding 평균 : {_avg(s2):6.2f}"
+              f"   ({len(s2)}문항){_borrow_note(s2)}")
         print("  └ Stage2 의 주행/집기/배달 실행 점수는 물리 시뮬이 필요해 오프라인에서")
         print("    채점할 수 없다. 위 숫자는 Stage2 의 **인식(grounding) 부분만**이다.")
     # offline_score.py 가 자기가 계산한 값을 넣어 보낸 경우는 "실측"이 아니다.
@@ -117,6 +130,7 @@ def report(rounds: list, final: dict | None = None, json_path: str | None = None
             "rounds": [{"problem_id": d["scores"]["problem_id"],
                         "stage": d.get("stage", 1),
                         "record": d.get("record"),
+                        "borrowed": bool(d.get("borrowed")),
                         "total": d["scores"]["total"],
                         "cause": classify(d),
                         "fields": {f: d["scores"].get(f) for f in FIELDS}}
@@ -135,9 +149,13 @@ def _summary(rounds: list) -> dict | None:
     buckets = defaultdict(list)
     for d in rounds:
         buckets[classify(d)].append(d)
+    measured = [d for d in rounds if not d.get("borrowed")]
     return {
         "rounds": len(rounds),
+        "borrowed_rounds": len(rounds) - len(measured),
         "average": sum(d["scores"]["total"] for d in rounds) / len(rounds),
+        "average_measured_only": (sum(d["scores"]["total"] for d in measured)
+                                  / len(measured)) if measured else None,
         "field_averages": {f: (sum(d["scores"].get(f, 0) for d in rounds) / len(rounds))
                            for f in FIELDS},
         "causes": {c: [d["scores"]["problem_id"] for d in ds] for c, ds in buckets.items()},
@@ -229,10 +247,15 @@ def _section(title: str | None, rounds: list) -> None:
 
     for d in sorted(rounds, key=lambda x: x["scores"]["problem_id"]):
         s = d["scores"]
-        print(f"  {s['problem_id']:26s} {s['total']:6.2f}  "
+        pid = s["problem_id"] + (" †" if d.get("borrowed") else "")
+        print(f"  {pid:26s} {s['total']:6.2f}  "
               f"{cell(s, 'camera', 0):>7s} {cell(s, 'object_type', 0):>7s} "
               f"{cell(s, 'landmark', 0):>9s} {cell(s, 'relation', 0):>9s} "
               f"{cell(s, 'anchor', 1):>10s} {cell(s, 'target', 1):>10s}")
+    borrowed = [d for d in rounds if d.get("borrowed")]
+    if borrowed:
+        print(f"  † {len(borrowed)}문항 -- records/ 에 그 라운드가 없어 다른 라운드의 "
+              f"프레임을 빌려 채점 (정적 물체 문항만)")
     print()
 
 
