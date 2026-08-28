@@ -121,6 +121,16 @@ NOVEL_CASES = [
      ("cola_can", "police_car", "beside", True)),
     ("Find the sunscreen in front of the bike.",
      ("sunblock", "bicycle", "front", True)),
+    # -- "behind" 중의성: 구동사(leave ... behind) vs 공간관계 --
+    # 공간 behind (leave-동사 없음) → confident 유지
+    ("The tumbler fell behind the bench.",
+     ("tumbler", "bench", "behind", True)),
+    # 구동사+명사구 중의("left ... behind the X") → behind 힌트는 주되 confident 낮춤
+    ("I left my pencil case behind the vending machine.",
+     ("pencilcase", "vending_machine", "behind", False)),
+    # 구동사 문말/비명사구("behind when ...") → behind 로 뽑지 않음
+    ("I left my umbrella behind when I got up from the bench.",
+     ("umbrella", "bench", None, False)),
 ]
 
 

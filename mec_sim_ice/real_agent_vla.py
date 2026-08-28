@@ -167,6 +167,19 @@ class RealVLAGrounding:
         # target_type 파싱 실패(닫힌 어휘 밖 단어) -> VLM에게 한 번 더 묻는다.
         # 성공하면 알던 클래스로 복귀(정상 YOLO 경로 그대로 탄다), 실패하면
         # DINO에 넘길 검색어(vlm_search_phrase)만 얻고 target_type은 빈 채로 둔다.
+        # "behind" 중의(구동사 leave-behind vs 공간관계) -- command_parser 가
+        # confident 를 낮춘 문장에서만 VLM 이 중재한다. 구동사로 판정되면 물건은
+        # 그 자리 근처에 남아있는 것이므로 near 로 바꾼다. 공간이면 behind 유지
+        # (확신 승격은 안 한다 -- VLM 도 틀릴 수 있어 기하 재검증 여지를 남김).
+        if (self._vlm is not None and not parsed.is_person
+                and parsed.relation_hint == "behind" and not parsed.relation_confident):
+            spatial = self._vlm.behind_is_spatial(command)
+            if spatial is False:
+                parsed.relation_hint = "near"
+                log.info("[vla] VLM arbitration: 'behind' is phrasal -> relation near")
+            elif spatial is True:
+                log.info("[vla] VLM arbitration: 'behind' is spatial -> keep hint")
+
         vlm_search_phrase = None
         if not target_type and not parsed.is_person and self._vlm is not None:
             matched, phrase = self._vlm.resolve(command, OBJECT_SYNONYMS.keys())
