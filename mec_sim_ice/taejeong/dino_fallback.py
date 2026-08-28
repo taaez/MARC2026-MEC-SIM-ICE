@@ -62,17 +62,35 @@ class DinoFallbackDetector:
     def best_box(self, img_bgr: np.ndarray, phrases: Sequence[str]) -> Optional[_DinoBox]:
         """phrases 중 아무거나 매치되는 것 중 가장 점수 높은 박스 하나. 없으면 None.
 
+        phrase 를 하나씩 따로 호출한다(합쳐서 한 프롬프트로 보내지 않음).
+        실측(2026-08-28, Mac MPS, 실제 CCTV 기록): "pencil case" 단독 호출은
+        score=0.11로 잡히는데, 동의어 4개를 ". "로 합친 한 프롬프트로 보내면
+        동일 임계값에서도 전혀 안 잡혔다 -- 후보 문구가 여러 개 섞이면 서로
+        간섭해 신호가 죽는 것으로 보인다. 호출 수는 늘지만(phrase 개수만큼),
+        이 함수 자체가 YOLO 실패 후에만 도는 최후 폴백이라 그 비용은 감내한다.
+
         img_bgr: real_agent_vla.py 관례(ultralytics/cv2, BGR). DINO/PIL 은 RGB
         를 기대하므로 여기서 뒤집는다 (호출부는 신경 쓸 필요 없음).
         """
-        import torch
-        from PIL import Image
-
         if not phrases:
             return None
         img_rgb = img_bgr[:, :, ::-1]
-        text = ". ".join(phrases) + "."
+        best_box, best_score = None, -1.0
+        for phrase in phrases:
+            box, score = self._detect_one(img_rgb, phrase)
+            if box is not None and score > best_score:
+                best_box, best_score = box, score
+        if best_box is None:
+            return None
+        return _DinoBox(best_box, best_score)
+
+    def _detect_one(self, img_rgb: np.ndarray, phrase: str):
+        """phrase 하나에 대한 (bbox, score) 중 최고점. 없으면 (None, -1.0)."""
+        import torch
+        from PIL import Image
+
         pil = Image.fromarray(img_rgb)
+        text = phrase.strip().rstrip(".") + "."
         inputs = self.processor(images=pil, text=text, return_tensors="pt").to(self.device)
         with torch.inference_mode():
             out = self.model(**inputs)
@@ -80,14 +98,12 @@ class DinoFallbackDetector:
             out, inputs.input_ids, threshold=self.box_thr, text_threshold=self.text_thr,
             target_sizes=[pil.size[::-1]])[0]
 
-        best_box, best_score = None, -1.0
-        for box, score in zip(res["boxes"], res["scores"]):
-            s = float(score)
-            if s > best_score:
-                best_box, best_score = tuple(float(v) for v in box.tolist()), s
-        if best_box is None:
-            return None
-        return _DinoBox(best_box, best_score)
+        box, score = None, -1.0
+        for b, s in zip(res["boxes"], res["scores"]):
+            s = float(s)
+            if s > score:
+                box, score = tuple(float(v) for v in b.tolist()), s
+        return box, score
 
 
 def is_disabled() -> bool:
