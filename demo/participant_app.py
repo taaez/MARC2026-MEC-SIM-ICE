@@ -77,6 +77,9 @@ ARM_BASE_FWD = 0.18
 # transit), tuned slightly forward for a secure grip.
 GRASP_FWD_BACKOFF = -0.01
 
+# Retry budget for a failed pick (empty grasp, or grasped but missed the rear basket on place).
+MAX_PICK_ATTEMPTS = 3
+
 # -- Stage 2 delivery goal --
 # The Stage 2 task drives to the target object and then delivers it to the owner zone.
 # The pickup goal (target position) comes from the reveal (msg 411) at runtime, with the
@@ -190,8 +193,9 @@ class DemoParticipant:
         """Called once in a separate thread on entering STAGE2_RUN -- pick up the object then deliver it.
 
         Flow: stow the arm to lower the CoG -> approach the object standoff -> straight final
-        approach into arm reach -> pick (read grip-hold) -> stow again if empty-handed ->
-        deliver to the owner zone -> task_complete. All legs share one sim-time budget.
+        approach into arm reach -> pick (retry up to MAX_PICK_ATTEMPTS on an empty grasp or a
+        missed basket) -> stow again if still empty-handed -> deliver to the owner zone ->
+        task_complete. All legs share one sim-time budget.
         """
         c = self.client
         # SIM-time deadline (via /clock) -- shared across all legs, robust to real-time factor < 1.
@@ -224,18 +228,39 @@ class DemoParticipant:
             c.send_cmd_vel(0.0, 0.0)
             c.sleep(0.1)
         log.info("[Stage2] standoff stop -- ready to pick")
-        try:
-            grasp_xy = self._object_arm_xy(collect_xy)   # actual object position in the arm_base frame
-            log.info("[Stage2] object pick sequence (object-position grasp=%s)",
-                     tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None)
-            held = run_pick_sequence(c, log, grasp_xy)
-            c.send_cmd_vel(0.0, 0.0)
-            # Grip-hold feedback (participant style). None (no feedback) -> conservatively count
-            # the completed sequence as success.
-            picked = True if held is None else bool(held)
-            log.info("[Stage2] pick %s (grip held=%s)", "ok" if picked else "failed", held)
-        except Exception as e:
-            log.warning("[Stage2] pick failed: %s", e)
+
+        # Retry: is_grasping() (via run_pick_sequence's returned held) catches an empty-handed
+        # close; is_basket_occupied() additionally catches a held object that missed the rear
+        # basket on place (grip alone would miss this, since the arm sequence has already
+        # released the gripper by the time it returns).
+        basket_ok = False
+        for attempt in range(1, MAX_PICK_ATTEMPTS + 1):
+            try:
+                grasp_xy = self._object_arm_xy(collect_xy)   # actual object position in the arm_base frame
+                log.info("[Stage2] object pick sequence attempt %d/%d (object-position grasp=%s)",
+                         attempt, MAX_PICK_ATTEMPTS,
+                         tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None)
+                held = run_pick_sequence(c, log, grasp_xy)
+                c.send_cmd_vel(0.0, 0.0)
+                # Grip-hold feedback (participant style). None (no feedback) -> conservatively count
+                # the completed sequence as success.
+                picked = True if held is None else bool(held)
+            except Exception as e:
+                log.warning("[Stage2] pick attempt %d failed: %s", attempt, e)
+                picked, held = False, False
+
+            basket_ok = self._wait_basket_state(timeout=1.0)
+            log.info("[Stage2] pick attempt %d %s (grip held=%s, basket=%s)",
+                     attempt, "ok" if picked and basket_ok else "failed", held, basket_ok)
+            if picked and basket_ok:
+                break
+            if attempt < MAX_PICK_ATTEMPTS and c.is_running and c.now_s() < deadline:
+                log.info("[Stage2] retrying pick (attempt %d/%d)", attempt + 1, MAX_PICK_ATTEMPTS)
+                self._approach_straight(collect_xy, deadline, target_fwd=0.40)
+                for _ in range(5):
+                    c.send_cmd_vel(0.0, 0.0)
+                    c.sleep(0.1)
+        picked = picked and basket_ok
 
         # If the arm is left raised (front_high) without an object, driving the delivery leg with
         # that top-heavy CoG can tip the robot over on turns. Empty-handed -> fold to HOME.
@@ -245,6 +270,11 @@ class DemoParticipant:
         # -- leg 2: deliver to the owner zone --
         log.info("[Stage2] leg2 -> deliver to owner zone %s", pickup_xy)
         reached = self._navigate_to(pickup_xy, deadline)
+
+        # No recovery attempted here (no fresh perception of where it fell) -- just surface it,
+        # since a silent loss would otherwise look identical to a normal successful delivery.
+        if picked and not self._wait_basket_state(timeout=1.0):
+            log.warning("[Stage2] object lost from basket in transit (picked ok, basket empty on arrival)")
 
         c.stop()
         log.info("[Stage2] driving finished (delivery_reached=%s) -> task_complete", reached)
@@ -338,6 +368,21 @@ class DemoParticipant:
         gxy = self._object_arm_xy(obj_xy)
         log.info("[Stage2] straight approach done -- object arm coords %s",
                  tuple(round(v, 3) for v in gxy) if gxy else None)
+
+    def _wait_basket_state(self, timeout: float = 1.0):
+        """Poll briefly for a settled is_basket_occupied() reading.
+
+        Right after the first call in a run, the subscription is fresh and a read can return
+        None for a tick or two before the first message arrives -- poll instead of trusting
+        a single instant read.
+        """
+        c = self.client
+        deadline = c.now_s() + timeout
+        val = c.is_basket_occupied()
+        while val is None and c.now_s() < deadline:
+            c.sleep(0.05)
+            val = c.is_basket_occupied()
+        return bool(val)
 
     def _wait_for_collect_goal(self, timeout: float = 5.0):
         """Poll briefly until the reveal (msg 411) approximate position arrives, then return the pickup goal (x, y).
