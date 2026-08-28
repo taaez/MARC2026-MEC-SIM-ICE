@@ -70,6 +70,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import logging
 import math
 import os
 import sys
@@ -414,6 +415,13 @@ def main() -> int:
 
     args = ap.parse_args()
 
+    # 기본 root logger 레벨은 WARNING이라 fallback.py/grounding.py 의 log.info(...)
+    # (DINO 구제, pair 후보 경쟁 등 진행상황 로그)가 조용히 버려진다 -- 39문항처럼
+    # 오래 걸리는 실행에서 화면에 아무 것도 안 찍혀 멈춘 것처럼 보이는 원인이었다
+    # (2026-08-29, 실제 진행 중이었는데 GPU 사용률로만 확인 가능했던 사례).
+    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s",
+                        datefmt="%H:%M:%S", stream=sys.stderr)
+
     if not os.path.exists(args.weights):
         print(f"가중치를 찾을 수 없습니다: {args.weights}\n"
               f"  학습 담당 팀원에게 받은 best.pt 를 그 경로에 두거나 "
@@ -462,7 +470,11 @@ def main() -> int:
     round_dirs = sorted(glob.glob(os.path.join(args.records, "s[12]_*")))
     scored_rounds = []
     unmatched = []
-    for d in round_dirs:
+    for i, d in enumerate(round_dirs, 1):
+        # 라운드당 DINO/VLM 폴백까지 겹치면 수 초~수십 초가 걸릴 수 있어, 진행상황이
+        # 하나도 안 찍히면 (특히 --fallback 켰을 때) 멈춘 것처럼 보인다 -- 최소한
+        # "몇 번째 도는 중"인지는 알 수 있게 매 라운드 시작마다 찍는다.
+        print(f"[{i}/{len(round_dirs)}] {os.path.basename(d)}", flush=True)
         if not os.path.exists(os.path.join(d, "meta.json")):
             continue
         meta, cams, images = load_round(d)
