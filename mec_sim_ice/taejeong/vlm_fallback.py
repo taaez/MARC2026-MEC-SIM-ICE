@@ -17,14 +17,18 @@ relation/좌표/situation 추론에는 절대 쓰지 않는다 -- 그건 이미 
   (b) 정말 새로운 물체다 -> DINO에 넘길 자연어 검색어(1~4단어)를 반환
 
 스펙(GPU/VRAM/인터넷) 근거는 MARC2026_STAGE1_BRIEF.md §1, §7 참고:
-  - 로컬 8GB 개발: MARC_VLM_4BIT=1 + 3B 모델 (Isaac Sim과 동시 실행 시 더 타이트해짐 --
-    필요하면 MARC_DISABLE_VLM=1로 끄고 eval_offline.py/records 재실행으로 따로 검증)
-  - 채점 서버 48GB: 7B bf16 그대로
+  - 제출 기본값 = 3B fp16(2026-08-28 변경, VRAM 예산 12GB 이내 -- 7B fp16은
+    DINO(~1GB)와 합쳐 16GB를 넘겨 초과했다. crop 검증(이미지) 은 폐기돼서
+    (fallback.py 참고) 지금 VLM 이 하는 일은 텍스트 분류 두 건뿐이라 3B로
+    충분함을 이번 세션 실측으로 확인). docker/Dockerfile, docker-compose.yml
+    이 실제 빌드값.
+  - 품질을 올리고 싶으면 7B + MARC_VLM_4BIT=1(~5~6GB, CUDA 전용 -- 채점
+    서버/랩 데스크탑만 해당, 로컬 Mac(MPS)에선 검증 불가)
   - 가중치는 빌드 시점에 굽는다(HF_HUB_OFFLINE=1 런타임 고정) -- 런타임 다운로드 금지
 
 환경변수:
   MARC_DISABLE_VLM   "1"이면 폴백 자체를 비활성화
-  MARC_VLM_MODEL     기본 Qwen/Qwen2.5-VL-7B-Instruct (로컬 8GB: Qwen/Qwen2.5-VL-3B-Instruct)
+  MARC_VLM_MODEL     기본 Qwen/Qwen2.5-VL-3B-Instruct (7B로 올리려면 명시 지정 + 4bit 권장)
   MARC_VLM_4BIT      "1"이면 bitsandbytes 4bit 로드
 """
 
@@ -112,7 +116,7 @@ class QwenVLBackend:
             from transformers import AutoModelForImageTextToText as _ModelCls
         from transformers import AutoProcessor
 
-        self.model_name = model_name or os.getenv("MARC_VLM_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct")
+        self.model_name = model_name or os.getenv("MARC_VLM_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")
         use_4bit = (os.getenv("MARC_VLM_4BIT", "0") == "1") if use_4bit is None else use_4bit
         # NVIDIA(CUDA) -> Apple Silicon(MPS) -> CPU.
         device = ("cuda" if torch.cuda.is_available()
