@@ -56,7 +56,7 @@ Stage1 / Stage2 는 따로 집계한다:
   --json report.json    리포트를 JSON 으로도 저장 (score_report.py 와 동일 스키마)
   --fallback / --no-fallback   DINO/VLM 폴백 강제 on/off. 기본은 **자동**이고, 자동은
                         '라이브와 같게 맞추되 못 돌릴 환경이면 알리고 빠진다' 규칙이다
-                        (CUDA + transformers 있으면 켬, 없으면 끄고 리포트에 명시).
+                        (transformers + 가속기(CUDA/MPS) 있으면 켬, 없으면 끄고 리포트에 명시).
                         라이브 에이전트는 폴백을 항상 켜므로, 폴백이 꺼진 점수는
                         데스크탑 실측보다 낮게 나온다 -- 그대로 비교하면 안 된다.
 
@@ -330,8 +330,10 @@ def resolve_fallback_mode(flag) -> tuple:
       * 라이브와 같은 env 스위치(MARC_DISABLE_DINO_FALLBACK / MARC_DISABLE_VLM)가 켜져
         있으면 끈다 -- 두 경로가 같은 스위치를 보게 해서 동작이 갈라지지 않게 한다.
       * transformers 가 없으면 끈다 (노트북 기본 환경).
-      * CUDA 가 없으면 끈다. Qwen2.5-VL / Grounding DINO 는 GPU 전제라 CPU 로 올리면
-        7B 모델을 몇십 분씩 돌리거나 메모리가 터진다. MPS 도 이 두 모델은 검증 안 됨.
+      * 가속기(CUDA 또는 Apple Silicon MPS)가 없으면 끈다. Qwen2.5-VL / Grounding DINO
+        를 CPU 로 올리면 몇십 분씩 걸리거나 메모리가 터진다. MPS 는 dino_fallback.py /
+        vlm_fallback.py 가 직접 지원하므로(362fa1c) 로컬 Mac 에서도 켠다 -- 다만 4bit
+        는 bitsandbytes 가 CUDA 전용이라 무시되고 bf16 으로 올라간다.
       * 그 외에는 켠다 (Isaac Sim 데스크탑 = CUDA 있음 = 라이브와 동일 조건).
     """
     if flag is False:
@@ -346,15 +348,24 @@ def resolve_fallback_mode(flag) -> tuple:
         if forced:
             return True, "--fallback 강제 (transformers 없음 -- 로드에 실패할 것)"
         return False, "transformers 미설치 (pip install transformers 필요)"
+    # 폴백 모듈이 실제로 고르는 디바이스와 같은 순서로 판정한다
+    # (dino_fallback.py / vlm_fallback.py: cuda -> mps -> cpu).
+    device = "cpu"
     try:
         import torch
-        cuda = torch.cuda.is_available()
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
     except Exception:  # noqa: BLE001
-        cuda = False
+        pass
     if forced:
-        return True, "--fallback 강제" + ("" if cuda else " (CUDA 없음 -- 매우 느릴 수 있음)")
-    if not cuda:
-        return False, "CUDA 없음 (GPU 전제 모델이라 자동 우회 -- 강제하려면 --fallback)"
+        return True, ("--fallback 강제 (device=cpu -- 매우 느릴 수 있음)" if device == "cpu"
+                      else f"--fallback 강제 (device={device})")
+    if device == "cpu":
+        return False, "가속기 없음 (CUDA/MPS 둘 다 -- 자동 우회, 강제하려면 --fallback)"
+    if device == "mps":
+        return True, "Apple Silicon MPS 사용 가능 (4bit 는 무시되고 bf16 으로 로드)"
     return True, "CUDA 사용 가능 -- 라이브 에이전트와 동일 조건"
 
 
