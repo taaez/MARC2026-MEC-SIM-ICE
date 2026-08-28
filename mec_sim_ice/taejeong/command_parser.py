@@ -197,12 +197,21 @@ def parse_command(command: str) -> ParsedCommand:
             landmark = best[1]
 
     # ── relation ──
+    # "behind"는 구동사 "leave ... behind"(두고 오다)의 소사로도 쓰인다(hf02).
+    # 뒤에 명사구가 따라올 때만 공간관계 후보로 보고(lookahead), 그때도 같은
+    # 문장에 leave-계열 동사가 선행하면("I left my bag behind the bench")
+    # 구동사/공간이 진짜 중의적이므로 confident 를 낮춰 기하가 확정하게 한다
+    # -- "no confident lie" 불변식 유지.
+    spatial_behind = re.search(r"\bbehind\b(?=\s+(the|a|an|it|him|her|them|that)\b)", text)
+    leave_behind = re.search(r"\b(left|leave|leaving)\b[^.;]{0,40}?\bbehind\b", text)
     relation, confident = None, False
     if re.search(r"\bon top of\b", text) or \
        (landmark and re.search(r"\bon (the |a )?" + _lm_pat(landmark), text)):
         relation, confident = "on", True
-    elif re.search(r"\bbehind\b(?=\s+(the|a|an|it|him|her|them|that)\b)", text):
-        relation, confident = "behind", True    # "left it behind"(문말)는 공간관계 아님
+    elif spatial_behind and not leave_behind:
+        relation, confident = "behind", True    # "left it behind"(문말)는 lookahead 가 거른다
+    elif spatial_behind and leave_behind:
+        relation, confident = "behind", False   # 중의 → 기하(또는 VLM 중재)가 확정
     elif re.search(r"\bin front of\b", text):
         relation, confident = "front", True
     elif re.search(r"\b(to the |on the )?left of\b", text):

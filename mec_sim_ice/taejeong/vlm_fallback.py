@@ -55,6 +55,19 @@ Respond with JSON only, no prose, exactly these two keys:
 
 Request: "{command}" """
 
+# "behind" 중의성 중재 (command_parser 가 spatial+구동사 동시 감지로 confident 를
+# 낮춘 문장에서만 호출된다 -- 규칙이 확신하는 문장엔 VLM 을 쓰지 않는다).
+_BEHIND_PROMPT = """In the sentence below, decide how the word "behind" is used:
+- SPATIAL: it describes a location at the back side of an object
+  (e.g. "the box is behind the bench").
+- PHRASAL: it is part of the verb "to leave something behind", meaning the
+  item was forgotten / left at a place (e.g. "I left my bag behind").
+
+Respond with JSON only, exactly one key:
+{{"spatial": true or false}}
+
+Sentence: "{command}" """
+
 
 class QwenVLBackend:
     """stage1/pipeline.py의 QwenVLBackend와 동일 -- 텍스트 전용 폴백이라 이미지 입력은 안 쓴다."""
@@ -113,6 +126,22 @@ class VlmTargetResolver:
         except Exception as e:  # noqa: BLE001
             log.warning("[vlm-fallback] parse failed: %s | raw=%r", e, txt[:200])
             return None, None
+
+    def behind_is_spatial(self, command: str):
+        """중의적 "behind"(구동사 leave-behind vs 공간관계)를 VLM 으로 중재.
+
+        -> True(공간) / False(구동사) / None(판정 실패 -- 호출부는 기존 힌트 유지).
+        command_parser 가 confident=False 로 넘긴 문장에서만 부를 것.
+        """
+        prompt = _BEHIND_PROMPT.format(command=command.replace('"', "'"))
+        txt = self.backend.generate(prompt, max_new_tokens=24)
+        try:
+            js = json.loads(re.search(r"\{.*\}", txt, re.S).group(0))
+            v = js.get("spatial")
+            return v if isinstance(v, bool) else None
+        except Exception as e:  # noqa: BLE001
+            log.warning("[vlm-fallback] behind arbitration failed: %s | raw=%r", e, txt[:120])
+            return None
 
 
 def is_disabled() -> bool:
