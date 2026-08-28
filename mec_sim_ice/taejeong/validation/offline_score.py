@@ -54,6 +54,11 @@ Stage1 / Stage2 는 따로 집계한다:
   --scenario <yaml>     기본 taejeong/content-image-2026.R03/marc2026_chungmu.yaml
   --conf 0.25 --imgsz 1280
   --json report.json    리포트를 JSON 으로도 저장 (score_report.py 와 동일 스키마)
+  --fallback / --no-fallback   DINO/VLM 폴백 강제 on/off. 기본은 **자동**이고, 자동은
+                        '라이브와 같게 맞추되 못 돌릴 환경이면 알리고 빠진다' 규칙이다
+                        (CUDA + transformers 있으면 켬, 없으면 끄고 리포트에 명시).
+                        라이브 에이전트는 폴백을 항상 켜므로, 폴백이 꺼진 점수는
+                        데스크탑 실측보다 낮게 나온다 -- 그대로 비교하면 안 된다.
 
 주의: macOS 는 "--" 를 em-dash("—") 로 자동 치환하는 경우가 있다. 옵션이
 "unrecognized arguments" 로 튕기면 대시가 한 글자로 바뀐 것이니 하이픈 두 개로
@@ -77,10 +82,12 @@ sys.path.insert(0, _TAEJEONG_DIR)   # command_parser / grounding / yolo_adapter 
 
 from command_parser import parse_command          # noqa: E402
 from dino_fallback import DinoFallbackDetector      # noqa: E402
+from dino_fallback import is_disabled as dino_disabled  # noqa: E402
 from fallback import dino_augment, vlm_assist       # noqa: E402
 from grounding import resolve                      # noqa: E402
 from run_offline import load_round                 # noqa: E402
 from vlm_fallback import VlmTargetResolver          # noqa: E402
+from vlm_fallback import is_disabled as vlm_disabled    # noqa: E402
 from yolo_adapter import infer_cameras              # noqa: E402
 
 from chungmu_gt import DEFAULT_SCENARIO, load_gt    # noqa: E402  (same dir)
@@ -176,7 +183,13 @@ def score_round(problem_id: str, weights: dict, expected: dict, submission: dict
 
     fields = {"camera": camera, "object_type": object_type, "landmark": landmark,
               "relation": relation, "anchor": anchor, "target": target}
-    total = 100.0 * sum(weights.get(k, 0.0) * v for k, v in fields.items())
+    # 해당 없는 필드는 플랫폼이 가중치를 0 으로 준다 (person 문항의 landmark/relation).
+    # 그러면 가중치 합이 1.0 이 아니라 0.8 이 되는데, 플랫폼은 거기에 맞춰 정규화해
+    # 100점 만점을 유지한다 -- 안 나누면 person 14문항이 통째로 25% 저평가된다.
+    # (runs/chungmu_full39_2026-08-25.jsonl 39건 전수 재계산: 안 나누면 9건 불일치,
+    #  나누면 0건 불일치.)
+    wsum = sum(weights.get(k, 0.0) for k in fields)
+    total = 100.0 * sum(weights.get(k, 0.0) * v for k, v in fields.items()) / (wsum or 1.0)
 
     return {
         "problem_id": problem_id, **fields, "total": total, "weights": weights,
@@ -308,6 +321,43 @@ def print_stage2_execution(exec_result, summary, grounding_avg=None):
     print("  manipulation/ 에 팀 파지 로직이 들어오면 같은 명령을 다시 실행해서 비교할 것.")
 
 
+def resolve_fallback_mode(flag) -> tuple:
+    """DINO/VLM 폴백을 쓸지 결정한다. 반환 (사용여부, 사람이 읽을 이유).
+
+    flag 는 --fallback 이면 True, --no-fallback 이면 False, 아무것도 안 주면 None(자동).
+    자동일 때의 규칙은 '라이브와 같게 맞추되, 못 돌릴 환경이면 조용히 빠지지 말고 알린다':
+
+      * 라이브와 같은 env 스위치(MARC_DISABLE_DINO_FALLBACK / MARC_DISABLE_VLM)가 켜져
+        있으면 끈다 -- 두 경로가 같은 스위치를 보게 해서 동작이 갈라지지 않게 한다.
+      * transformers 가 없으면 끈다 (노트북 기본 환경).
+      * CUDA 가 없으면 끈다. Qwen2.5-VL / Grounding DINO 는 GPU 전제라 CPU 로 올리면
+        7B 모델을 몇십 분씩 돌리거나 메모리가 터진다. MPS 도 이 두 모델은 검증 안 됨.
+      * 그 외에는 켠다 (Isaac Sim 데스크탑 = CUDA 있음 = 라이브와 동일 조건).
+    """
+    if flag is False:
+        return False, "--no-fallback 지정"
+    forced = flag is True
+    if dino_disabled() and vlm_disabled():
+        if not forced:
+            return False, "MARC_DISABLE_DINO_FALLBACK / MARC_DISABLE_VLM 이 켜져 있음"
+    try:
+        import transformers  # noqa: F401
+    except ImportError:
+        if forced:
+            return True, "--fallback 강제 (transformers 없음 -- 로드에 실패할 것)"
+        return False, "transformers 미설치 (pip install transformers 필요)"
+    try:
+        import torch
+        cuda = torch.cuda.is_available()
+    except Exception:  # noqa: BLE001
+        cuda = False
+    if forced:
+        return True, "--fallback 강제" + ("" if cuda else " (CUDA 없음 -- 매우 느릴 수 있음)")
+    if not cuda:
+        return False, "CUDA 없음 (GPU 전제 모델이라 자동 우회 -- 강제하려면 --fallback)"
+    return True, "CUDA 사용 가능 -- 라이브 에이전트와 동일 조건"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -325,11 +375,16 @@ def main() -> int:
                          "기본은 실행 -- stage2_sim.py 로 participant_app 을 그대로 굴린다")
     ap.add_argument("--stage2-occupancy", default=None,
                     help="Stage2 실행 시뮬이 쓸 실제 점유지도 npz (없으면 합성 지도)")
-    ap.add_argument("--fallback", action="store_true",
-                    help="DINO/VLM 폴백 사용 (taejeong/dino_fallback.py, vlm_fallback.py -- "
-                         "YOLO 가 놓친 target/landmark 재탐색 + behind 중의 중재 + OOV target "
-                         "재해석). 기본은 미사용이라 기존 runs/*.jsonl 기준선과 그대로 비교 "
-                         "가능; 켜려면 torch/transformers 필요, 로컬 8GB 는 MARC_VLM_4BIT=1 권장.")
+    ap.add_argument("--fallback", dest="fallback", action="store_true", default=None,
+                    help="DINO/VLM 폴백을 강제로 켠다 (GPU 없어도 시도 -- CPU 로 7B VLM 을 "
+                         "올리려 들어 아주 느리거나 메모리가 터질 수 있다).")
+    ap.add_argument("--no-fallback", dest="fallback", action="store_false",
+                    help="DINO/VLM 폴백을 강제로 끈다. 라이브 에이전트는 폴백을 항상 켜므로 "
+                         "이걸 쓰면 라이브보다 약한 파이프라인을 채점하게 된다.")
+    # 기본값은 '자동': 라이브(demo_agents/taejeong_agent_vla.py)는 폴백을 항상 켜므로
+    # 오프라인도 켜는 게 맞다. 다만 노트북에는 보통 GPU 가 없고 Qwen2.5-VL / Grounding DINO
+    # 는 GPU 전제라, CUDA 가 안 보이면 자동으로 건너뛰고 그 사실을 리포트에 명시한다
+    # (조용히 빠지면 '폴백 없는 점수'를 라이브 점수로 착각하게 된다).
 
     # macOS 는 입력 중 "--" 를 em-dash("—") 로 자동 치환하는 경우가 있다.
     # 그대로 두면 argparse 가 "unrecognized arguments" 만 뱉어 원인을 알기 어렵다.
@@ -357,8 +412,14 @@ def main() -> int:
     from ultralytics import YOLO
     model = YOLO(args.weights)
 
+    use_fallback, why = resolve_fallback_mode(args.fallback)
+    print(f"[fallback] {'사용' if use_fallback else '건너뜀'} -- {why}")
+    if not use_fallback:
+        print("[fallback] 주의: 라이브 에이전트는 폴백을 항상 켠다. 아래 점수는 폴백이 "
+              "구제했을 문항을 실패로 계산하므로 데스크탑 실측보다 낮게 나올 수 있다.")
+
     dino = vlm = None
-    if args.fallback:
+    if use_fallback:
         try:
             dino = DinoFallbackDetector()
         except Exception as e:  # noqa: BLE001
@@ -369,6 +430,7 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             print(f"[fallback] VLM 로드 실패, behind 중재/OOV 재해석 없이 진행: {e}",
                   file=sys.stderr)
+    args.fallback = use_fallback
 
     # s1_* 는 Stage1 단계에서, s2_* 는 Stage2 단계에서 뜬 기록이다. 어느 단계에서 떴는지와
     # 무관하게 **문항 종류**(시나리오의 kind)로 Stage1/Stage2 를 가른다 -- 2026-08-25 기록
