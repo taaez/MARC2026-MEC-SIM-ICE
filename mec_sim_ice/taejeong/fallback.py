@@ -22,10 +22,12 @@ from typing import Optional
 
 try:                              # package import (e.g. `from taejeong.fallback import ...`)
     from .command_parser import LANDMARK_SYNONYMS, OBJECT_SYNONYMS, ParsedCommand
-    from .grounding import Detection, _landmark_ok, _target_ok
+    from .grounding import (AREA_DOMINANCE_RATIO, AREA_INDICATOR_CLASSES,
+                            Detection, _landmark_ok, _target_ok)
 except ImportError:               # flat import (offline_score.py 등, taejeong/ 자체가 sys.path)
     from command_parser import LANDMARK_SYNONYMS, OBJECT_SYNONYMS, ParsedCommand
-    from grounding import Detection, _landmark_ok, _target_ok
+    from grounding import (AREA_DOMINANCE_RATIO, AREA_INDICATOR_CLASSES,
+                           Detection, _landmark_ok, _target_ok)
 
 log = logging.getLogger("participant_app")
 
@@ -38,16 +40,49 @@ _TILE_UNCERTAIN_THR = 0.3
 
 # landmark 구제 전용 최소 confidence -- DinoFallbackDetector 기본 box_thr(0.3)보다
 # 높게 잡는다. 실측(2026-08-29, s1_007/s1_014, landmark="picnic_table"):
-# LANDMARK_SYNONYMS 의 범용 동의어 "table" 이 테이블과 무관한 물체에 낮은 확신으로
-# 걸렸다 -- taxi(0.479), vending machine(0.501/0.51), bench(0.592/0.60), 벤치류
-# (0.49/0.54) 가 전부 "table" 매치로 잡혔는데, 진짜 피크닉 테이블은 rig_1_a
-# (0.932)/rig_3_b(0.737)로 뚜렷하게 높았다. 오탐 최고치(0.60)와 진탐 최저치
-# (0.737) 사이에 여유를 두려고 0.6 이 아니라 0.65 로 잡는다(0.6은 실측 오탐과
-# 바로 붙어 있어 위험했다). target 재탐색(위 _TILE_UNCERTAIN_THR)은 반대로 낮은
-# 확신(실측 0.11까지)도 진짜인 경우가 있어 그대로 두고, landmark 쪽에만 별도로
-# 더 높은 문턱을 둔다 -- 랜드마크는 설계상 "숨어있지 않은, 흔히 보이는 기준
-# 물체"라 확신이 낮으면 진짜 없을 확률이 높다.
+# 무관한 물체(taxi 0.479, vending machine 0.501/0.51, bench 0.592/0.60)가
+# picnic_table 로 오탐됐는데, 진짜 피크닉 테이블은 rig_1_a(0.932)/rig_3_b
+# (0.737)로 뚜렷하게 높았다. 오탐이 "table" 같은 범용 동의어 때문이라 보고
+# strict("picnic table"/"outdoor table")/loose("table") 로 나눠 loose 만
+# 더 높은 문턱을 매기는 방식을 시도했으나(같은 날), 재실측 결과 strict
+# phrase 만으로도 같은 오탐(rig_2_b 0.59, rig_3_c 0.53, rig_7_a 0.48)이
+# 그대로 났다 -- 원인이 특정 단어가 아니라 이 씬에서 Grounding DINO 가
+# picnic_table 클래스 자체를 잘 구분 못 하는 것이었다. phrase 를 나눠도
+# 문제가 안 사라지고 target_scope 만 도로 넓어져(2/6->6/6) 되돌렸다. 그래서
+# phrase 구분 없이 최종 최고점 하나에만 문턱을 매기는 단순한 형태를 쓴다.
+# target 재탐색(위 _TILE_UNCERTAIN_THR)은 반대로 낮은 확신(실측 0.11까지)도
+# 진짜인 경우가 있어 그대로 두고, landmark 쪽에만 별도로 더 높은 문턱을 둔다
+# -- 랜드마크는 설계상 "숨어있지 않은, 흔히 보이는 기준 물체"라 확신이 낮으면
+# 진짜 없을 확률이 높다.
 _LANDMARK_MIN_CONF = 0.65
+
+# whole-frame 이 불확실해 타일링으로 넘어갈 때, phrase 전부를 8타일에 태우지
+# 않고 유력한 것만 추려서 태운다. 실측(2026-08-28, pencilcase): 카메라 1대당
+# 8타일 x phrase(보통 3~4개)가 병목이었다 -- 여기서 phrase 를 topk 로 줄이면
+# 타일 호출이 그 비율만큼 준다(4개->2개면 타일 호출 절반).
+#
+# 순위는 "정상 문턱을 넘긴 것" 이 아니라 낮은 probe 문턱(_PROBE_BOX_THR)으로
+# 다시 재본 점수로 매긴다 -- 애초에 이 분기로 온 이유가 "물체가 작아 전부
+# 0.3 문턱 미만"(whole_conf < uncertain_thr)이라, 정상 문턱으로는 phrase 간
+# 우열을 가릴 신호 자체가 없다(전부 필터돼 안 보임). 점수 값 자체는 후처리
+# 문턱과 무관하므로(문턱은 반환 여부만 결정), probe 로 다시 불러도 최종
+# whole/uncertain 판정에는 영향이 없다 -- phrase 순위 매기기 전용이다.
+_PROBE_BOX_THR = 0.05
+_TILE_PHRASE_TOPK = 2
+
+# 재귀 줌(2단계 세분 타일링) -- 8분할로도 물체가 전부 uncertain_thr(0.3) 미만이면
+# (진짜 완전 미탐 후보, 예: hf02/hf03 류 target=0 케이스) 그중 가장 유력한 타일 1개를
+# 한 번 더 2x2 로 쪼개 재검색한다. SAHI(Slicing Aided Hyper Inference)의 계층적
+# 슬라이싱과 같은 원리 -- 8분할에서도 여전히 작으면 그 영역만 더 확대해서 로컬
+# 프레임 대비 물체 비중을 키운다. 8분할 전부가 문턱 미만이면 정상 문턱으로는 어느
+# 타일이 유력한지 신호가 아예 없으므로(전부 필터돼 안 보임), 낮은 probe 문턱으로
+# 한 번 더 8타일을 조회해 후보를 고른다(최종 채택 문턱은 그대로 정상 문턱 -- probe
+# 는 "어디를 더 볼지"만 정하지 결과를 낮은 신뢰로 그냥 통과시키지 않는다).
+#
+# 이미 uncertain_thr 를 넘긴 케이스(실측: pencilcase 0.32~0.48, mug 0.32~0.45)는
+# 이 분기를 안 타므로 비용이 그대로다 -- 진짜 완전 미탐일 때만 추가 비용(약 4콜)이
+# 붙는다.
+_TILE2_COLS, _TILE2_ROWS, _TILE2_OVERLAP = 2, 2, 0.25
 
 
 class _ShiftedBox:
@@ -102,20 +137,37 @@ def _dino_best_box_tiled(dino, img, phrases, uncertain_thr: float = _TILE_UNCERT
     타일 8장은 (dino 가 지원하면) best_box_multi_images() 로 한 번에 배치
     처리한다 -- 개별 순차 호출 대비 phrase 개수(보통 3~4개)만큼의 forward로
     끝나서 카메라당 호출 수가 최대 9배 줄어든다(실측/근거는 그 함수 참고).
+
+    타일링까지 왔다는 건 phrase 전부가 uncertain_thr 미만이란 뜻이라(작은
+    물체), 8타일 x phrase 전부를 태우는 건 낭비다 -- 그중 유력한 phrase
+    top-k(_TILE_PHRASE_TOPK)만 골라 타일링한다(phrase_detections() 지원 시).
+
+    8분할로도 전부 uncertain_thr 미만이면(완전 미탐 후보) 가장 유력한 타일
+    1개를 한 번 더 2x2 로 확대해서 재검색한다(SAHI 식 계층적 슬라이싱, 근거는
+    _TILE2_* 상수 주석 참고) -- 이미 uncertain_thr 를 넘긴 경우는 이 분기를
+    안 타 비용이 그대로다.
     """
     whole = dino.best_box(img, phrases)
     whole_conf = float(whole.conf[0]) if whole is not None else 0.0
     if whole is not None and whole_conf >= uncertain_thr:
         return whole
 
+    tile_phrases = phrases
+    if hasattr(dino, "phrase_detections") and len(phrases) > _TILE_PHRASE_TOPK:
+        scored = dino.phrase_detections(img, phrases, box_thr=_PROBE_BOX_THR)
+        ranked = sorted(phrases, key=lambda p: scored[p][1], reverse=True)
+        tile_phrases = ranked[:_TILE_PHRASE_TOPK]
+        log.info("[fallback] 타일링 phrase %d개->%d개로 축소: %s",
+                 len(phrases), len(tile_phrases), tile_phrases)
+
     H, W = img.shape[:2]
     tiles = _tile_grid(H, W)
     tile_imgs = [img[y1:y2, x1:x2] for (x1, y1, x2, y2) in tiles]
 
     if hasattr(dino, "best_box_multi_images"):
-        tile_boxes = dino.best_box_multi_images(tile_imgs, phrases)
+        tile_boxes = dino.best_box_multi_images(tile_imgs, tile_phrases)
     else:                          # 목/구버전 dino 폴백 (배치 메서드 없음)
-        tile_boxes = [dino.best_box(t, phrases) for t in tile_imgs]
+        tile_boxes = [dino.best_box(t, tile_phrases) for t in tile_imgs]
 
     best, best_conf = whole, whole_conf
     for (x1, y1, x2, y2), box in zip(tiles, tile_boxes):
@@ -126,6 +178,37 @@ def _dino_best_box_tiled(dino, img, phrases, uncertain_thr: float = _TILE_UNCERT
             lx1, ly1, lx2, ly2 = box.xyxy[0]
             best = _ShiftedBox((x1 + lx1, y1 + ly1, x1 + lx2, y1 + ly2), conf)
             best_conf = conf
+
+    # 재귀 줌: 8분할 전부가 uncertain_thr 미만(= 정상 문턱으로 아무 타일도 못
+    # 건짐, best_conf 는 여기서 0.0)이면 어느 타일이 그나마 유력한지 낮은
+    # probe 문턱으로 다시 조회해 후보를 고른다 -- probe 는 "어디를 더 볼지"만
+    # 정하고, 최종 채택은 아래 2x2 재검색에서 정상 문턱으로 다시 판정하므로
+    # 신뢰도가 낮은 결과를 그냥 통과시키는 게 아니다.
+    if best_conf < uncertain_thr and hasattr(dino, "best_box_multi_images"):
+        probe_boxes = dino.best_box_multi_images(tile_imgs, tile_phrases,
+                                                  box_thr=_PROBE_BOX_THR)
+        zoom_idx = max(
+            (i for i, b in enumerate(probe_boxes) if b is not None),
+            key=lambda i: float(probe_boxes[i].conf[0]), default=None)
+        if zoom_idx is not None:
+            zx1, zy1, zx2, zy2 = tiles[zoom_idx]
+            zoom_img = img[zy1:zy2, zx1:zx2]
+            zh, zw = zoom_img.shape[:2]
+            sub_tiles = _tile_grid(zh, zw, cols=_TILE2_COLS, rows=_TILE2_ROWS,
+                                   overlap=_TILE2_OVERLAP)
+            sub_imgs = [zoom_img[sy1:sy2, sx1:sx2] for (sx1, sy1, sx2, sy2) in sub_tiles]
+            sub_boxes = dino.best_box_multi_images(sub_imgs, tile_phrases)
+            for (sx1, sy1, sx2, sy2), box in zip(sub_tiles, sub_boxes):
+                if box is None:
+                    continue
+                conf = float(box.conf[0])
+                if conf > best_conf:
+                    lx1, ly1, lx2, ly2 = box.xyxy[0]
+                    best = _ShiftedBox((zx1 + sx1 + lx1, zy1 + sy1 + ly1,
+                                        zx1 + sx1 + lx2, zy1 + sy1 + ly2), conf)
+                    best_conf = conf
+                    log.info("[fallback] 재귀 줌으로 구제: 타일 %d 확대 재검색 "
+                             "(conf=%.2f)", zoom_idx, conf)
     return best
 
 
@@ -195,8 +278,14 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
     카메라에서 8분할까지 태워 target 을 찾아봐야 resolve() 가 버린다. 순서를
     바꿔 낭비를 없앤다 -- 정확도는 그대로, 비용만 준다(카메라 6대 중 보통
     1~2대만 그 landmark 를 보므로 target 쪽 DINO 호출이 크게 줄어든다).
-    area_hint 게이트(랜드마크 미지목, 구역만 지목)는 YOLO 탐지 밀도로 정하는
-    거라 이 축소 대상이 아니다 -- 지금은 손 안 댐(전체 카메라 스캔 유지).
+
+    area_hint(랜드마크 미지목, "parking space"/"park" 처럼 구역만 지목한 문제,
+    예: s1_009 tumbler)도 2026-08-29부터 같은 방식으로 좁힌다 --
+    grounding.AREA_INDICATOR_CLASSES/AREA_DOMINANCE_RATIO 를 그대로 재사용해
+    resolve() 의 구역 게이트를 미리 앞당겨 적용한다. resolve() 가 최종적으로
+    같은 판정을 내리므로 정확도 손실은 원리상 없다 -- 게이트 밖 카메라는
+    어차피 버려지는데 실측(9번, landmark 없음)에서 이게 없어 6대 전부에
+    8분할이 돌아 카메라당 최대 36 forward x 6 = 216 이 걸리고 있었다.
     """
     if dino is None or parsed.is_person:
         return
@@ -206,6 +295,15 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
         # 제너릭 "car" 힌트도 그대로 label 로 쓴다 -- grounding.CAR_CLASSES 에
         # "car" 가 포함돼 _landmark_ok 를 통과하고, situation 규칙의 support
         # 토큰 정규화도 "car" 를 안다.
+        # strict/loose 분리(구체적 동의어 vs "table" 등 범용 동의어)를 실제
+        # 시도했으나(2026-08-29) 되돌렸다 -- 실측(s1_007, rig_2_b/rig_3_c/
+        # rig_7_a): "table"을 뺀 strict 구성("picnic table", "outdoor table")
+        # 만으로도 무관한 물체에서 0.48~0.59 로 걸렸다. 즉 오탐의 원인이
+        # "table"이라는 특정 단어가 아니라 이 장면에서 Grounding DINO 가
+        # picnic_table 클래스 자체를 잘 구분 못 하는 것이었다 -- phrase를
+        # 나눠도 문제가 안 사라지고, 오히려 예전에 걸러지던 카메라들이 다시
+        # target_scope 에 들어가(2/6 -> 6/6) 속도만 나빠졌다. 그래서 phrase
+        # 구분 없이 최종 최고점 하나에만 문턱을 매기는 단순한 형태로 되돌린다.
         phrases = LANDMARK_SYNONYMS.get(lm, [lm.replace("_", " ")])
         for cam_id, img in images.items():
             # 카메라별로 판단한다(2026-08-28 수정) -- 예전엔 "어느 카메라에서든
@@ -222,7 +320,8 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
             box = dino.best_box(img, phrases)
             if box is not None and float(box.conf[0]) < _LANDMARK_MIN_CONF:
                 log.info("[fallback] DINO landmark %r on %s 기각 (conf=%.2f < %.2f, "
-                         "동의어 오탐 의심)", lm, cam_id, float(box.conf[0]),
+                         "오탐 의심 -- picnic_table 등 이 클래스 자체를 이 장면에서 "
+                         "잘 못 구분함)", lm, cam_id, float(box.conf[0]),
                          _LANDMARK_MIN_CONF)
                 box = None
             if box is not None:
@@ -232,16 +331,43 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
                          lm, cam_id, float(box.conf[0]))
 
     target_scope = images
+    scope_cams: Optional[set] = None
+
     if lm:
         landmark_cams = {cid for cid, dets in detections.items()
                          if any(_landmark_ok(d.label, lm) for d in dets)}
         if landmark_cams:
-            target_scope = {cid: img for cid, img in images.items()
-                            if cid in landmark_cams}
+            scope_cams = landmark_cams
             log.info("[fallback] target 탐색 범위를 landmark %r 검출된 %d/%d 카메라로 제한: %s",
-                     lm, len(target_scope), len(images), sorted(target_scope))
+                     lm, len(landmark_cams), len(images), sorted(landmark_cams))
         # landmark_cams 가 비면(끝내 못 찾음) 범위를 안 좁힌다 -- resolve() 도
         # 이 경우 게이트를 풀어(전체 카메라) 재탐색하므로 동작을 맞춘다.
+
+    # 구역 게이트(area_hint) -- grounding.resolve() 의 판정(§1)을 그대로
+    # 재사용해서 앞당긴다. landmark 게이트와 독립이라 둘 다 있으면 교집합을
+    # 쓴다(resolve() 와 동일 원칙) -- 교집합이 비면 landmark 게이트로 되돌아가
+    # 나빠지는 경로가 없다.
+    indicators = AREA_INDICATOR_CLASSES.get(parsed.area_hint or "")
+    if indicators:
+        counts = {cid: sum(1 for d in detections.get(cid, []) if d.label in indicators)
+                 for cid in images}
+        top = max(counts.values(), default=0)
+        if top > 0:
+            leaders = {cid for cid, n in counts.items() if n == top}
+            runner_up = max((n for cid, n in counts.items() if cid not in leaders),
+                           default=0)
+            if top >= AREA_DOMINANCE_RATIO * runner_up:
+                if scope_cams is not None:
+                    both = scope_cams & leaders
+                    scope_cams = both if both else scope_cams
+                else:
+                    scope_cams = leaders
+                log.info("[fallback] target 탐색 범위를 area_hint %r 지표(%s) 밀집 "
+                         "카메라로 제한: %s", parsed.area_hint, sorted(indicators),
+                         sorted(scope_cams))
+
+    if scope_cams is not None:
+        target_scope = {cid: img for cid, img in images.items() if cid in scope_cams}
 
     if target_phrases:
         for cam_id, img in target_scope.items():

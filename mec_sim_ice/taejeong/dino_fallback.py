@@ -112,7 +112,8 @@ class DinoFallbackDetector:
         return _DinoBox(best_box, best_score)
 
     def best_box_multi_images(self, imgs_bgr: Sequence[np.ndarray],
-                              phrases: Sequence[str]) -> list:
+                              phrases: Sequence[str],
+                              box_thr: Optional[float] = None) -> list:
         """이미지 여러 장(예: 타일 8장)에 대해 각각 best_box() 를 부르는 것과
         같은 결과를, 이미지 개수만큼 순차 호출하는 대신 phrase 당 배치 호출
         1번으로 묶어서 낸다.
@@ -124,6 +125,10 @@ class DinoFallbackDetector:
         묶으면(phrase 당 1번, 이미지 N장을 한 forward 에) 호출 수가 phrase
         개수(보통 3~4번)로 줄어든다.
 
+        box_thr 를 주면 이 호출에서만 self.box_thr 대신 그 문턱을 쓴다 --
+        fallback._dino_best_box_tiled() 의 재귀 줌 후보 타일 선정(낮은 probe
+        문턱)용.
+
         반환: imgs_bgr 순서대로 Optional[_DinoBox] 리스트.
         """
         if not phrases or not imgs_bgr:
@@ -131,18 +136,21 @@ class DinoFallbackDetector:
         imgs_rgb = [img[:, :, ::-1] for img in imgs_bgr]
         best = [(None, -1.0)] * len(imgs_bgr)
         for phrase in phrases:
-            for i, (box, score) in enumerate(self._detect_batch(imgs_rgb, phrase)):
+            for i, (box, score) in enumerate(self._detect_batch(imgs_rgb, phrase, box_thr=box_thr)):
                 if box is not None and score > best[i][1]:
                     best[i] = (box, score)
         return [_DinoBox(box, score) if box is not None else None
                 for box, score in best]
 
-    def _detect_batch(self, imgs_rgb: Sequence[np.ndarray], phrase: str):
+    def _detect_batch(self, imgs_rgb: Sequence[np.ndarray], phrase: str,
+                      box_thr: Optional[float] = None):
         """phrase 하나를 이미지 여러 장에 배치로 적용 -- 이미지 순서대로
-        (bbox, score) 리스트(없으면 (None, -1.0))."""
+        (bbox, score) 리스트(없으면 (None, -1.0)). box_thr 는 _detect_one 과
+        같은 용도(이 호출 전용 문턱 오버라이드)."""
         import torch
         from PIL import Image
 
+        thr = self.box_thr if box_thr is None else box_thr
         pils = [Image.fromarray(img) for img in imgs_rgb]
         text = phrase.strip().rstrip(".") + "."
         inputs = self.processor(images=pils, text=[text] * len(pils),
@@ -154,7 +162,7 @@ class DinoFallbackDetector:
             out = self.model(**inputs)
         target_sizes = [pil.size[::-1] for pil in pils]
         results = self.processor.post_process_grounded_object_detection(
-            out, inputs.input_ids, threshold=self.box_thr, text_threshold=self.text_thr,
+            out, inputs.input_ids, threshold=thr, text_threshold=self.text_thr,
             target_sizes=target_sizes)
         out_list = []
         for res in results:
@@ -166,11 +174,18 @@ class DinoFallbackDetector:
             out_list.append((box, score))
         return out_list
 
-    def _detect_one(self, img_rgb: np.ndarray, phrase: str):
-        """phrase 하나에 대한 (bbox, score) 중 최고점. 없으면 (None, -1.0)."""
+    def _detect_one(self, img_rgb: np.ndarray, phrase: str,
+                    box_thr: Optional[float] = None):
+        """phrase 하나에 대한 (bbox, score) 중 최고점. 없으면 (None, -1.0).
+
+        box_thr 를 주면 이 호출에서만 self.box_thr 대신 그 문턱을 쓴다 --
+        phrase_detections() 의 낮은 probe 문턱 재조회용. 점수 값 자체는
+        후처리 문턱과 무관하다(문턱은 반환 여부만 거른다).
+        """
         import torch
         from PIL import Image
 
+        thr = self.box_thr if box_thr is None else box_thr
         pil = Image.fromarray(img_rgb)
         text = phrase.strip().rstrip(".") + "."
         inputs = self.processor(images=pil, text=text, return_tensors="pt").to(self.device)
@@ -178,7 +193,7 @@ class DinoFallbackDetector:
         with torch.inference_mode():
             out = self.model(**inputs)
         res = self.processor.post_process_grounded_object_detection(
-            out, inputs.input_ids, threshold=self.box_thr, text_threshold=self.text_thr,
+            out, inputs.input_ids, threshold=thr, text_threshold=self.text_thr,
             target_sizes=[pil.size[::-1]])[0]
 
         box, score = None, -1.0
@@ -187,6 +202,22 @@ class DinoFallbackDetector:
             if s > score:
                 box, score = tuple(float(v) for v in b.tolist()), s
         return box, score
+
+    def phrase_detections(self, img_bgr: np.ndarray, phrases: Sequence[str],
+                          box_thr: Optional[float] = None) -> dict:
+        """phrases 각각을 개별 호출한 (bbox, score) 를 전부 반환한다(phrase ->
+        (box, score)) -- best_box() 처럼 최고점 하나만 남기지 않고 phrase 간
+        순위를 매길 수 있게 해준다.
+
+        box_thr 를 낮게 주면(probe) 정상 문턱(self.box_thr) 미만이라 아무
+        phrase 도 통과 못하는 상황(물체가 작아 전부 저신뢰)에서도 상대 순위를
+        얻을 수 있다 -- fallback._dino_best_box_tiled() 의 타일링 phrase
+        추리기 용도. 매치가 없으면 해당 phrase 값은 (None, -1.0).
+        """
+        if not phrases:
+            return {}
+        img_rgb = img_bgr[:, :, ::-1]
+        return {p: self._detect_one(img_rgb, p, box_thr=box_thr) for p in phrases}
 
 
 def is_disabled() -> bool:
