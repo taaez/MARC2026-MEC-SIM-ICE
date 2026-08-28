@@ -73,6 +73,7 @@ import json
 import math
 import os
 import sys
+from collections import defaultdict
 
 _VALIDATION_DIR = os.path.dirname(os.path.abspath(__file__))
 _TAEJEONG_DIR = os.path.dirname(_VALIDATION_DIR)
@@ -94,6 +95,10 @@ from chungmu_gt import DEFAULT_SCENARIO, load_gt    # noqa: E402  (same dir)
 from score_report import report                     # noqa: E402  (same dir)
 
 COORD_TOLERANCE_M = 5.0
+
+# 폴백(DINO/VLM)이 켜진 채로 프레임 대여 채점을 하면 (대여문항 x 라운드) 만큼
+# 모델이 돌아 아주 느려진다. 그때만 최신 라운드 이 개수로 표본을 줄인다.
+BORROW_SAMPLES_FALLBACK = 8
 
 # 기본 경로는 CWD 가 아니라 **이 스크립트 위치** 기준으로 잡는다 — 어느
 # 디렉토리에서 실행하든 인자 없이 그냥 돌아가게 하려는 것.
@@ -386,6 +391,12 @@ def main() -> int:
                          "기본은 실행 -- stage2_sim.py 로 participant_app 을 그대로 굴린다")
     ap.add_argument("--stage2-occupancy", default=None,
                     help="Stage2 실행 시뮬이 쓸 실제 점유지도 npz (없으면 합성 지도)")
+    ap.add_argument("--no-borrowed-frames", action="store_true",
+                    help="records/ 에 라운드가 없는 문항을 다른 라운드의 프레임을 빌려서 "
+                         "채점하지 않는다. 기본은 대여 채점 -- 레코드 폴더는 6개 카메라 "
+                         "프레임을 전부 담고 있고 물체는 라운드가 달라도 같은 자리에 있어서 "
+                         "정적 물체 문항은 그대로 채점된다. 이 옵션을 주면 그 문항들은 "
+                         "채점되지 않고 목록만 출력된다.")
     ap.add_argument("--fallback", dest="fallback", action="store_true", default=None,
                     help="DINO/VLM 폴백을 강제로 켠다 (GPU 없어도 시도 -- CPU 로 7B VLM 을 "
                          "올리려 들어 아주 느리거나 메모리가 터질 수 있다).")
@@ -448,32 +459,114 @@ def main() -> int:
     # 세션은 39문항을 전부 Stage1 라운드로 출제해서 Stage2 문항(rt*)까지 s1_034~s1_039 에
     # 들어가 있기 때문이다.
     round_dirs = sorted(glob.glob(os.path.join(args.records, "s[12]_*")))
+    round_dirs = [d for d in round_dirs
+                  if os.path.exists(os.path.join(d, "meta.json"))]
     scored_rounds = []
     unmatched = []
-    for d in round_dirs:
-        if not os.path.exists(os.path.join(d, "meta.json")):
-            continue
-        meta, cams, images = load_round(d)
-        cmd = meta["command"]
-        hit = answer_key.get(cmd)
-        if hit is None:
-            unmatched.append((os.path.basename(d), cmd))
-            continue
-        problem_id, expected, weights, kind = hit
 
+    def run_round(cmd, hit, cams, images, dets, record_name, borrowed=False):
+        """명령 + (카메라, 프레임, 검출) → 채점된 라운드 dict. 파이프라인은 라이브와 동일.
+
+        ``dets`` 는 프레임에만 의존하므로 (명령과 무관) 한 프레임을 여러 문항에 재사용할
+        수 있다. 다만 ``dino_augment`` 는 명령별 폴백 탐지를 dets 에 **in-place 로 넣기**
+        때문에, 재사용할 때는 카메라별 리스트를 복사해서 넘긴다 -- 안 그러면 앞 문항이
+        구제한 탐지가 뒤 문항에 새어 들어간다.
+        """
+        problem_id, expected, weights, kind = hit
         parsed = parse_command(cmd)
-        target_phrases = vlm_assist(cmd, parsed, vlm) if args.fallback else None
-        dets = infer_cameras(model, images, min_conf=args.conf, imgsz=args.imgsz)
         if args.fallback:
+            dets = {cid: list(v) for cid, v in dets.items()}
+            target_phrases = vlm_assist(cmd, parsed, vlm)
             dino_augment(parsed, images, dets, target_phrases, dino)
         decision = resolve(parsed, dets, cams)
         submission = (flatten_payload(decision.to_payload()) if decision is not None
                       else fallback_submission(parsed))
+        return {"stage": 2 if kind == "retrieval" else 1,
+                "voice_command": cmd, "record": record_name,
+                "borrowed": borrowed,
+                "scores": score_round(problem_id, weights, expected, submission)}
 
-        s = score_round(problem_id, weights, expected, submission)
-        scored_rounds.append({"stage": 2 if kind == "retrieval" else 1,
-                              "voice_command": cmd,
-                              "record": os.path.basename(d), "scores": s})
+    # -- 정답지엔 있는데 records/ 에 라운드가 없는 문항 --
+    # 예전에는 이 문항들이 리포트에서 **아무 말 없이 사라졌다** (lf02~lf08 7문항).
+    # "Stage1 평균 26문항" 이 문제집 전체인 것처럼 보여서, 채점기가 문제집의 1/5 를
+    # 건너뛰고 있다는 사실조차 드러나지 않았다. 이제 항상 드러내고, 빌릴 수 있으면
+    # 다른 라운드의 프레임을 빌려서라도 채점한다.
+    #
+    # 프레임 대여가 성립하는 이유: 레코드 한 폴더에는 **6개 카메라 프레임이 전부** 들어
+    # 있고(라운드가 달라도 시야는 같다), 대여 대상은 정적 물체 문항이다 -- 물체는
+    # 라운드가 바뀌어도 같은 자리에 있다. 사람은 라운드마다 자세·위치가 바뀌므로
+    # (레코드별 person_* 검출이 실제로 다르다) 사람 문항은 빌리지 않는다.
+    #
+    # 한 라운드만 빌리면 안 된다: 작은 물체(tumbler/umbrella)의 YOLO 검출이 프레임마다
+    # 불안정해서, 그 프레임에서 우연히 안 잡히면 문항이 통째로 0 점이 된다 (실측 대조:
+    # rt02 는 자기 레코드에서 94.50 인데 s2_032 프레임으로는 35.00). 그래서 **가능한 모든
+    # 라운드 프레임으로 채점한 뒤 중앙값 라운드를 채택**하고, 산포를 함께 보고한다 --
+    # 프레임 운에 좌우되는 문항이면 그 사실 자체가 드러나야 한다.
+    recorded_cmds = set()
+    for d in round_dirs:
+        with open(os.path.join(d, "meta.json"), encoding="utf-8") as f:
+            recorded_cmds.add(json.load(f)["command"])
+    missing = [(cmd, hit) for cmd, hit in answer_key.items()
+               if cmd not in recorded_cmds]
+    borrow_targets, skipped_person = [], []
+    for cmd, hit in sorted(missing, key=lambda x: x[1][0]):
+        if (hit[1] or {}).get("target_kind") == "person":
+            skipped_person.append(hit[0])
+        else:
+            borrow_targets.append((cmd, hit))
+    if args.no_borrowed_frames:
+        borrow_targets = []
+
+    # 폴백이 켜져 있으면 대여 채점 한 건마다 DINO/VLM 이 돌아 비용이 (문항 x 라운드)로
+    # 커진다. 그때는 최신 라운드 몇 개로만 표본을 잡는다 -- 중앙값의 취지는 유지된다.
+    borrow_dirs = round_dirs if not args.fallback else round_dirs[-BORROW_SAMPLES_FALLBACK:]
+    borrow_pool = defaultdict(list)
+
+    for d in round_dirs:
+        meta, cams, images = load_round(d)
+        cmd = meta["command"]
+        name = os.path.basename(d)
+        dets = infer_cameras(model, images, min_conf=args.conf, imgsz=args.imgsz)
+        hit = answer_key.get(cmd)
+        if hit is None:
+            unmatched.append((name, cmd))
+        else:
+            scored_rounds.append(run_round(cmd, hit, cams, images, dets, name))
+        if d in borrow_dirs:
+            for bcmd, bhit in borrow_targets:
+                borrow_pool[bhit[0]].append(
+                    run_round(bcmd, bhit, cams, images, dets, name, borrowed=True))
+
+    if borrow_pool:
+        spread = []
+        for pid in sorted(borrow_pool):
+            cand = sorted(borrow_pool[pid], key=lambda r: r["scores"]["total"])
+            chosen = cand[len(cand) // 2]           # 중앙값 라운드
+            scored_rounds.append(chosen)
+            spread.append((pid, cand[0]["scores"]["total"],
+                           chosen["scores"]["total"], cand[-1]["scores"]["total"],
+                           chosen["record"]))
+        n_frames = len(borrow_dirs)
+        print(f"[프레임 대여 채점] {len(spread)}문항 -- records/ 에 그 라운드가 없어 "
+              f"다른 라운드 {n_frames}개의 프레임으로 채점했다.")
+        print("  레코드 폴더는 6개 카메라 프레임을 전부 담고 있고 대여 문항은 전부 정적")
+        print("  물체 문항이라(사람 자세 무관) 씬은 같다. 프레임마다 작은 물체 검출이")
+        print("  흔들리므로 **중앙값 라운드**를 채택하고 산포를 함께 적는다 -- 최소와")
+        print("  최대가 벌어진 문항은 점수가 프레임 운에 좌우된다는 뜻이다.")
+        print(f"  {'문항':26} {'최소':>7} {'중앙값':>7} {'최대':>7}  채택 레코드")
+        for pid, lo, mid, hi, rec in spread:
+            flag = "  <- 프레임에 따라 요동" if hi - lo > 10 else ""
+            print(f"  {pid:26} {lo:7.2f} {mid:7.2f} {hi:7.2f}  {rec}{flag}")
+        if skipped_person:
+            print(f"  [대여 제외] 사람 문항 {len(skipped_person)}건은 라운드마다 자세가 "
+                  f"달라 빌리지 않았다: {', '.join(skipped_person)}")
+        print()
+    elif missing:
+        print(f"[레코드 없음] {len(missing)}문항이 채점에서 빠졌다 "
+              f"(정답지엔 있으나 records/ 에 그 라운드가 없음):")
+        for cmd, hit in sorted(missing, key=lambda x: x[1][0]):
+            print(f"  - {hit[0]:26s} {cmd!r}")
+        print()
 
     if unmatched:
         print(f"[정답 없음, 건너뜀] {len(unmatched)}건 (records 에는 있지만 정답지/시나리오에 없는 voice_command)")
@@ -494,7 +587,10 @@ def main() -> int:
         name = r["record"]
         tail = name.rsplit("_", 1)[-1]
         ts = int(tail) if tail.isdigit() else 0
-        return (-ts, 0 if name.startswith("s2_") else 1, name)
+        # 대여 라운드(borrowed)는 그 문항의 실측 레코드가 없을 때만 생기지만, 혹시
+        # 둘 다 있으면 실측을 항상 앞세운다 -- 대여는 어디까지나 보조 수단이다.
+        return (1 if r.get("borrowed") else 0, -ts,
+                0 if name.startswith("s2_") else 1, name)
 
     scored_rounds.sort(key=lambda r: (r["scores"]["problem_id"], _rank(r)))
     primary, dupes, seen = [], [], set()
@@ -515,12 +611,24 @@ def main() -> int:
     s1 = [r for r in primary if r["stage"] == 1]
     s2 = [r for r in primary if r["stage"] == 2]
     final = {"source": "offline"}   # 플랫폼 실측이 아니라 이 스크립트가 계산한 값이라는 표시
+    def _avg(rs):
+        return sum(r["scores"]["total"] for r in rs) / len(rs) if rs else None
+
     if s1:
-        final["stage1_average"] = sum(r["scores"]["total"] for r in s1) / len(s1)
+        final["stage1_average"] = _avg(s1)
         final["stage1_rounds"] = len(s1)
+        measured = [r for r in s1 if not r.get("borrowed")]
+        if len(measured) != len(s1):
+            final["stage1_average_measured_only"] = _avg(measured)
+            final["stage1_rounds_measured_only"] = len(measured)
+            final["stage1_borrowed_rounds"] = len(s1) - len(measured)
     if s2:
-        final["stage2_grounding_average"] = sum(r["scores"]["total"] for r in s2) / len(s2)
+        final["stage2_grounding_average"] = _avg(s2)
         final["stage2_rounds"] = len(s2)
+        measured2 = [r for r in s2 if not r.get("borrowed")]
+        if len(measured2) != len(s2):
+            final["stage2_grounding_average_measured_only"] = _avg(measured2)
+            final["stage2_borrowed_rounds"] = len(s2) - len(measured2)
     scored_rounds = primary
     print("!" * 78)
     print("주의: camera/object_type/landmark/relation/anchor 는 과거 39건 전수 대조로")
