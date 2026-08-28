@@ -39,6 +39,22 @@ from typing import Optional
 
 log = logging.getLogger("participant_app")
 
+
+def _from_pretrained_local_first(cls, model_name: str, **kwargs):
+    """캐시에 이미 있으면 로컬에서만 로드 -- 없으면 온라인 폴백.
+
+    dino_fallback.py 의 동일 함수와 같은 근거: HF_HUB_OFFLINE 없이 로컬
+    개발하면 이미 캐시된 Qwen 가중치도 매번 huggingface.co 에 HEAD 요청을
+    보내 로드가 느려진다(실측, 2026-08-28). local_files_only=True 를 먼저
+    시도해 캐시가 있으면 네트워크를 아예 안 타게 하고, 캐시가 없으면(최초
+    실행) 예외를 잡아 평범한 온라인 다운로드로 폴백한다.
+    """
+    try:
+        return cls.from_pretrained(model_name, local_files_only=True, **kwargs)
+    except Exception:
+        log.info("[hf-cache] %s 로컬 캐시 없음 -- 온라인 다운로드", model_name)
+        return cls.from_pretrained(model_name, **kwargs)
+
 _PROMPT = """You are parsing a lost-item report for a campus CCTV search system.
 The system's object detector only recognizes these exact classes: {classes}.
 
@@ -68,13 +84,33 @@ Respond with JSON only, exactly one key:
 
 Sentence: "{command}" """
 
+# DINO 탐지 crop 재검증. DINO 는 재현율은 좋지만 낮은 임계값에선 오탐도 많다 --
+# 특히 "탐지가 여러 카메라에서 동시에 나오는" 경우 진짜는 한 장면뿐이므로
+# 나머지는 오탐이 확정적이다(CCTV 시야는 겹치지 않는다). crop 을 VLM 에 보여
+# 물체 종류가 맞는지 이진 판정을 받는다. 씬 하드코딩 아님: 판정 대상은 명령이
+# 말한 물체 이름과 그 픽셀 영역뿐이다.
+_VERIFY_PROMPT = """Look at the object at the center of this image crop from an
+outdoor CCTV frame. It may be small and it is a stylized 3D asset, not a photo.
+
+Is the object a {phrase}? If it is clearly some other kind of object, answer
+false. If it plausibly is a {phrase}, answer true.
+
+Respond with JSON only, exactly one key:
+{{"match": true or false}}"""
+
 
 class QwenVLBackend:
-    """stage1/pipeline.py의 QwenVLBackend와 동일 -- 텍스트 전용 폴백이라 이미지 입력은 안 쓴다."""
+    """stage1/pipeline.py의 QwenVLBackend 계승 -- 텍스트 파싱 + crop 검증(이미지) 겸용."""
 
     def __init__(self, model_name: Optional[str] = None, use_4bit: Optional[bool] = None):
         import torch
-        from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+        try:
+            # 제출 이미지의 transformers==4.53.2 경로 (docker/requirements.txt)
+            from transformers import Qwen2_5_VLForConditionalGeneration as _ModelCls
+        except ImportError:
+            # transformers 5.x (일부 개발 머신): 전용 클래스 대신 auto 클래스 사용
+            from transformers import AutoModelForImageTextToText as _ModelCls
+        from transformers import AutoProcessor
 
         self.model_name = model_name or os.getenv("MARC_VLM_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct")
         use_4bit = (os.getenv("MARC_VLM_4BIT", "0") == "1") if use_4bit is None else use_4bit
@@ -94,16 +130,26 @@ class QwenVLBackend:
             kw["quantization_config"] = BitsAndBytesConfig(
                 load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_quant_type="nf4")
         t0 = time.time()
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(self.model_name, **kw).eval()
-        self.processor = AutoProcessor.from_pretrained(self.model_name)
+        self.model = _from_pretrained_local_first(_ModelCls, self.model_name, **kw).eval()
+        self.processor = _from_pretrained_local_first(AutoProcessor, self.model_name)
         log.info("[vlm-fallback] %s loaded in %.1fs (4bit=%s)", self.model_name, time.time() - t0, use_4bit)
 
-    def generate(self, prompt: str, max_new_tokens: int = 96) -> str:
+    def generate(self, prompt: str, image=None, max_new_tokens: int = 96) -> str:
+        """image: HxWx3 uint8 RGB ndarray (선택). DINO 탐지 crop 검증에 쓴다."""
+        import numpy as np
         import torch
 
-        msgs = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+        content = []
+        pil = None
+        if image is not None:
+            from PIL import Image
+            pil = Image.fromarray(np.ascontiguousarray(image))
+            content.append({"type": "image"})
+        content.append({"type": "text", "text": prompt})
+        msgs = [{"role": "user", "content": content}]
         text = self.processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
-        inputs = self.processor(text=[text], images=None, return_tensors="pt").to(self.model.device)
+        inputs = self.processor(text=[text], images=[pil] if pil is not None else None,
+                                return_tensors="pt").to(self.model.device)
         with torch.inference_mode():
             out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
         gen = out[:, inputs["input_ids"].shape[1]:]
@@ -151,6 +197,34 @@ class VlmTargetResolver:
             return v if isinstance(v, bool) else None
         except Exception as e:  # noqa: BLE001
             log.warning("[vlm-fallback] behind arbitration failed: %s | raw=%r", e, txt[:120])
+            return None
+
+    def verify_crop(self, img_bgr, bbox, phrase: str, pad: float = 1.5,
+                    min_ctx_px: int = 96):
+        """DINO 탐지 crop 이 정말 phrase 물체인지 VLM 이진 판정.
+
+        -> True(맞음) / False(다른 물체) / None(판정 실패 -- 호출부는 유지 권장).
+        bbox 는 (x1,y1,x2,y2) 픽셀. 소형 물체는 bbox 만 자르면 문맥이 없어
+        판정이 어렵다 -- 사방 pad 배 + 최소 min_ctx_px 만큼 주변을 포함한다.
+        """
+        x1, y1, x2, y2 = [float(v) for v in bbox]
+        w, h = x2 - x1, y2 - y1
+        H, W = img_bgr.shape[:2]
+        ex = max(pad * w, (min_ctx_px - w) / 2.0, 0.0)
+        ey = max(pad * h, (min_ctx_px - h) / 2.0, 0.0)
+        cx1, cy1 = max(0, int(x1 - ex)), max(0, int(y1 - ey))
+        cx2, cy2 = min(W, int(x2 + ex)), min(H, int(y2 + ey))
+        if cx2 - cx1 < 8 or cy2 - cy1 < 8:
+            return None
+        crop_rgb = img_bgr[cy1:cy2, cx1:cx2, ::-1]
+        txt = self.backend.generate(_VERIFY_PROMPT.format(phrase=phrase),
+                                    image=crop_rgb, max_new_tokens=16)
+        try:
+            js = json.loads(re.search(r"\{.*\}", txt, re.S).group(0))
+            v = js.get("match")
+            return v if isinstance(v, bool) else None
+        except Exception as e:  # noqa: BLE001
+            log.warning("[vlm-fallback] crop verify failed: %s | raw=%r", e, txt[:120])
             return None
 
 

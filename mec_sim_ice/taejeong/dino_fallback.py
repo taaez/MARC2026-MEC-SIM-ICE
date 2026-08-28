@@ -32,6 +32,24 @@ import numpy as np
 log = logging.getLogger("participant_app")
 
 
+def _from_pretrained_local_first(cls, model_name: str, **kwargs):
+    """캐시에 이미 있으면 로컬에서만 로드 -- 없으면 평범하게 온라인 폴백.
+
+    실측(2026-08-28): HF_HUB_OFFLINE 을 안 켠 로컬 개발 환경에서는 이미 캐시된
+    모델이라도 from_pretrained() 가 매번 config.json/preprocessor_config.json
+    등 여러 파일에 대해 HEAD 요청을 huggingface.co 에 보내(갱신 확인용) 로드
+    시작이 눈에 띄게 늦어진다. local_files_only=True 를 먼저 시도하면 캐시가
+    있을 때 이 네트워크 왕복을 통째로 건너뛴다. 캐시가 없으면(최초 실행) 여기서
+    예외가 나므로 평범한 온라인 로드로 자연스럽게 폴백한다 -- 즉 첫 실행은
+    그대로 동작하고, 그 이후부터는 네트워크를 안 탄다.
+    """
+    try:
+        return cls.from_pretrained(model_name, local_files_only=True, **kwargs)
+    except Exception:
+        log.info("[hf-cache] %s 로컬 캐시 없음 -- 온라인 다운로드", model_name)
+        return cls.from_pretrained(model_name, **kwargs)
+
+
 class _DinoBox:
     """ultralytics box와 같은 최소 인터페이스(.xyxy, .conf) -- _box_center() 등
     기존 호출부를 고치지 않고 그대로 통과시키기 위한 shim."""
@@ -53,9 +71,9 @@ class DinoFallbackDetector:
         # NVIDIA(CUDA, 채점 서버/랩 데스크탑) -> Apple Silicon(MPS, 로컬 Mac 테스트) -> CPU.
         self.device = ("cuda" if torch.cuda.is_available()
                       else "mps" if torch.backends.mps.is_available() else "cpu")
-        self.processor = AutoProcessor.from_pretrained(self.model_name)
-        self.model = AutoModelForZeroShotObjectDetection.from_pretrained(
-            self.model_name).to(self.device).eval()
+        self.processor = _from_pretrained_local_first(AutoProcessor, self.model_name)
+        self.model = _from_pretrained_local_first(
+            AutoModelForZeroShotObjectDetection, self.model_name).to(self.device).eval()
         self.box_thr, self.text_thr = box_thr, text_thr
         log.info("[dino-fallback] loaded %s on %s", self.model_name, self.device)
 
@@ -83,6 +101,58 @@ class DinoFallbackDetector:
         if best_box is None:
             return None
         return _DinoBox(best_box, best_score)
+
+    def best_box_multi_images(self, imgs_bgr: Sequence[np.ndarray],
+                              phrases: Sequence[str]) -> list:
+        """이미지 여러 장(예: 타일 8장)에 대해 각각 best_box() 를 부르는 것과
+        같은 결과를, 이미지 개수만큼 순차 호출하는 대신 phrase 당 배치 호출
+        1번으로 묶어서 낸다.
+
+        실측(2026-08-28): 8분할 타일링을 도입한 뒤 카메라 1대당 (1 whole-frame
+        + 8타일) x phrase 개수(동의어 3~4개) = 최대 36번의 개별 forward 를
+        순차로 돌게 되면서 카메라 1대에 10분 넘게 걸리는 문제가 생겼다. 개별
+        호출마다의 파이썬/전처리 오버헤드가 누적된 게 원인이라, 이미지를 배치로
+        묶으면(phrase 당 1번, 이미지 N장을 한 forward 에) 호출 수가 phrase
+        개수(보통 3~4번)로 줄어든다.
+
+        반환: imgs_bgr 순서대로 Optional[_DinoBox] 리스트.
+        """
+        if not phrases or not imgs_bgr:
+            return [None] * len(imgs_bgr)
+        imgs_rgb = [img[:, :, ::-1] for img in imgs_bgr]
+        best = [(None, -1.0)] * len(imgs_bgr)
+        for phrase in phrases:
+            for i, (box, score) in enumerate(self._detect_batch(imgs_rgb, phrase)):
+                if box is not None and score > best[i][1]:
+                    best[i] = (box, score)
+        return [_DinoBox(box, score) if box is not None else None
+                for box, score in best]
+
+    def _detect_batch(self, imgs_rgb: Sequence[np.ndarray], phrase: str):
+        """phrase 하나를 이미지 여러 장에 배치로 적용 -- 이미지 순서대로
+        (bbox, score) 리스트(없으면 (None, -1.0))."""
+        import torch
+        from PIL import Image
+
+        pils = [Image.fromarray(img) for img in imgs_rgb]
+        text = phrase.strip().rstrip(".") + "."
+        inputs = self.processor(images=pils, text=[text] * len(pils),
+                                return_tensors="pt", padding=True).to(self.device)
+        with torch.inference_mode():
+            out = self.model(**inputs)
+        target_sizes = [pil.size[::-1] for pil in pils]
+        results = self.processor.post_process_grounded_object_detection(
+            out, inputs.input_ids, threshold=self.box_thr, text_threshold=self.text_thr,
+            target_sizes=target_sizes)
+        out_list = []
+        for res in results:
+            box, score = None, -1.0
+            for b, s in zip(res["boxes"], res["scores"]):
+                s = float(s)
+                if s > score:
+                    box, score = tuple(float(v) for v in b.tolist()), s
+            out_list.append((box, score))
+        return out_list
 
     def _detect_one(self, img_rgb: np.ndarray, phrase: str):
         """phrase 하나에 대한 (bbox, score) 중 최고점. 없으면 (None, -1.0)."""
