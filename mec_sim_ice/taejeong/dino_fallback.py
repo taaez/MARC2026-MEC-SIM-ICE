@@ -50,7 +50,9 @@ class DinoFallbackDetector:
         from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
         self.model_name = model_name or os.getenv("MARC_DET_MODEL", "IDEA-Research/grounding-dino-base")
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # NVIDIA(CUDA, 채점 서버/랩 데스크탑) -> Apple Silicon(MPS, 로컬 Mac 테스트) -> CPU.
+        self.device = ("cuda" if torch.cuda.is_available()
+                      else "mps" if torch.backends.mps.is_available() else "cpu")
         self.processor = AutoProcessor.from_pretrained(self.model_name)
         self.model = AutoModelForZeroShotObjectDetection.from_pretrained(
             self.model_name).to(self.device).eval()

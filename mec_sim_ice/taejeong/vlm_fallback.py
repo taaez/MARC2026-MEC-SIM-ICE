@@ -78,7 +78,17 @@ class QwenVLBackend:
 
         self.model_name = model_name or os.getenv("MARC_VLM_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct")
         use_4bit = (os.getenv("MARC_VLM_4BIT", "0") == "1") if use_4bit is None else use_4bit
-        kw = dict(torch_dtype=torch.bfloat16, device_map="cuda" if torch.cuda.is_available() else "cpu")
+        # NVIDIA(CUDA) -> Apple Silicon(MPS) -> CPU.
+        device = ("cuda" if torch.cuda.is_available()
+                 else "mps" if torch.backends.mps.is_available() else "cpu")
+        if use_4bit and device != "cuda":
+            # bitsandbytes 4bit 양자화는 CUDA 전용 -- MPS/CPU 에선 로드 자체가 실패한다.
+            # Mac(M-시리즈)은 통합 메모리가 넉넉한 편이라 4bit 없이 bf16 그대로도
+            # 3B(~6GB)는 대개 무리 없다. 여기서 자동으로 꺼서 조용히 실패하지 않게 한다.
+            log.warning("[vlm-fallback] 4bit 요청했지만 device=%s (CUDA 아님) -- "
+                       "bitsandbytes 미지원이라 무시하고 bf16 그대로 로드합니다", device)
+            use_4bit = False
+        kw = dict(torch_dtype=torch.bfloat16, device_map=device)
         if use_4bit:
             from transformers import BitsAndBytesConfig
             kw["quantization_config"] = BitsAndBytesConfig(
