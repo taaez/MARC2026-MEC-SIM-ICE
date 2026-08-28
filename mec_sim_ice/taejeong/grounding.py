@@ -26,10 +26,13 @@ GENERAL by design — 대회 요구사항("문제·배경이 바뀐다, 씬 하�
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 import numpy as np
+
+log = logging.getLogger("participant_app")
 
 try:                              # package import (e.g. `from taejeong.grounding import ...`)
     from .command_parser import LANDMARK_SYNONYMS, ParsedCommand
@@ -400,10 +403,13 @@ def _relation_fit(cam: CameraModel, a_loc: Located, t_loc: Located,
     합치지 않는 이유: 근접 계열에서 '조금 더 먼데 버킷만 맞는' 후보가 더 가까운
     후보를 이겨버리는 역전이 생기기 때문이다.
 
-    카메라 선택의 주 근거다. CCTV 들은 서로 다른 공간을 보므로(시야가 겹치지
-    않는다) 탐지 confidence 를 카메라 간에 비교하는 것은 근거가 없다 — 서로
-    다른 장면에서 나온 값이기 때문이다. 대신 '명령대로 배치된 쌍이 있는
-    카메라'를 고른다.
+    이 함수의 비교는 **같은 카메라 안에서 랜드마크 인스턴스가 여러 개일 때만**
+    쓴다 (예: 벤치가 두 개 있는데 어느 벤치가 "그" 벤치인지) -- search() 가
+    카메라별로 이 함수를 써서 로컬 승자를 먼저 뽑고, 카메라 간 비교는 별도
+    로직(bucket 우선)을 쓴다. 같은 씬 안에서는 raw 거리가 실제로 비교 가능한
+    값이라 근접도를 주 신호로 두는 게 맞다(2026-08-28: 한때 이 함수 자체를
+    카메라 간 비교에도 그대로 썼다가 T3/T5 동일 씬 최근접 인스턴스 테스트가
+    깨져서 되돌림 -- 카메라 간 비교는 search() 참고).
     """
     gap = (float(np.linalg.norm(t_loc.base[:2] - a_loc.base[:2]))
            - a_loc.radius - t_loc.radius)
@@ -570,12 +576,32 @@ def resolve(parsed: ParsedCommand,
               for cid in gated}
 
     # -- 2) relation 적합도로 (카메라, target, anchor) 선택 --
+    #
+    # 2단계로 나눈다(2026-08-28) -- 한 함수로 카메라 안/밖 비교를 다 하다가
+    # 서로 다른 요구를 동시에 못 맞추는 문제가 생겼다:
+    #   실측 A (pencilcase lf07): "picnic_table" 이 인스턴스 구분 없이
+    #     rig_1_a/rig_3_b 둘 다에 매치되자, 오답 카메라의 엉뚱한 물체가 자기
+    #     랜드마크에 거의 닿아있어(prox=1.0) 관계 버킷은 안 맞는데도(anchor
+    #     대비 "on"에 가까워 "near" 버킷 불일치) 진짜 정답(prox=0.226, 버킷은
+    #     맞음)을 근접도만으로 이겼다 -- 카메라 간 비교는 버킷 우선이어야 함.
+    #   실측 B (test_grounding.py T3/T5): 그런데 버킷을 무조건 주 신호로
+    #     바꿨더니, **같은 카메라 안에** 벤치가 두 개 있을 때 정작 더 가까운
+    #     벤치가 "beside" 로 분류돼(버킷 불일치) 더 먼 벤치("near" 버킷 일치,
+    #     실은 그냥 catch-all)에 밀렸다 -- 같은 씬 안에서는 raw 거리가 실제로
+    #     비교 가능한 값이라 근접도 우선이 맞다(최근접 인스턴스 선택).
+    # 그래서 카메라 안에서는 기존 _relation_fit()(근접 계열은 prox 우선)으로
+    # 로컬 승자를 먼저 뽑고, 카메라 사이에서는 버킷 일치를 주 신호로 다시
+    # 고른다 -- "서로 다른 장면의 raw gap 은 비교 근거가 없다"는 이미 있던
+    # confidence 비배제 원칙을 prox 에도 똑같이 적용한 것뿐이다.
+    all_candidates = []   # 진 후보 포함 전부 -- 로깅/분석용
+    hint_nearish = parsed.relation_hint in NEARISH_RELATIONS
     def search(target_ok):
         # 후보 = (관계적합도_주, 관계적합도_부, 탐지conf, cam_id, t_loc, a_loc).
         # 앞 3개까지만 비교한다 — conf 는 관계 적합도가 동점일 때의 최후 수단.
-        best = None
+        per_cam_best = {}
         for cam_id in gated:
             cam, dets, _adets = per_cam[cam_id]
+            cam_best = None
             for tdet in (d for d in dets if target_ok(d)):
                 t0 = locate(cam, tdet, push=cfg.footprint_push)
                 if t0 is None:
@@ -589,15 +615,32 @@ def resolve(parsed: ParsedCommand,
                     fit = _relation_fit(cam, a_loc, t_loc, cfg,
                                         parsed.relation_hint)
                     cand = (fit[0], fit[1], tdet.score, cam_id, t_loc, a_loc)
-                    if best is None or cand[:3] > best[:3]:
-                        best = cand
+                    all_candidates.append(cand)
+                    if cam_best is None or cand[:3] > cam_best[:3]:
+                        cam_best = cand
                 if not paired:
                     # 랜드마크가 없는 카메라 (게이트가 풀렸을 때만 여기 온다).
                     # 비교 근거가 confidence 뿐이라 적합도 0 으로 최하위에 둔다.
                     cand = (0.0, 0.0, tdet.score, cam_id, t0, None)
-                    if best is None or cand[:3] > best[:3]:
-                        best = cand
-        return best
+                    all_candidates.append(cand)
+                    if cam_best is None or cand[:3] > cam_best[:3]:
+                        cam_best = cand
+            if cam_best is not None:
+                per_cam_best[cam_id] = cam_best
+
+        if not per_cam_best:
+            return None
+
+        # 카메라 간 최종 선택: bucket 일치를 주 신호로, (prox/방향적합도, conf)
+        # 는 동점 처리로만 쓴다. hint 에 따라 _relation_fit() 의 튜플 순서가
+        # 달라서(근접 계열은 (prox,bucket), 방향 계열은 이미 (bucket,prox))
+        # 여기서 hint_nearish 로 표준화해 뽑는다.
+        def cross_key(cand):
+            fit_a, fit_b, conf = cand[0], cand[1], cand[2]
+            bucket_val, prox_val = (fit_b, fit_a) if hint_nearish else (fit_a, fit_b)
+            return (bucket_val, prox_val, conf)
+        best_cam_id = max(per_cam_best, key=lambda cid: cross_key(per_cam_best[cid]))
+        return per_cam_best[best_cam_id]
 
     best = search(lambda d: _target_ok(d.label, parsed))
     relaxed = False
@@ -607,8 +650,19 @@ def resolve(parsed: ParsedCommand,
                       or d.label == "person")
         relaxed = best is not None
 
+    # 로깅용 요약 -- (cam_id, fit_a, fit_b, conf) 만 남기고 Located 는 뺀다.
+    # 랜드마크 클래스가 카메라 2대 이상에서 매치돼 실제로 경쟁이 있었을 때만
+    # 찍는다(매 호출마다 찍으면 로그가 너무 많아진다) -- 인스턴스 구분 없는
+    # 랜드마크 매칭 때문에 근소한 차이로 오답이 이기는지 확인하는 용도.
+    candidates_summary = [(cid, round(fa, 3), round(fb, 3), round(c, 3))
+                          for fa, fb, c, cid, _t, _a in all_candidates]
+    if len({c[0] for c in candidates_summary}) > 1:
+        log.info("[grounding] pair 후보 %d개(카메라 %d대) 경쟁: %s",
+                 len(candidates_summary),
+                 len({c[0] for c in candidates_summary}), candidates_summary)
+
     gate_info = {"gate_applied": gate_applied, "gate_kind": gate_kind,
-                 "gate_cameras": sorted(gated)}
+                 "gate_cameras": sorted(gated), "candidates": candidates_summary}
     if best is not None:
         fit_a, fit_b, _, cam_id, t_loc, a_loc = best
         return _build_decision(
