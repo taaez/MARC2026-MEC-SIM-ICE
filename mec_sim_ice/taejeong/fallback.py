@@ -189,13 +189,23 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
         return
 
     lm = parsed.landmark_type
-    if lm and not any(_landmark_ok(d.label, lm)
-                      for dets in detections.values() for d in dets):
+    if lm:
         # 제너릭 "car" 힌트도 그대로 label 로 쓴다 -- grounding.CAR_CLASSES 에
         # "car" 가 포함돼 _landmark_ok 를 통과하고, situation 규칙의 support
         # 토큰 정규화도 "car" 를 안다.
         phrases = LANDMARK_SYNONYMS.get(lm, [lm.replace("_", " ")])
         for cam_id, img in images.items():
+            # 카메라별로 판단한다(2026-08-28 수정) -- 예전엔 "어느 카메라에서든
+            # YOLO가 하나라도 찾으면 전체를 건너뛰었는데, landmark 클래스는
+            # (trash_can 등) 흔한 물체라 여러 카메라에 각각 따로 있는 게
+            # 정상이다. 실측(umbrella_fallenbike lf06): YOLO가 rig_1_a/
+            # rig_2_b/rig_7_a 에서 trash_can 을 이미 찾아서(conf 0.97) 전역
+            # 가드가 막혀 정답 카메라 rig_3_b 는 DINO 호출조차 안 갔다 --
+            # 그런데 rig_3_b 를 DINO 로 직접 태워보면 score=0.78 로 바로
+            # 찾는다(같은 위치). 즉 탐지력 문제가 아니라 "이미 어딘가에서
+            # 찾았으니 됐다"는 전역 가드가 카메라별 확인 자체를 막고 있었다.
+            if any(_landmark_ok(d.label, lm) for d in detections.get(cam_id, [])):
+                continue                  # 이 카메라는 YOLO 가 이미 찾음 -- 스킵
             box = dino.best_box(img, phrases)
             if box is not None:
                 detections.setdefault(cam_id, []).append(Detection(
@@ -214,9 +224,17 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
         # landmark_cams 가 비면(끝내 못 찾음) 범위를 안 좁힌다 -- resolve() 도
         # 이 경우 게이트를 풀어(전체 카메라) 재탐색하므로 동작을 맞춘다.
 
-    if target_phrases and not any(_target_ok(d.label, parsed)
-                                  for dets in detections.values() for d in dets):
+    if target_phrases:
         for cam_id, img in target_scope.items():
+            # 카메라별로 판단한다(2026-08-28 수정, landmark 와 같은 이유) --
+            # 예전엔 "어느 카메라에서든 YOLO가 하나라도 찾으면" 전체를
+            # 건너뛰었는데, target 클래스도(umbrella 등 YOLO 가 잘 아는
+            # 클래스라도) 카메라마다 있고 없고가 갈릴 수 있다. YOLO가 다른
+            # 카메라에서 이미 찾았다고 해서 정답 카메라에도 있다는 보장이
+            # 없다 -- 그 카메라만 DINO 로 못 보고 넘어가면 애초에 후보에도
+            # 못 들어간다.
+            if any(_target_ok(d.label, parsed) for d in detections.get(cam_id, [])):
+                continue                  # 이 카메라는 YOLO 가 이미 찾음 -- 스킵
             box = _dino_best_box_tiled(dino, img, target_phrases)
             if box is not None:
                 detections.setdefault(cam_id, []).append(Detection(
