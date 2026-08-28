@@ -54,11 +54,19 @@ for _candidate in (os.path.join(_HERE, "test"), os.path.join(_HERE, "demo"),
         break
 from det_classes import LANDMARK_CLASSES, POSE_CLASSES  # noqa: E402
 
-from taejeong.command_parser import parse_command  # noqa: E402
+from taejeong.command_parser import (  # noqa: E402
+    LANDMARK_SYNONYMS,
+    OBJECT_SYNONYMS,
+    parse_command,
+)
+from taejeong.dino_fallback import DinoFallbackDetector
+from taejeong.dino_fallback import is_disabled as dino_disabled  # noqa: E402
 from taejeong.situation_resolver import (  # noqa: E402
     normalize_support_token,
     resolve_situation,
 )
+from taejeong.vlm_fallback import VlmTargetResolver
+from taejeong.vlm_fallback import is_disabled as vlm_disabled  # noqa: E402
 
 log = logging.getLogger("participant_app")
 
@@ -105,6 +113,24 @@ class RealVLAGrounding:
         # 넘어간다. 수집한 기록은 tools/run_offline_real_vla.py 로 재실행한다.
         self._record_only = os.getenv("MARC_RECORD_ONLY", "").lower() in ("1", "true", "yes")
         self._det = None if self._record_only else YOLO(det_weights)
+        # DINO 2차 탐지 폴백: YOLO가 실패했을 때만 쓴다(§7 규칙대로 생성자에서 로드).
+        # torch/transformers 미설치 개발 환경(예: GPU 없는 노트북)에서도 본 파이프라인
+        # 자체는 죽지 않도록, 로드 실패는 경고만 남기고 폴백 없이 진행한다.
+        self._dino = None
+        if not self._record_only and not dino_disabled():
+            try:
+                self._dino = DinoFallbackDetector()
+            except Exception as e:  # noqa: BLE001
+                log.warning("[vla] DINO fallback unavailable (%s) -- YOLO miss = no rescue", e)
+        # VLM 텍스트 폴백: command_parser가 target을 아예 못 뽑았을 때만 쓴다(§7 규칙대로
+        # 생성자에서 로드). 8GB 로컬+Isaac Sim 동시 구동 시 VRAM이 타이트할 수 있으니
+        # MARC_DISABLE_VLM=1로 끄고 eval_offline.py/records 재실행으로 따로 검증할 것.
+        self._vlm = None
+        if not self._record_only and not vlm_disabled():
+            try:
+                self._vlm = VlmTargetResolver()
+            except Exception as e:  # noqa: BLE001
+                log.warning("[vla] VLM fallback unavailable (%s) -- OOV target = no rescue", e)
         # tf2 needs client.node, which only exists after client.connect() -- init lazily
         # on first use rather than here (RealVLAGrounding is constructed before connect()).
         self._tf_buffer = None
@@ -137,6 +163,19 @@ class RealVLAGrounding:
         parsed = parse_command(command)
         target_type = parsed.target_type or ("person" if parsed.is_person else "")
         landmark = parsed.landmark_type or ""
+
+        # target_type 파싱 실패(닫힌 어휘 밖 단어) -> VLM에게 한 번 더 묻는다.
+        # 성공하면 알던 클래스로 복귀(정상 YOLO 경로 그대로 탄다), 실패하면
+        # DINO에 넘길 검색어(vlm_search_phrase)만 얻고 target_type은 빈 채로 둔다.
+        vlm_search_phrase = None
+        if not target_type and not parsed.is_person and self._vlm is not None:
+            matched, phrase = self._vlm.resolve(command, OBJECT_SYNONYMS.keys())
+            if matched:
+                target_type = matched
+                log.info("[vla] VLM fallback resolved OOV wording -> %r", matched)
+            elif phrase:
+                vlm_search_phrase = phrase
+                log.info("[vla] VLM fallback: unknown object, DINO search phrase=%r", phrase)
 
         # Grab every camera frame up front (not lazily inside the match loop) so a
         # MARC_RECORD_DIR dump always contains the full round regardless of which
@@ -199,6 +238,39 @@ class RealVLAGrounding:
             )
             self._record(stage, command, images, result.to_payload())
             return result
+
+        # -- YOLO가 전 카메라에서 실패 -> DINO로 한 번 더 (사물 문제만; 사람/situation
+        #    문제는 pose 분류가 필요해 개방어휘 탐지기로 구제 불가하므로 대상 밖) --
+        if self._dino is not None and not parsed.is_person and (target_type or vlm_search_phrase):
+            # target_type이 있으면 그 클래스의 동의어들로 검색(정밀), 없으면(VLM이 준
+            # 자유 검색어만 있는 완전 신규 물체) 그 phrase 하나로 검색(관대).
+            target_phrases = (self._dino_phrases(target_type, OBJECT_SYNONYMS) if target_type
+                              else [vlm_search_phrase])
+            for cam_id in camera_ids:
+                img = images.get(cam_id)
+                if img is None:
+                    continue
+                target_box = self._dino.best_box(img, target_phrases)
+                if target_box is None:
+                    continue
+
+                anchor_box = None
+                if landmark:
+                    anchor_box = self._dino.best_box(img, self._dino_phrases(landmark, LANDMARK_SYNONYMS))
+                    if anchor_box is None:
+                        continue  # landmark not visible here -- wrong camera
+
+                target_coord = self._pixel_to_world(cam_id, self._box_center(target_box))
+                anchor_coord = (self._pixel_to_world(cam_id, self._box_center(anchor_box))
+                                 if anchor_box is not None else target_coord)
+                result = GroundingResult(
+                    camera_id=cam_id, target_type=target_type,
+                    anchor_coord=anchor_coord, target_coord=target_coord,
+                    landmark=landmark, relation=parsed.relation_hint, situation=None,
+                )
+                log.info("[vla] DINO fallback rescued %s on %s (YOLO missed it)", target_type, cam_id)
+                self._record(stage, command, images, result.to_payload())
+                return result
 
         log.warning("[vla] no camera matched target=%r landmark=%r pose_hint=%r",
                     target_type, landmark, parsed.pose_hint)
@@ -271,6 +343,18 @@ class RealVLAGrounding:
                 "width": int(info.width), "height": int(info.height)}
 
     # -- detection helpers --
+
+    @staticmethod
+    def _dino_phrases(class_name: str, synonym_table: dict) -> list:
+        """클래스명 -> DINO 검색용 자연어 phrase 목록.
+
+        command_parser.py의 동의어 사전을 그대로 재사용(어휘 이원화 방지).
+        빈 문자열(파싱 자체가 실패한 OOV 케이스)이면 검색할 phrase가 없다 --
+        그 경우 호출부는 이 함수 대신 VLM 폴백이 만든 vlm_search_phrase를 쓴다.
+        """
+        if not class_name:
+            return []
+        return synonym_table.get(class_name, [class_name.replace("_", " ")])
 
     @staticmethod
     def _best_box(det, class_names):
