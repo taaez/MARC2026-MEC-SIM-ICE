@@ -71,22 +71,20 @@ class DinoFallbackDetector:
         # NVIDIA(CUDA, 채점 서버/랩 데스크탑) -> Apple Silicon(MPS, 로컬 Mac 테스트) -> CPU.
         self.device = ("cuda" if torch.cuda.is_available()
                       else "mps" if torch.backends.mps.is_available() else "cpu")
-        # torch_dtype 을 안 정해주면 fp32 로 로드된다 -- vlm_fallback.py 는 이미
-        # bf16 인데 DINO 만 그대로였다. 실측(2026-08-29, 윈도우 RTX 4070): 타일링
-        # 폴백(_dino_best_box_tiled, 8타일 배치)이 걸린 pencilcase 한 카메라가
-        # 2분 넘게 걸렸다 -- fp32 는 텐서 코어(fp16/bf16 전용 가속)를 못 써서
-        # CUDA 에서 수 배 느리다. CUDA만 bf16 로 낮춘다 -- MPS 는 이 모델의
-        # 일부 연산(행렬곱 커널)이 bf16 조합에서 바로 assert 로 죽는 걸 실측으로
-        # 확인해서(2026-08-29, MPSNDArrayMatrixMultiplication dtype mismatch)
-        # 제외, CPU 도 가속기가 없어 낮출 이득이 없다.
-        self.dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+        # fp32 유지 (2026-08-29 되돌림). bf16 로 낮춰 속도를 올려보려 했으나
+        # (커밋 ef3c254) 실측(윈도우 RTX 4070, 실제 --fallback 실행): grounding-dino
+        # 의 텍스트/비전 결합 레이어(text_enhancer_layer)에서 "mat1 and mat2 must
+        # have the same dtype, but got Float and BFloat16" 로 즉시 크래시했다 --
+        # 이 모델 구현이 torch_dtype 을 전체에 균일하게 적용하지 않아(비전은
+        # bf16 인데 텍스트 쪽 일부가 fp32 로 남는 걸로 보임) 우리가 processor
+        # 출력만 캐스팅하는 정도로는 못 맞춘다. CUDA 장비가 로컬에 없어 실측
+        # 없이 넣은 게 원인 -- 느려도 안전한 fp32 로 복구, bf16 은 재도전 안 함.
+        self.dtype = torch.float32
         self.processor = _from_pretrained_local_first(AutoProcessor, self.model_name)
         self.model = _from_pretrained_local_first(
-            AutoModelForZeroShotObjectDetection, self.model_name,
-            torch_dtype=self.dtype).to(self.device).eval()
+            AutoModelForZeroShotObjectDetection, self.model_name).to(self.device).eval()
         self.box_thr, self.text_thr = box_thr, text_thr
-        log.info("[dino-fallback] loaded %s on %s (dtype=%s)",
-                 self.model_name, self.device, self.dtype)
+        log.info("[dino-fallback] loaded %s on %s", self.model_name, self.device)
 
     def best_box(self, img_bgr: np.ndarray, phrases: Sequence[str]) -> Optional[_DinoBox]:
         """phrases 중 아무거나 매치되는 것 중 가장 점수 높은 박스 하나. 없으면 None.
