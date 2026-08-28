@@ -18,5 +18,6 @@ simulation-platform/.env
 # 제출 시에는 도커 이미지에 baking 해야 하므로 별도 조치가 필요하다.
 demo/weights/
 *.pt
+*.pt.bak
 # 채점 결과 원본은 results/(위에서 무시) 에 쌓이고, 보존할 실행만 아래로 복사한다.
 !taejeong/validation/runs/*.jsonl
