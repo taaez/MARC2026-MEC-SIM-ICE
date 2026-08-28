@@ -392,6 +392,56 @@ def _support_adjusted(cam: CameraModel, tdet: Detection, t_loc: Located,
     return t_loc
 
 
+def _open_space_pick(gated, per_cam, a_locs, target_ok,
+                     cfg: GroundingConfig) -> Optional[tuple]:
+    """"빈 자리/열린 바닥" 명령 전용 선택. 적용 못 하면 None (→ 일반 경로 폴백).
+
+    target 선택과 landmark 선택을 **분리**한다:
+      - target 은 '여유(clearance) = 최근접 랜드마크까지 거리' 가 가장 큰 것.
+        "비어 있다"는 말 자체가 '무언가 옆에 붙어 있지 않다'는 뜻이라, 평소의
+        근접 선호를 그대로 쓰면 명령과 정반대인 후보(차 옆에 붙은 디코이)를
+        고르게 된다.
+      - landmark 는 그렇게 고른 target 의 **최근접** 객체. 여기서까지 '먼 것'을
+        고르면 앵커 좌표가 엉뚱해진다 (실측으로 확인: 쌍으로 묶어 고르면
+        anchor/landmark 점수가 같이 떨어졌다).
+
+    **절대 거리 임계값을 쓰지 않는다.** "비어 있다"가 몇 미터를 뜻하는지는
+    공간 규모에 따라 다르고(넓은 광장 vs 좁은 통로), 연습 씬에서 잰 값을
+    기준으로 삼으면 배경이 바뀔 때 그대로 깨진다. 여기서 하는 판정은 후보들
+    **사이의 상대 비교**뿐이다 -- "어느 쪽이 더 트여 있는가". 그래서 규모가
+    달라져도 성립한다.
+
+    적용 조건: 후보가 2개 이상일 때만. 하나뿐이면 고를 것이 없어 일반 경로와
+    결과가 같으므로, 굳이 다른 경로를 타지 않는다.
+    """
+    cands = []
+    for cam_id in gated:
+        cam, dets, _adets = per_cam[cam_id]
+        for tdet in (d for d in dets if target_ok(d)):
+            t0 = locate(cam, tdet, push=cfg.footprint_push)
+            if t0 is None:
+                continue
+            nearest = None
+            for adet, a_loc in a_locs[cam_id]:
+                if adet is tdet:
+                    continue
+                gap = (float(np.linalg.norm(t0.base[:2] - a_loc.base[:2]))
+                       - a_loc.radius - t0.radius)
+                if nearest is None or gap < nearest[0]:
+                    nearest = (gap, a_loc)
+            if nearest is None:
+                continue                      # 랜드마크가 없는 카메라
+            # 겹침(음수)은 0 으로만 자른다 — 상한을 두면 그 값이 곧 절대 임계가 된다.
+            clearance = max(nearest[0], 0.0)
+            cands.append((clearance, tdet.score, cam_id, t0, nearest[1]))
+
+    if len(cands) < 2:
+        return None
+    cands.sort(key=lambda c: (-c[0], -c[1]))
+    clearance, score, cam_id, t_loc, a_loc = cands[0]
+    return (clearance, 0.0, score, cam_id, t_loc, a_loc)
+
+
 def _relation_fit(cam: CameraModel, a_loc: Located, t_loc: Located,
                   cfg: GroundingConfig, hint: Optional[str]) -> tuple:
     """이 (anchor, target) 쌍이 명령이 말한 관계를 얼마나 잘 실현하는가.
@@ -569,10 +619,20 @@ def resolve(parsed: ParsedCommand,
                     if loc is not None]
               for cid in gated}
 
+    # 랜드마크를 지목하지 않은 채 "빈 자리/열린 바닥"이라고 명시한 명령인가.
+    # (랜드마크가 지목됐다면 관계가 이미 확정돼 있어 이 해석이 끼어들 자리가 없다.)
+    open_space = parsed.landmark_type is None and parsed.open_space
+
     # -- 2) relation 적합도로 (카메라, target, anchor) 선택 --
     def search(target_ok):
         # 후보 = (관계적합도_주, 관계적합도_부, 탐지conf, cam_id, t_loc, a_loc).
         # 앞 3개까지만 비교한다 — conf 는 관계 적합도가 동점일 때의 최후 수단.
+        if open_space:
+            picked = _open_space_pick(gated, per_cam, a_locs, target_ok, cfg)
+            if picked is not None:
+                return picked
+            # 후보가 하나거나 여유 차이가 애매하면 아래 일반 경로로 되돌아간다.
+
         best = None
         for cam_id in gated:
             cam, dets, _adets = per_cam[cam_id]
