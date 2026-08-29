@@ -56,6 +56,27 @@ _TILE_UNCERTAIN_THR = 0.3
 # 진짜 없을 확률이 높다.
 _LANDMARK_MIN_CONF = 0.65
 
+# 같은 카메라 안에서 DINO 가 찾은 박스가 YOLO 가 이미 찾은 것과 "같은 물건"인지
+# 판정하는 IoU 문턱. 이보다 겹치면 재탐지(새 정보 없음)로 보고 버리고, 이하면
+# 카메라 안의 다른 인스턴스로 보고 추가한다(2026-08-29, sar01/sarH4 -- 아래
+# dino_augment 랜드마크 루프 참고).
+_SAME_INSTANCE_IOU = 0.3
+
+
+def _iou(a: tuple, b: tuple) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0.0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    return inter / union if union > 0.0 else 0.0
+
 # whole-frame 이 불확실해 타일링으로 넘어갈 때, phrase 전부를 8타일에 태우지
 # 않고 유력한 것만 추려서 태운다. 실측(2026-08-28, pencilcase): 카메라 1대당
 # 8타일 x phrase(보통 3~4개)가 병목이었다 -- 여기서 phrase 를 topk 로 줄이면
@@ -258,8 +279,25 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
 
     detections dict 에 Detection 을 추가할 뿐 별도 제출 경로가 없다 --
     resolve() 의 카메라 게이트/기하 판정/relation 적합도가 폴백 탐지에도
-    똑같이 적용된다. dino 가 None 이면 아무것도 안 함. 사람 문제는 pose
-    분류가 필요해 대상 밖.
+    똑같이 적용된다. dino 가 None 이면 아무것도 안 함.
+
+    사람 문제는 **target(사람) 재탐지만** 대상 밖이다 -- pose 분류가 필요해
+    DINO 로는 못 한다. landmark 보강은 2026-08-29부터 사람 문제에도 켠다:
+    pose 와 무관한 순수 물체 탐지라 못 할 이유가 없는데, 예전엔 이 함수
+    맨 위에서 `parsed.is_person` 하나로 통째로 걸러 landmark 까지 같이
+    막고 있었다. 실측(sar01/sarH4, 둘 다 "sitting on top of the trash
+    can"): YOLO 가 그 카메라에서 trash_can 을 하나 찾긴 하는데, 그게
+    사람이 앉은 진짜 trash_can 이 아니라 7.6m 떨어진 다른 인스턴스였다
+    (같은 카메라에 같은 클래스 물체가 여러 개 있는 상황 -- RUNBOOK 의 rt01
+    police_car/normal_car_1 사례와 뿌리가 같다). 그 결과 anchor 좌표가
+    엉뚱한 물체를 가리키고
+    (anchor=0), classify_relation() 이 "on" 을 못 내려 situation 도
+    기본값으로 떨어진다(object_type=0) -- 사람 자체(target)는 GT 1.9m
+    이내로 정확히 찾았는데도 두 필드가 통째로 0점이었다. landmark 보강을
+    열어 두면 두 번째(더 가까운) 인스턴스를 DINO 가 찾을 기회가 생기고,
+    resolve() 는 이미 카메라당 여러 랜드마크 인스턴스를 놓고 쌍 스코어링
+    하도록 돼 있으니(§2) 그 중 실제로 맞는 짝을 고르는 건 기존 로직이
+    그대로 한다 -- 새 선택 규칙이 필요 없다.
 
     target 탐지는 카메라별로 _dino_best_box_tiled() 를 거친다 -- whole-frame
     이 불확실하면(장면 대비 물체가 작아 confidence 가 낮으면) 8분할 재탐색으로
@@ -287,7 +325,7 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
     어차피 버려지는데 실측(9번, landmark 없음)에서 이게 없어 6대 전부에
     8분할이 돌아 카메라당 최대 36 forward x 6 = 216 이 걸리고 있었다.
     """
-    if dino is None or parsed.is_person:
+    if dino is None:
         return
 
     lm = parsed.landmark_type
@@ -319,22 +357,11 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
         # lf07/rtC2 = +107.3점 유지). 즉 "나빠지는 경로가 없다"는 폴백 원칙 복구다.
         yolo_lm_cams = {cid for cid, dets in detections.items()
                         if any(_landmark_ok(d.label, lm) for d in dets)}
-        if len(yolo_lm_cams) == 1:
-            log.info("[fallback] landmark %r 은 YOLO 가 이미 %s 1대로 확정 -- DINO "
-                     "구제 생략(게이트 확장 방지)", lm, next(iter(yolo_lm_cams)))
-        rescue_cams = {} if len(yolo_lm_cams) == 1 else images
-        for cam_id, img in rescue_cams.items():
-            # 카메라별로 판단한다(2026-08-28 수정) -- 예전엔 "어느 카메라에서든
-            # YOLO가 하나라도 찾으면 전체를 건너뛰었는데, landmark 클래스는
-            # (trash_can 등) 흔한 물체라 여러 카메라에 각각 따로 있는 게
-            # 정상이다. 실측(umbrella_fallenbike lf06): YOLO가 rig_1_a/
-            # rig_2_b/rig_7_a 에서 trash_can 을 이미 찾아서(conf 0.97) 전역
-            # 가드가 막혀 정답 카메라 rig_3_b 는 DINO 호출조차 안 갔다 --
-            # 그런데 rig_3_b 를 DINO 로 직접 태워보면 score=0.78 로 바로
-            # 찾는다(같은 위치). 즉 탐지력 문제가 아니라 "이미 어딘가에서
-            # 찾았으니 됐다"는 전역 가드가 카메라별 확인 자체를 막고 있었다.
-            if any(_landmark_ok(d.label, lm) for d in detections.get(cam_id, [])):
-                continue                  # 이 카메라는 YOLO 가 이미 찾음 -- 스킵
+
+        def _try_rescue(cam_id, img, allow_second_instance):
+            existing = [d for d in detections.get(cam_id, []) if _landmark_ok(d.label, lm)]
+            if existing and not allow_second_instance:
+                return          # 이 카메라는 YOLO 가 이미 찾음 -- 스킵 (원래 동작)
             box = dino.best_box(img, phrases)
             if box is not None and float(box.conf[0]) < _LANDMARK_MIN_CONF:
                 log.info("[fallback] DINO landmark %r on %s 기각 (conf=%.2f < %.2f, "
@@ -342,11 +369,42 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
                          "잘 못 구분함)", lm, cam_id, float(box.conf[0]),
                          _LANDMARK_MIN_CONF)
                 box = None
-            if box is not None:
-                detections.setdefault(cam_id, []).append(Detection(
-                    label=lm, bbox=tuple(box.xyxy[0]), score=float(box.conf[0])))
-                log.info("[fallback] DINO rescued landmark %r on %s (conf=%.2f)",
-                         lm, cam_id, float(box.conf[0]))
+            if box is None:
+                return
+            new_bbox = tuple(float(v) for v in box.xyxy[0])
+            if existing and any(_iou(new_bbox, d.bbox) > _SAME_INSTANCE_IOU
+                                for d in existing):
+                return          # YOLO 가 이미 찾은 것과 같은 물건 -- 새 정보 없음
+            detections.setdefault(cam_id, []).append(Detection(
+                label=lm, bbox=new_bbox, score=float(box.conf[0])))
+            tag = "추가(다른 인스턴스)" if existing else "구제"
+            log.info("[fallback] DINO %s landmark %r on %s (conf=%.2f)",
+                     tag, lm, cam_id, float(box.conf[0]))
+
+        # 카메라 범위(게이트 확장 방지, 물체/사람 문제 공통): 정확히 1대로
+        # 확정됐을 때만 "변별력이 높다"는 판단이 성립해(위 taxi 주석) 그
+        # 밖은 안 연다. 0대/2대+ 면 이 판단이 성립하지 않으니 원래(2026-08-28)
+        # 동작대로 전체 카메라를 연다 -- 안 그러면 YOLO 가 하나도 못 본 진짜
+        # 정답 카메라(hf06 의 rig_3_b 처럼)까지 막힌다.
+        allowed_cams = ({next(iter(yolo_lm_cams))} if len(yolo_lm_cams) == 1
+                        else set(images))
+
+        # "이미 하나 찾았으면 그 카메라는 스킵" 은 물체 문제에만 적용한다
+        # (2026-08-28 원래 동작, hf06/lf06/lf07/rtC2 검증 완료 -- 코퍼스
+        # 전체에 걸어 두면 이미 성공한 카메라에도 매번 DINO 가 돌아 느려진다:
+        # 실측으로 이 스킵을 빼자 라운드 평균 6.2s -> 10.0s, 30초 초과
+        # 3건 -> 4건). 사람 문제는 스킵하지 않고 "다른 인스턴스"를 계속
+        # 찾는다 -- 2026-08-29 실측(sar01/sarH4, "sitting on top of the
+        # trash can"): YOLO 가 그 카메라에서 trash_can 을 찾긴 했는데(3대
+        # 모두에서!) 사람이 앉은 진짜 물건이 아니라 7.6m 떨어진 다른
+        # 인스턴스였다. person 문제는 14/39 로 적어 비용이 코퍼스 전체에
+        # 번지지 않는다.
+        for cam_id in allowed_cams:
+            _try_rescue(cam_id, images[cam_id], allow_second_instance=parsed.is_person)
+
+    if parsed.is_person:
+        return   # target(사람) 재탐지는 여전히 대상 밖 -- pose 분류가 필요해
+                 # DINO 로는 못 한다. landmark 보강은 위에서 이미 끝났다.
 
     target_scope = images
     scope_cams: Optional[set] = None
