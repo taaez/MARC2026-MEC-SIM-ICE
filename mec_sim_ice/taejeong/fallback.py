@@ -21,15 +21,19 @@ import logging
 from typing import Optional
 
 try:                              # package import (e.g. `from taejeong.fallback import ...`)
-    from .command_parser import LANDMARK_SYNONYMS, OBJECT_SYNONYMS, ParsedCommand
+    from .command_parser import (LANDMARK_SYNONYMS, OBJECT_SYNONYMS, POSE_BUCKETS,
+                                 ParsedCommand)
     from .grounding import (AREA_DOMINANCE_RATIO, AREA_INDICATOR_CLASSES,
                             Detection, _landmark_ok, _target_ok)
     from .yolo_adapter import SMALL_TARGET_MIN_CONF
 except ImportError:               # flat import (offline_score.py 등, taejeong/ 자체가 sys.path)
-    from command_parser import LANDMARK_SYNONYMS, OBJECT_SYNONYMS, ParsedCommand
+    from command_parser import (LANDMARK_SYNONYMS, OBJECT_SYNONYMS, POSE_BUCKETS,
+                                ParsedCommand)
     from grounding import (AREA_DOMINANCE_RATIO, AREA_INDICATOR_CLASSES,
                            Detection, _landmark_ok, _target_ok)
     from yolo_adapter import SMALL_TARGET_MIN_CONF
+
+_POSE_BUCKET_NAMES = [name for name, _ in POSE_BUCKETS]
 
 log = logging.getLogger("participant_app")
 
@@ -280,15 +284,28 @@ def _dino_best_box_tiled(dino, img, phrases, uncertain_thr: float = _TILE_UNCERT
 
 
 def vlm_assist(command: str, parsed: ParsedCommand, vlm) -> Optional[list]:
-    """VLM 보조 2건: behind 중의 중재 + OOV target 재해석 (parsed 제자리 수정).
+    """VLM(텍스트 전용) 보조 5건 -- 전부 "이 문장이 뭘 말하는지" 순수 언어
+    이해뿐이고, 이미지 판단은 절대 안 한다(parsed 제자리 수정):
+      1. behind 중의 중재 (leave-behind 구동사 vs 공간관계)
+      2. landmark OOV 재해석 (2026-08-29 추가)
+      3. is_person 재분류 (2026-08-29 추가)
+      4. pose_hint 재해석 (2026-08-29 추가)
+      5. target OOV 재해석 (기존)
 
-    vlm 이 None 이면 아무것도 안 하고(비활성화), 아는 클래스면 동의어 사전을
-    그대로 반환한다.
+    vlm 이 None 이면 전부 스킵(비활성화). 2~4는 텍스트 규칙(command_parser)
+    이 이미 확신하는 문장에는 안 건다 -- 규칙표가 이미 정답을 내는 39/39
+    코퍼스에서는 전부 0회 호출이어야 정상이다(기존 target/behind 보조와
+    같은 원칙). **TODO(테스트 필요)**: 2~4는 아직 실제 모델로 검증한 적이
+    없다(vlm_fallback.py 모듈 docstring 참고) -- 검증 전에는 제출
+    기본값(VLM 기본 OFF)을 바꾸지 말 것.
 
     반환: DINO 검색용 target phrase 목록. 아는 클래스면 동의어 사전, 진짜
     신규 물체면 VLM 이 만든 검색어 1개, 해석 불능/사람 문제면 None.
     """
-    if (vlm is not None and not parsed.is_person
+    if vlm is None:
+        return None
+
+    if (not parsed.is_person
             and parsed.relation_hint == "behind" and not parsed.relation_confident):
         # 구동사 leave-behind vs 공간관계 -- command_parser 가 confident 를
         # 낮춘 중의 문장만 온다. phrasal 이면 물건은 그 자리 근처에 남은 것.
@@ -298,9 +315,45 @@ def vlm_assist(command: str, parsed: ParsedCommand, vlm) -> Optional[list]:
             log.info("[fallback] VLM arbitration: 'behind' is phrasal -> near")
         elif spatial is True:
             log.info("[fallback] VLM arbitration: 'behind' is spatial -> keep hint")
+
+    # landmark OOV -- 텍스트가 랜드마크도, 구역 힌트(area_hint)도, "빈 자리"
+    # 표현(open_space)도 못 찾았을 때만 묻는다. 셋 다 "랜드마크 없음"을
+    # 정상적으로 표현하는 경로라 여기서 막지 않으면 그런 문장에도 매번
+    # VLM 이 랜드마크를 지어낼 위험이 있다. 반환값은 target 과 동일한
+    # 패턴(아는 클래스 or DINO 검색용 phrase)이라 dino_augment() 의 기존
+    # landmark 재탐지 경로(LANDMARK_SYNONYMS.get(lm, [lm 그대로]))를 그대로
+    # 탄다 -- 새 배선이 필요 없다.
+    if parsed.landmark_type is None and not parsed.area_hint and not parsed.open_space:
+        matched_lm, lm_phrase = vlm.resolve_landmark(command, LANDMARK_SYNONYMS.keys())
+        if matched_lm:
+            parsed.landmark_type = matched_lm
+            log.info("[fallback] VLM landmark resolved OOV wording -> %r", matched_lm)
+        elif lm_phrase:
+            parsed.landmark_type = lm_phrase
+            log.info("[fallback] VLM landmark: unknown landmark, DINO phrase=%r", lm_phrase)
+
+    # is_person 재분류 -- 텍스트가 물체도(target_type), 사람 단어도
+    # (STRONG/WEAK_PERSON_WORDS) 못 찾았을 때만(진짜 중의). 둘 중 하나라도
+    # 이미 확정됐으면 규칙표를 믿는다.
+    if parsed.target_type is None and not parsed.is_person:
+        is_person = vlm.classify_person(command)
+        if is_person is True:
+            parsed.is_person = True
+            log.info("[fallback] VLM: 사람 문제로 재분류")
+
     if parsed.is_person:
+        # pose_hint 재해석 -- POSE_BUCKETS 정규식 6종이 못 잡은 새 자세
+        # 표현만 묻는다. situation 자체는 여전히 situation_resolver.py 의
+        # 공식 규칙표가 결정한다 -- 여기서 나오는 건 여러 사람 후보 중
+        # 고르는 데 쓰는 "코스 버킷" 힌트일 뿐이다(DESIGN.md 2.2 원칙 유지).
+        if parsed.pose_hint is None:
+            pose = vlm.classify_pose(command, _POSE_BUCKET_NAMES)
+            if pose:
+                parsed.pose_hint = pose
+                log.info("[fallback] VLM pose_hint resolved -> %r", pose)
         return None
-    if parsed.target_type is None and vlm is not None:
+
+    if parsed.target_type is None:
         matched, phrase = vlm.resolve(command, OBJECT_SYNONYMS.keys())
         if matched:
             parsed.target_type = matched     # 사전 미등재 표현 -> 아는 클래스로 복귀

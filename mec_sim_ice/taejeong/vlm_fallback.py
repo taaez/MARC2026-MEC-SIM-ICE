@@ -112,6 +112,51 @@ Respond with JSON only, exactly one key:
 
 Sentence: "{command}" """
 
+# 2026-08-29 추가 3건 -- 전부 command_parser 의 닫힌 규칙(사전/정규식)이
+# 막다른 곳(None)에 도달했을 때만 호출된다(호출부는 fallback.py.vlm_assist
+# 참고). 새 서사형 문장(hf/sarH 계열, 대회 본선에서 새 표현이 나올 수 있는
+# 부분)에 대한 일반화 보험이다 -- 전부 "이 문장이 뭘 말하는지"뿐이고 좌표/
+# relation/situation 추론에는 안 쓴다(모듈 docstring 원칙 유지).
+_LANDMARK_PROMPT = """You are parsing a lost-item report for a campus CCTV search system.
+The system's landmark detector only recognizes these exact reference-object classes: {classes}.
+
+Find the reference object/landmark the request mentions -- the thing the lost
+item is described as being on, near, or beside. This is NOT the lost item
+itself.
+- If that reference object is one of the classes above (even worded
+  differently, e.g. a synonym), answer with that EXACT class string.
+- If it names a different reference object not in that list, set
+  "landmark_type" to null and give a short plain-English search phrase
+  (1-4 words) for it instead.
+- If the request does not clearly name any reference object at all, set both
+  fields to null.
+
+Respond with JSON only, no prose, exactly these two keys:
+{{"landmark_type": <one of {classes} or null>, "search_phrase": <string or null>}}
+
+Request: "{command}" """
+
+_PERSON_PROMPT = """You are parsing a request for a campus CCTV search system.
+Decide whether the request asks to find a PERSON (a human being, described by
+role, clothing, or their situation/posture) or asks to find an OBJECT (an
+item like a mug, bag, bike, etc. that someone left behind).
+
+Respond with JSON only, exactly one key:
+{{"is_person": true or false}}
+
+Request: "{command}" """
+
+_POSE_PROMPT = """You are parsing a request to find a person on campus CCTV.
+The system only recognizes these coarse pose categories: {buckets}.
+
+Decide which single category best matches how the person's posture/situation
+is described. If none clearly applies, use null -- do not guess.
+
+Respond with JSON only, exactly one key:
+{{"pose": <one of {buckets} or null>}}
+
+Request: "{command}" """
+
 class SmallLmBackend:
     """텍스트 전용 소형 인과 LM(causal LM) 래퍼.
 
@@ -201,6 +246,64 @@ class VlmTargetResolver:
             return v if isinstance(v, bool) else None
         except Exception as e:  # noqa: BLE001
             log.warning("[vlm-fallback] behind arbitration failed: %s | raw=%r", e, txt[:120])
+            return None
+
+    def resolve_landmark(self, command: str, known_classes) -> tuple:
+        """resolve()와 동일 패턴, 대상만 target 이 아니라 랜드마크.
+
+        -> (matched_class_or_None, search_phrase_or_None). matched_class 가
+        있으면 dino_augment() 의 기존 랜드마크 재탐지 경로가 그대로 처리
+        (LANDMARK_SYNONYMS 에서 동의어를 찾음). search_phrase 만 있으면
+        그 문자열 자체가 landmark_type 이 되어 DINO 검색어로 그대로 쓰인다
+        (target 의 OOV 경로와 동일한 재사용).
+        """
+        classes = list(known_classes)
+        prompt = _LANDMARK_PROMPT.format(classes=json.dumps(classes), command=command.replace('"', "'"))
+        txt = self.backend.generate(prompt)
+        try:
+            js = json.loads(re.search(r"\{.*\}", txt, re.S).group(0))
+            lm = js.get("landmark_type")
+            phrase = js.get("search_phrase")
+            if lm in classes:
+                return lm, None
+            return None, (str(phrase).strip() if phrase else None)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[vlm-fallback] landmark parse failed: %s | raw=%r", e, txt[:200])
+            return None, None
+
+    def classify_person(self, command: str):
+        """이 요청이 사람을 찾는 건지 물체를 찾는 건지 판정.
+
+        -> True(사람) / False(물체) / None(판정 실패 -- 호출부는 기존 상태 유지).
+        command_parser 가 target_type/is_person 둘 다 못 찾은(진짜 중의)
+        문장에서만 부를 것.
+        """
+        prompt = _PERSON_PROMPT.format(command=command.replace('"', "'"))
+        txt = self.backend.generate(prompt, max_new_tokens=24)
+        try:
+            js = json.loads(re.search(r"\{.*\}", txt, re.S).group(0))
+            v = js.get("is_person")
+            return v if isinstance(v, bool) else None
+        except Exception as e:  # noqa: BLE001
+            log.warning("[vlm-fallback] person classify failed: %s | raw=%r", e, txt[:120])
+            return None
+
+    def classify_pose(self, command: str, buckets) -> Optional[str]:
+        """자유 서술 자세 표현을 공식 pose 코스 버킷(command_parser.POSE_BUCKETS
+        이름) 중 하나로 매핑. situation 자체는 여전히 situation_resolver.py
+        가 결정한다 -- 이건 여러 사람 후보 중 고르는 데 쓰는 힌트일 뿐이다.
+
+        -> 버킷 이름 또는 None(판정 실패/불명확 -- 호출부는 pose_hint=None 유지).
+        """
+        bucket_list = list(buckets)
+        prompt = _POSE_PROMPT.format(buckets=json.dumps(bucket_list), command=command.replace('"', "'"))
+        txt = self.backend.generate(prompt, max_new_tokens=24)
+        try:
+            js = json.loads(re.search(r"\{.*\}", txt, re.S).group(0))
+            pose = js.get("pose")
+            return pose if pose in bucket_list else None
+        except Exception as e:  # noqa: BLE001
+            log.warning("[vlm-fallback] pose classify failed: %s | raw=%r", e, txt[:120])
             return None
 
 
