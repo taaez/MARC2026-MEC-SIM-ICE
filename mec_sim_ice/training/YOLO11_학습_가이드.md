@@ -1,6 +1,6 @@
 # YOLO11 학습 가이드 (test/ 스테이징)
 
-`test/train_yolo11.py` + `test/det_classes.py`를 실제로 돌려서 데이터셋 생성 → 라벨 변환 →
+`training/train_yolo11.py` + `training/det_classes.py`를 실제로 돌려서 데이터셋 생성 → 라벨 변환 →
 학습 → 스모크 테스트까지 검증하는 순서. **이 범위까지만 구현돼 있음** — `real_agent_vla.py`
 (명령 해석/좌표 변환/GroundingResult 제출)와 `participant_app.py`/`launch.sh`/`docker compose`
 연동은 아직 구현 전이라 이 가이드에 없음. 그건 `test/README.md`의 "다음 단계"에 이어서 진행.
@@ -11,11 +11,41 @@ Windows 개발 PC에서는 이 문서의 명령을 그대로 실행할 수 없�
 
 ---
 
+## 0-0. 스톡 YOLO11 대비 무엇이 다른가
+
+배포 모델 B가 스톡 Ultralytics와 어디가 같고 어디가 다른지. **결론부터: 모델 쪽 변경은 0이다.**
+
+| 항목 | 스톡 YOLO11 | 모델 B | 비고 |
+|---|---|---|---|
+| 백본 / 넥 / 헤드 | `yolo11s.yaml` 그대로 | **그대로 (무수정)** | 커스텀 yaml 없음 |
+| stride | [8, 16, 32] | **[8, 16, 32]** | P2/stride-4 헤드는 시도 후 폐기 (§3-1) |
+| loss | CIoU + DFL + BCE | **그대로** | `loss.py` / `tal.py` 미수정 |
+| 스케일 | n (기본) | **s** | 채널 폭·깊이만 증가, 격자 해상도는 동일 |
+| 클래스 수 | 80 (COCO) | 34 (`DET_CLASSES`) | 헤드 nc만 교체 |
+| imgsz | 640 | **1280** | CCTV 원본 1280×720에 맞춘 값 |
+| 증강 | Ultralytics 기본 | **기본 그대로** | 오버샘플·GT copy-paste는 전부 실패해서 미적용 |
+
+즉 B는 **"스톡 yolo11s를 imgsz 1280으로 34클래스에 파인튜닝한 것"** 이상도 이하도 아니다.
+데이터·구조·loss 어느 쪽으로도 개입하지 않은 이 버전이, 시도한 6개 실험 중 유일하게
+34클래스 전부 무손실이었다 (A/C 오버샘플, D/E GT샘플링, P2 헤드는 전부 다른 클래스를 깎았다).
+
+**의도적으로 안 한 것**:
+
+- **P2/stride-4 헤드** — 2026-08-25 시도, 34클래스 전부 하락으로 폐기 (§3-1)
+- **오버샘플링 / GT copy-paste** — 타겟 3클래스 ±0.02 노이즈에 다른 클래스 9~21개 하락
+- **loss 교체(NWD 등)** — B에는 적용하지 않는다. 소형 객체 문제는 B를 건드리지 않고
+  **별도 서브모델**로 분리해서 다룬다 → `small_object_detection/소형객체_서브모델_가이드.md`
+
+이 "B는 손대지 않는다"는 원칙이 지금 프로젝트의 기본 전제다. B를 개선하려는 시도는 지금까지
+전부 다른 클래스로 손해가 번졌다.
+
+---
+
 ## 0. 실행 전 체크리스트
 
 - [ ] `bash simulation-platform/marc.sh setup` 완료 (base 이미지 빌드)
 - [ ] `pip3 install ultralytics opencv-python-headless` (호스트에서 학습할 경우)
-- [x] `test/det_classes.py`의 `DET_CLASSES`(34종)는 **`marc2026_demo` 501씬(11,477 detection)
+- [x] `training/det_classes.py`의 `DET_CLASSES`(34종)는 **`marc2026_demo` 501씬(11,477 detection)
       전수 대조 완료** (2026-08-25, `정리폴더/작업기록_2026-08-25.md` §1) — 데이터에 있는데
       목록에 없는 클래스/그 반대 모두 0개. `marc2026_chungmu`(실제 쓸 시나리오)로도 한 번 더
       대조 권장하지만, 아래 2단계에서 미확인 클래스가 나오면 스크립트가 경고로 알려주니
@@ -44,7 +74,7 @@ bash marc.sh dataset-gen
 ## 2. 라벨 변환 (JSON → YOLO txt, 이미 구현됨)
 
 ```bash
-cd test
+cd training
 python3 train_yolo11.py convert --scenes ../trainer_output/marc2026_chungmu --out dataset
 ```
 
@@ -76,7 +106,7 @@ python3 train_yolo11.py train --data dataset/data.yaml --epochs 200 --imgsz 1280
 - 데이터가 적어 정확도가 낮으면 `--weights yolo11s.pt`로 스케일만 올려서 재시도 가능.
 - 결과: `runs/detect/train/weights/best.pt`, `results.png`(loss/mAP 곡선), `val_batch0_pred.jpg`
   (검증 이미지 예측 시각화 — 클래스가 제대로 잡히는지 눈으로 먼저 확인).
-- **모든 `train` 실행은 전체 stdout/stderr을 `test/logs/train_<시각>.log`에도 자동 저장함**
+- **모든 `train` 실행은 전체 stdout/stderr을 `training_results/yolo_main_logs/ (또는 스크립트 위치 기준 training/logs/, 아래 참고)`에도 자동 저장함**
   (ANSI 코드/이모지/진행바 잔상은 파일에서 제거되고, 터미널에는 원래대로 컬러/진행바 그대로
   보임). 터미널 스크롤이 끝난 뒤 경고문구 다시 확인할 때 여기서 grep하면 됨.
 
