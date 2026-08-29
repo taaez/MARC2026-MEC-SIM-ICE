@@ -65,9 +65,14 @@ class TaejeongVLAGrounding:
         self._imgsz = imgsz
         self._tf_buffer = None
         self._tf_listener = None
-        # DINO/VLM 폴백 (real_agent_vla 와 동일 정책). §7 규칙대로 생성자에서
-        # 로드하고, 로드 실패는 경고만 -- 기본 YOLO+기하 경로는 절대 안 깨진다.
-        # MARC_DISABLE_DINO_FALLBACK / MARC_DISABLE_VLM 으로 개별 차단 가능.
+        # DINO/VLM 폴백. §7 규칙대로 생성자에서 로드하고, 로드 실패는 경고만
+        # -- 기본 YOLO+기하 경로는 절대 안 깨진다.
+        # DINO 는 기본 ON (chungmu 39/39 실측으로 검증: rig_3_b 3문항 구제,
+        # +107.3점 -- MARC_DISABLE_DINO_FALLBACK=1 로 끌 수 있음).
+        # VLM 은 기본 OFF (2026-08-29부터, vlm_fallback.py 참고 -- 같은 실측에서
+        # 39/39 전부 호출 조건이 안 걸려 0회 호출되면서 ~7GB 만 상주했다. 이
+        # 데스크탑은 그 8GB 를 Isaac Sim 과 나눠 쓰므로 얻는 것 없이 OOM
+        # 위험만 진다. 본선 대비 OOV 보험으로 켜려면 MARC_ENABLE_VLM=1).
         self._dino = None
         if not dino_disabled():
             try:

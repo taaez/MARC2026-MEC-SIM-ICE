@@ -26,8 +26,21 @@ relation/좌표/situation 추론에는 절대 쓰지 않는다 -- 그건 이미 
     서버/랩 데스크탑만 해당, 로컬 Mac(MPS)에선 검증 불가)
   - 가중치는 빌드 시점에 굽는다(HF_HUB_OFFLINE=1 런타임 고정) -- 런타임 다운로드 금지
 
+기본값 (2026-08-29부터 OFF):
+  chungmu 39라운드 실측(report_fb_fix.json) -- 이 폴백이 켜진 조건에서 39/39
+  전부 command_parser 가 닫힌 동의어 사전 안에서 target 을 뽑아, 호출 조건
+  (target_type is None)이 단 한 번도 성립하지 않았다. 즉 이 모듈은 39라운드
+  내내 0회 호출되면서 3B bf16(~7GB)을 상주시키기만 했다. 데스크탑 GPU는
+  8GB 를 Isaac Sim 과 나눠 쓰므로(MARC2026_STAGE1_BRIEF.md §1), 켜 둬 봐야
+  chungmu 에서는 얻는 것 없이 OOM 위험만 진다 -- 그래서 기본을 OFF 로 뒤집는다.
+  DINO 는 같은 조건에서 실제로 호출됐고 rig_3_b 3문항을 구제했으므로(+107.3점)
+  그쪽 기본은 그대로 ON 이다 -- 이 둘은 독립적으로 켜고 끈다.
+  본선에서 닫힌 어휘를 벗어난 문항이 나올 경우의 보험으로 다시 켜려면
+  MARC_ENABLE_VLM=1.
+
 환경변수:
-  MARC_DISABLE_VLM   "1"이면 폴백 자체를 비활성화
+  MARC_ENABLE_VLM    "1"이면 켠다 (기본은 OFF -- 위 참고)
+  MARC_DISABLE_VLM   "1"이면 확실히 끈다 (MARC_ENABLE_VLM 보다 우선)
   MARC_VLM_MODEL     기본 Qwen/Qwen2.5-VL-3B-Instruct (7B로 올리려면 명시 지정 + 4bit 권장)
   MARC_VLM_4BIT      "1"이면 bitsandbytes 4bit 로드
 """
@@ -233,4 +246,12 @@ class VlmTargetResolver:
 
 
 def is_disabled() -> bool:
-    return os.getenv("MARC_DISABLE_VLM", "").lower() in ("1", "true", "yes")
+    """기본 OFF (모듈 docstring 참고 -- chungmu 39/39 에서 호출 0회, 상주 비용 ~7GB).
+
+    MARC_ENABLE_VLM=1 로 켜고, MARC_DISABLE_VLM=1 은 그래도 확실히 끈다
+    (명시적 비활성화가 명시적 활성화보다 우선 -- 둘 다 세팅된 애매한 상태에서
+    안전한 쪽으로 넘어간다).
+    """
+    if os.getenv("MARC_DISABLE_VLM", "").lower() in ("1", "true", "yes"):
+        return True
+    return os.getenv("MARC_ENABLE_VLM", "").lower() not in ("1", "true", "yes")

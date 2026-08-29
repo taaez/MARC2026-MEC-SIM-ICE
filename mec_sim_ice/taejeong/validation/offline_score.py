@@ -74,6 +74,7 @@ import logging
 import math
 import os
 import sys
+import time
 
 _VALIDATION_DIR = os.path.dirname(os.path.abspath(__file__))
 _TAEJEONG_DIR = os.path.dirname(_VALIDATION_DIR)
@@ -328,8 +329,11 @@ def resolve_fallback_mode(flag) -> tuple:
     flag 는 --fallback 이면 True, --no-fallback 이면 False, 아무것도 안 주면 None(자동).
     자동일 때의 규칙은 '라이브와 같게 맞추되, 못 돌릴 환경이면 조용히 빠지지 말고 알린다':
 
-      * 라이브와 같은 env 스위치(MARC_DISABLE_DINO_FALLBACK / MARC_DISABLE_VLM)가 켜져
-        있으면 끈다 -- 두 경로가 같은 스위치를 보게 해서 동작이 갈라지지 않게 한다.
+      * 이 함수가 켜는 건 DINO 뿐이다. VLM 은 2026-08-29부터 기본이 꺼져 있고
+        (vlm_fallback.is_disabled -- chungmu 39/39 에서 호출 0회, 상주 비용만
+        ~7GB) MARC_ENABLE_VLM=1 로 따로 켜야 한다 -- 라이브 에이전트
+        (taejeong_agent_vla.py)도 같은 함수를 보므로 둘이 갈라지지 않는다.
+      * 라이브와 같은 env 스위치(MARC_DISABLE_DINO_FALLBACK)가 켜져 있으면 끈다.
       * transformers 가 없으면 끈다 (노트북 기본 환경).
       * 가속기(CUDA 또는 Apple Silicon MPS)가 없으면 끈다. Qwen2.5-VL / Grounding DINO
         를 CPU 로 올리면 몇십 분씩 걸리거나 메모리가 터진다. MPS 는 dino_fallback.py /
@@ -341,8 +345,11 @@ def resolve_fallback_mode(flag) -> tuple:
         return False, "--no-fallback 지정"
     forced = flag is True
     if dino_disabled() and vlm_disabled():
+        # VLM 은 기본이 이미 꺼져 있어(위 docstring) 이 조건은 사실상
+        # "DINO 도 꺼졌으면"이다 -- 그러면 폴백 전체가 할 일이 없으니
+        # transformers import 조차 시도하지 않고 여기서 바로 끝낸다.
         if not forced:
-            return False, "MARC_DISABLE_DINO_FALLBACK / MARC_DISABLE_VLM 이 켜져 있음"
+            return False, "MARC_DISABLE_DINO_FALLBACK 켜짐 (VLM 도 기본값대로 꺼진 상태)"
     try:
         import transformers  # noqa: F401
     except ImportError:
@@ -485,19 +492,35 @@ def main() -> int:
             continue
         problem_id, expected, weights, kind = hit
 
+        # 시나리오의 time_limit 이 문항당 30초라, 폴백이 그 예산을 넘기면 점수가
+        # 올라도 라이브에서는 못 쓴다. 어느 단계가 먹는지 갈라서 재 둔다.
+        t = {}
+        t0 = time.perf_counter()
         parsed = parse_command(cmd)
         target_phrases = vlm_assist(cmd, parsed, vlm) if args.fallback else None
+        t["vlm"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
         dets = infer_cameras(model, images, min_conf=args.conf, imgsz=args.imgsz)
+        t["yolo"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
         if args.fallback:
             dino_augment(parsed, images, dets, target_phrases, dino, vlm)
+        t["dino"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
         decision = resolve(parsed, dets, cams)
+        t["resolve"] = time.perf_counter() - t0
+        t["total"] = sum(t.values())
         submission = (flatten_payload(decision.to_payload()) if decision is not None
                       else fallback_submission(parsed))
 
         s = score_round(problem_id, weights, expected, submission)
         scored_rounds.append({"stage": 2 if kind == "retrieval" else 1,
-                              "voice_command": cmd,
+                              "voice_command": cmd, "sec": t,
                               "record": os.path.basename(d), "scores": s})
+        if t["total"] >= 10.0:      # 30초 예산의 1/3을 넘긴 라운드는 그 자리에서 알린다
+            print(f"      느림: {t['total']:.1f}s "
+                  f"(yolo {t['yolo']:.1f} / dino {t['dino']:.1f} / vlm {t['vlm']:.1f})",
+                  flush=True)
 
     if unmatched:
         print(f"[정답 없음, 건너뜀] {len(unmatched)}건 (records 에는 있지만 정답지/시나리오에 없는 voice_command)")
@@ -539,6 +562,13 @@ def main() -> int:
     s1 = [r for r in primary if r["stage"] == 1]
     s2 = [r for r in primary if r["stage"] == 2]
     final = {"source": "offline"}   # 플랫폼 실측이 아니라 이 스크립트가 계산한 값이라는 표시
+    # 폴백 on/off 는 점수를 크게 바꾸는데(라이브 에이전트는 항상 켠다) 터미널에만
+    # 찍혀서, 나중에 report.json 만 보면 어느 쪽 점수인지 알 수 없었다. 리포트에
+    # 남겨야 서로 다른 머신에서 나온 리포트를 비교할 때 사과-오렌지를 피한다.
+    final["fallback"] = {
+        "used": bool(use_fallback), "why": why,
+        "dino": dino is not None, "vlm": vlm is not None,
+    }
     if s1:
         final["stage1_average"] = sum(r["scores"]["total"] for r in s1) / len(s1)
         final["stage1_rounds"] = len(s1)
