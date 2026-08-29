@@ -305,7 +305,25 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
         # target_scope 에 들어가(2/6 -> 6/6) 속도만 나빠졌다. 그래서 phrase
         # 구분 없이 최종 최고점 하나에만 문턱을 매기는 단순한 형태로 되돌린다.
         phrases = LANDMARK_SYNONYMS.get(lm, [lm.replace("_", " ")])
-        for cam_id, img in images.items():
+        # YOLO 가 이미 카메라를 1대로 좁혔으면 그 랜드마크는 변별력이 높다는 뜻이라
+        # (grounding.py 의 landmark_discriminative 와 같은 판단) DINO 를 아예 안
+        # 태운다. 아래 카메라별 가드는 "YOLO 가 못 본 카메라"를 열어 주는데, 개방
+        # 어휘 DINO 는 클래스 변형을 구분하지 못해 거기서 오탐을 만든다.
+        # 실측(2026-08-29, taxi 4문항 lf10/lf11/rt04/rt04b, GT 전부 rig_3_c):
+        # YOLO 는 taxi 를 rig_3_c 한 대에서만 찾아 게이트가 정답 1대였는데, DINO
+        # 가 rig_2_c(0.73)/rig_7_a(0.75) 의 평범한 승용차까지 taxi 로 건져 게이트가
+        # 3대로 넓어졌고 그 안에서 오답 카메라가 이겼다(-136.8점). conf 문턱으로는
+        # 못 거른다 -- 진짜 taxi 와 오탐이 똑같이 0.73~0.75 다.
+        # trash_can 처럼 여러 카메라에 정상적으로 흩어진 랜드마크는 YOLO 게이트가
+        # 애초에 2대 이상이라 이 가드에 안 걸리고 구제가 그대로 돈다(lf06/hf06/
+        # lf07/rtC2 = +107.3점 유지). 즉 "나빠지는 경로가 없다"는 폴백 원칙 복구다.
+        yolo_lm_cams = {cid for cid, dets in detections.items()
+                        if any(_landmark_ok(d.label, lm) for d in dets)}
+        if len(yolo_lm_cams) == 1:
+            log.info("[fallback] landmark %r 은 YOLO 가 이미 %s 1대로 확정 -- DINO "
+                     "구제 생략(게이트 확장 방지)", lm, next(iter(yolo_lm_cams)))
+        rescue_cams = {} if len(yolo_lm_cams) == 1 else images
+        for cam_id, img in rescue_cams.items():
             # 카메라별로 판단한다(2026-08-28 수정) -- 예전엔 "어느 카메라에서든
             # YOLO가 하나라도 찾으면 전체를 건너뛰었는데, landmark 클래스는
             # (trash_can 등) 흔한 물체라 여러 카메라에 각각 따로 있는 게

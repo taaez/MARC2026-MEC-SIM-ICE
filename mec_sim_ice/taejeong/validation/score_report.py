@@ -86,6 +86,26 @@ def report(rounds: list, final: dict | None = None, json_path: str | None = None
               f"   ({len(s2)}문항)")
         print("  └ Stage2 의 주행/집기/배달 실행 점수는 물리 시뮬이 필요해 오프라인에서")
         print("    채점할 수 없다. 위 숫자는 Stage2 의 **인식(grounding) 부분만**이다.")
+    # 문항당 예산이 30초다 (시나리오 time_limit). 점수만 보고 폴백을 켜면 라이브에서
+    # 시간 초과로 0점이 될 수 있으니, 예산 대비 어디쯤인지 같이 보여 준다.
+    secs = [d["sec"] for d in rounds if d.get("sec")]
+    if secs:
+        tot = sorted(s["total"] for s in secs)
+        over = sum(1 for s in tot if s > 30.0)
+        parts = "  ".join(f"{k} {sum(s.get(k, 0) for s in secs) / len(secs):.1f}s"
+                          for k in ("yolo", "dino", "vlm", "resolve"))
+        print(f"\n[라운드 소요]  평균 {sum(tot) / len(tot):.1f}s   중앙값 {tot[len(tot) // 2]:.1f}s"
+              f"   최대 {tot[-1]:.1f}s   30초 초과 {over}건")
+        print(f"  └ 단계별 평균: {parts}")
+    # 폴백이 꺼진 점수는 라이브(항상 켬)보다 낮게 나온다. 그걸 모르고 다른 머신의
+    # 리포트와 나란히 놓으면 없는 회귀를 쫓게 되므로 평균 바로 밑에 붙여 둔다.
+    fb = (final or {}).get("fallback")
+    if fb is not None:
+        print(f"  └ DINO/VLM 폴백: {'사용' if fb.get('used') else '건너뜀'}"
+              f" ({fb.get('why')})"
+              f" [dino={'O' if fb.get('dino') else 'X'} vlm={'O' if fb.get('vlm') else 'X'}]")
+        if not fb.get("used"):
+            print("    라이브 에이전트는 폴백을 항상 켠다 -- 이 점수는 하한이다.")
     # offline_score.py 가 자기가 계산한 값을 넣어 보낸 경우는 "실측"이 아니다.
     if final and final.get("source") != "offline":
         live = []
@@ -117,6 +137,7 @@ def report(rounds: list, final: dict | None = None, json_path: str | None = None
             "rounds": [{"problem_id": d["scores"]["problem_id"],
                         "stage": d.get("stage", 1),
                         "record": d.get("record"),
+                        "sec": d.get("sec"),
                         "total": d["scores"]["total"],
                         "cause": classify(d),
                         "fields": {f: d["scores"].get(f) for f in FIELDS}}
