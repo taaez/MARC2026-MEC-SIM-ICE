@@ -522,6 +522,21 @@ def main() -> int:
                   f"(yolo {t['yolo']:.1f} / dino {t['dino']:.1f} / vlm {t['vlm']:.1f})",
                   flush=True)
 
+        # 8GB급 GPU(랩 데스크탑)에서 41라운드를 도는 동안 PyTorch 캐싱
+        # allocator 가 안 쓰는 블록을 계속 쥐고 있다가 결국 OOM 이 났다
+        # (2026-08-29 실측, CUDA, "GPU 0 has a total capacity of 7.53 GiB"
+        # -- 자기 프로세스가 6.62GiB 를 이미 물고 있는 상태에서 타일링
+        # 배치 하나(1.91GiB)를 더 요청해 터짐). dtype 을 bf16 으로 낮추는
+        # 건 이미 다른 GPU에서 grounding-dino 의 dtype 불일치로 크래시한
+        # 이력이 있어(dino_fallback.py 상단 주석) 재시도하지 않는다 --
+        # 대신 라운드마다 안 쓰는 캐시를 돌려준다. 실제 사용 중인 텐서는
+        # 안 건드리므로 정확도에는 영향이 없고, 코퍼스가 끝까지 도는가만
+        # 바뀐다.
+        if args.fallback:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
     if unmatched:
         print(f"[정답 없음, 건너뜀] {len(unmatched)}건 (records 에는 있지만 정답지/시나리오에 없는 voice_command)")
         for name, cmd in unmatched:
