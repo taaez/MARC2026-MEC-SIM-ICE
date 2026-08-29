@@ -84,7 +84,9 @@ sys.path.insert(0, _TAEJEONG_DIR)   # command_parser / grounding / yolo_adapter 
 from command_parser import parse_command          # noqa: E402
 from dino_fallback import DinoFallbackDetector      # noqa: E402
 from dino_fallback import is_disabled as dino_disabled  # noqa: E402
-from fallback import dino_augment, vlm_assist       # noqa: E402
+from fallback import dino_augment, pose_augment, vlm_assist   # noqa: E402
+from pose_keypoints import AnkleKeypointEstimator   # noqa: E402
+from pose_keypoints import is_disabled as pose_disabled       # noqa: E402
 from grounding import resolve                      # noqa: E402
 from run_offline import load_round                 # noqa: E402
 from vlm_fallback import VlmTargetResolver          # noqa: E402
@@ -452,6 +454,16 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             print(f"[fallback] VLM 로드 실패, behind 중재/OOV 재해석 없이 진행: {e}",
                   file=sys.stderr)
+    # 사람 target 의 발목 keypoint. DINO/VLM 폴백과 달리 --fallback 여부와
+    # 무관하게 켠다 -- 라이브 에이전트가 항상 켜므로 여기서도 항상 켜야 두
+    # 경로의 동작이 갈라지지 않는다 (fallback.py 모듈 docstring 의 원칙).
+    pose = None
+    if not pose_disabled():
+        try:
+            pose = AnkleKeypointEstimator()
+        except Exception as e:  # noqa: BLE001
+            print(f"[pose-kp] 로드 실패, 사람 좌표는 bbox 중앙 기준으로 진행: {e}",
+                  file=sys.stderr)
     args.fallback = use_fallback
 
     # s1_* 는 Stage1 단계에서, s2_* 는 Stage2 단계에서 뜬 기록이다. 어느 단계에서 떴는지와
@@ -474,10 +486,14 @@ def main() -> int:
         """
         problem_id, expected, weights, kind = hit
         parsed = parse_command(cmd)
+        # 아래 augment 들이 dets 를 제자리 수정하므로 항상 복사한다 (한 라운드의
+        # 프레임을 여러 문항에 재사용하기 때문 -- 원본을 건드리면 앞 문항이
+        # 뒤 문항에 새어 들어간다).
+        dets = {cid: list(v) for cid, v in dets.items()}
         if args.fallback:
-            dets = {cid: list(v) for cid, v in dets.items()}
             target_phrases = vlm_assist(cmd, parsed, vlm)
             dino_augment(parsed, images, dets, target_phrases, dino)
+        pose_augment(parsed, images, dets, pose)
         decision = resolve(parsed, dets, cams)
         submission = (flatten_payload(decision.to_payload()) if decision is not None
                       else fallback_submission(parsed))
