@@ -249,9 +249,12 @@ class DemoParticipant:
                 log.warning("[Stage2] pick attempt %d failed: %s", attempt, e)
                 picked, held = False, False
 
-            basket_ok = self._wait_basket_state(timeout=1.0)
+            basket_reading = self._wait_basket_state(timeout=1.0)
+            # Same no-feedback convention as the grip check above: None (no basket topic in
+            # this environment) -> conservatively count as pass, don't burn retries on it.
+            basket_ok = True if basket_reading is None else bool(basket_reading)
             log.info("[Stage2] pick attempt %d %s (grip held=%s, basket=%s)",
-                     attempt, "ok" if picked and basket_ok else "failed", held, basket_ok)
+                     attempt, "ok" if picked and basket_ok else "failed", held, basket_reading)
             if picked and basket_ok:
                 break
             if attempt < MAX_PICK_ATTEMPTS and c.is_running and c.now_s() < deadline:
@@ -273,7 +276,9 @@ class DemoParticipant:
 
         # No recovery attempted here (no fresh perception of where it fell) -- just surface it,
         # since a silent loss would otherwise look identical to a normal successful delivery.
-        if picked and not self._wait_basket_state(timeout=1.0):
+        # `is False` (not a plain falsy check): None means no basket topic in this environment,
+        # which is "unknown", not "confirmed empty" -- only warn on a real reading.
+        if picked and self._wait_basket_state(timeout=1.0) is False:
             log.warning("[Stage2] object lost from basket in transit (picked ok, basket empty on arrival)")
 
         c.stop()
@@ -373,8 +378,10 @@ class DemoParticipant:
         """Poll briefly for a settled is_basket_occupied() reading.
 
         Right after the first call in a run, the subscription is fresh and a read can return
-        None for a tick or two before the first message arrives -- poll instead of trusting
-        a single instant read.
+        None for a tick or two before the first message arrives -- poll for a real reading.
+        Returns True/False/None (None = no message arrived at all in this environment, distinct
+        from a confirmed False) so callers apply their own no-feedback convention instead of this
+        helper silently coercing "unknown" into "empty" for them.
         """
         c = self.client
         deadline = c.now_s() + timeout
@@ -382,7 +389,7 @@ class DemoParticipant:
         while val is None and c.now_s() < deadline:
             c.sleep(0.05)
             val = c.is_basket_occupied()
-        return bool(val)
+        return val
 
     def _wait_for_collect_goal(self, timeout: float = 5.0):
         """Poll briefly until the reveal (msg 411) approximate position arrives, then return the pickup goal (x, y).
