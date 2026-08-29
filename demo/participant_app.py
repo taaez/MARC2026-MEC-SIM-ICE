@@ -235,6 +235,10 @@ class DemoParticipant:
         # released the gripper by the time it returns).
         basket_ok = False
         for attempt in range(1, MAX_PICK_ATTEMPTS + 1):
+            if not c.is_running or c.now_s() >= deadline:
+                log.warning("[Stage2] pick retry budget exhausted (run stopped or deadline hit) "
+                            "before attempt %d/%d", attempt, MAX_PICK_ATTEMPTS)
+                break
             try:
                 grasp_xy = self._object_arm_xy(collect_xy)   # actual object position in the arm_base frame
                 log.info("[Stage2] object pick sequence attempt %d/%d (object-position grasp=%s)",
@@ -248,6 +252,9 @@ class DemoParticipant:
             except Exception as e:
                 log.warning("[Stage2] pick attempt %d failed: %s", attempt, e)
                 picked, held = False, False
+                # run_pick_sequence's own abort recovery didn't run (it raised instead of
+                # returning) -- the arm pose is unknown, so stow before moving the chassis again.
+                self._stow_arm()
 
             basket_reading = self._wait_basket_state(timeout=1.0)
             # Same no-feedback convention as the grip check above: None (no basket topic in
@@ -257,7 +264,7 @@ class DemoParticipant:
                      attempt, "ok" if picked and basket_ok else "failed", held, basket_reading)
             if picked and basket_ok:
                 break
-            if attempt < MAX_PICK_ATTEMPTS and c.is_running and c.now_s() < deadline:
+            if attempt < MAX_PICK_ATTEMPTS:
                 log.info("[Stage2] retrying pick (attempt %d/%d)", attempt + 1, MAX_PICK_ATTEMPTS)
                 self._approach_straight(collect_xy, deadline, target_fwd=0.40)
                 for _ in range(5):
