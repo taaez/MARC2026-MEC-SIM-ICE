@@ -36,22 +36,20 @@ COPY docker/requirements.txt /tmp/requirements.txt
 RUN pip3 install -r /tmp/requirements.txt
 
 # --- 모델 가중치 baking (여기가 핵심: 런타임 다운로드 금지) ---
-# 제출 기본값 = 3B (2026-08-28 변경, 근거: VRAM 예산을 12GB 이내로 맞춰야 함 --
-# 7B fp16(~14~16GB)로는 DINO(~1GB)와 합쳐 16GB를 넘겨 초과. 7B+4bit(~5~6GB)도
-# 대안이지만 CUDA 전용이라 로컬(Mac/MPS)에서 검증이 안 된다. VLM 이 지금
-# 하는 일은 crop 이미지 검증 없이(폐기됨, taejeong/fallback.py 참고) 텍스트
-# 분류 두 건뿐이라(OOV 물체명 재해석, "behind" 구동사/공간관계 중의성 판정)
-# 3B로도 충분하다는 게 이번 세션 실측(전 케이스 3B로 진행, 문제 없었음)으로
-# 확인됐다. 3B fp16 + DINO fp16 ≈ 6~8GB, 12GB 예산에 여유 있게 들어간다.
-# 필요하면 여기 ARG 또는 --build-arg VLM_MODEL=... 로 7B/4bit 조합도 그대로 가능.
-ARG VLM_MODEL=Qwen/Qwen2.5-VL-3B-Instruct
+# 2026-08-29: VL(비전-언어) 모델을 완전히 뺐다(taejeong/vlm_fallback.py 참고) --
+# 이 파이프라인의 VLM 은 텍스트 분류 두 건(OOV 물체명 재해석, "behind" 구동사/
+# 공간관계 중의성 판정)뿐이라 이미지 인코더가 필요 없다. 기본값을 텍스트 전용
+# 소형 LM(1.5B, ~3GB)으로 바꿔서 DINO(~1GB)와 합쳐도 여유 있게 들어간다.
+# 필요하면 여기 ARG 또는 --build-arg VLM_MODEL=... 로 다른 텍스트 LM 도 가능
+# (VL 모델은 더 이상 코드가 지원하지 않는다 -- 넣으면 아래 자가검증에서 바로 걸림).
+ARG VLM_MODEL=Qwen/Qwen2.5-1.5B-Instruct
 ARG DET_MODEL=IDEA-Research/grounding-dino-base
 ENV HF_HOME=/opt/hf
 RUN python3 - <<'EOF'
 import os
 from huggingface_hub import snapshot_download
 for repo in [os.environ.get("DET_MODEL", "IDEA-Research/grounding-dino-base"),
-             os.environ.get("VLM_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")]:
+             os.environ.get("VLM_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")]:
     print("downloading", repo, flush=True)
     snapshot_download(repo, allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.py", "*.tiktoken"])
 EOF
@@ -79,6 +77,11 @@ ENV PYTHONPATH=/agent:/agent/demo
 
 # 빌드 단계에서 모델이 오프라인으로 로드되는지 자가 검증 (실패하면 빌드 실패 → 제출 전 발견)
 RUN python3 -c "from transformers import AutoProcessor; AutoProcessor.from_pretrained('${DET_MODEL}'); print('det ok')"
+# VLM 은 이제 텍스트 전용(SmallLmBackend, taejeong/vlm_fallback.py) -- VL
+# 모델을 여기 넣으면(예: 실수로 되돌리면) AutoTokenizer 로드 자체가 chat
+# template 없이 깨지거나 여기서 걸린다. AutoProcessor 가 아니라 실제 코드가
+# 쓰는 클래스(AutoTokenizer)로 검증해야 이 불일치를 잡는다.
+RUN python3 -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('${VLM_MODEL}'); print('vlm ok')"
 
 WORKDIR /agent/demo
 
@@ -87,12 +90,18 @@ WORKDIR /agent/demo
 COPY docker/entrypoint.sh /agent/entrypoint.sh
 RUN chmod +x /agent/entrypoint.sh
 ENTRYPOINT ["/agent/entrypoint.sh"]
-# participant_app.py (팀 기본) 는 taejeong 파이프라인(YOLO + 명령파싱 + 기하)으로 연결돼 있다.
-# 이 이미지는 GroundingDINO+Qwen2.5-VL 구현용이라 별도 진입점을 쓴다.
+# participant_app.py (팀 기본) 는 taejeong 파이프라인(YOLO + 명령파싱 + 기하)으로
+# 연결돼 있다 -- demo/participant_app.py 가 `from taejeong_agent_vla import
+# TaejeongVLAGrounding` 을 하고, mec_sim_ice/demo_agents/ 가 COPY 로 같은
+# /agent/demo 에 합쳐지므로 taejeong_agent_vla.py(=demo_agents/ 안의 그 파일)
+# 가 그대로 잡힌다.
 #
-# ⚠️ 제출 전 결정 필요: 루트 docker-compose.yml 이 이 Dockerfile 을 빌드하므로,
-#    지금 상태로 제출하면 DINO+Qwen 경로가 실행된다. taejeong 파이프라인을 제출하려면
-#    (a) 아래 CMD 를 participant_app.py 로 바꾸고,
-#    (b) YOLO 가중치(mec_sim_ice/demo_agents/weights/best.pt)를 이미지에 baking 하고,
-#    (c) 불필요해진 VLM/DET 빌드 ARG·전용 의존성을 정리해야 한다.
-CMD ["python3", "participant_app_agent_vla.py"]
+# 2026-08-29 결정 완료(이전엔 ⚠️ 로 표시돼 있었다): taejeong 파이프라인으로
+# 확정한다. 이전엔 이 CMD 가 GroundingDINO+Qwen2.5-VL 전용 진입점
+# (participant_app_agent_vla.py, agent_vla.py 기반 -- taejeong 과 다른 구현체)
+# 을 가리키고 있어서, 지금까지 이 리포에서 검증해 온 taejeong 개선사항(YOLO
+# 타일링/명령파싱/기하 판정 등)이 실제로는 하나도 제출되지 않는 상태였다.
+# YOLO 가중치는 best.pt 를 강제로 커밋해서 해결했다(.gitignore 의 `*.pt` 에
+# 걸려 그동안 아무 브랜치에도 안 올라가 있었다 -- 새로 clone 하면 파일 자체가
+# 없어서 런타임에 크래시났을 것).
+CMD ["python3", "participant_app.py"]

@@ -1,10 +1,12 @@
-# 버전은 2026-08 기준 안정 조합. transformers 는 Qwen2.5-VL 과 Grounding DINO 양쪽을 지원하는 4.5x 대 고정.
+# 버전은 2026-08 기준 안정 조합. transformers 는 Grounding DINO 를 지원하는 4.5x 대 고정.
 transformers==4.53.2
 accelerate==1.8.1
 huggingface_hub==0.33.4
-bitsandbytes==0.46.1        # 4bit (로컬 8GB 개발용; 채점 48GB 에선 미사용)
-qwen-vl-utils==0.0.11
 pillow>=10.0
 numpy<2.3
 opencv-python-headless>=4.9
-ultralytics==8.3.170        # 파인튜닝 YOLO 사용 시. 미사용이면 제거해 이미지 용량 절약 가능
+ultralytics==8.3.170        # taejeong YOLO 파이프라인
+
+# 2026-08-29 제거: bitsandbytes(4bit), qwen-vl-utils -- taejeong/vlm_fallback.py
+# 가 VL(비전-언어) 모델 지원을 통째로 뺐다(텍스트 전용 소형 LM만 씀, 이미지
+# 인코더/4bit 양자화 둘 다 필요 없음). 되돌릴 일이 생기면 여기부터 복구할 것.
