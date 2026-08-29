@@ -85,7 +85,7 @@ sys.path.insert(0, _TAEJEONG_DIR)   # command_parser / grounding / yolo_adapter 
 from command_parser import parse_command          # noqa: E402
 from dino_fallback import DinoFallbackDetector      # noqa: E402
 from dino_fallback import is_disabled as dino_disabled  # noqa: E402
-from fallback import dino_augment, vlm_assist       # noqa: E402
+from fallback import dino_augment, vlm_assist, yolo_tile_augment  # noqa: E402
 from grounding import resolve                      # noqa: E402
 from run_offline import load_round                 # noqa: E402
 from vlm_fallback import VlmTargetResolver          # noqa: E402
@@ -502,6 +502,12 @@ def main() -> int:
         t0 = time.perf_counter()
         dets = infer_cameras(model, images, min_conf=args.conf, imgsz=args.imgsz)
         t["yolo"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        if args.fallback:
+            # DINO 보다 먼저 -- YOLO 타일링으로 구제되면 dino_augment 의
+            # 카메라별 스킵이 그대로 적용돼 그만큼 DINO 호출이 줄어든다.
+            yolo_tile_augment(parsed, images, dets, model)
+        t["yolo_tile"] = time.perf_counter() - t0
         t0 = time.perf_counter()
         if args.fallback:
             dino_augment(parsed, images, dets, target_phrases, dino, vlm)

@@ -24,10 +24,12 @@ try:                              # package import (e.g. `from taejeong.fallback
     from .command_parser import LANDMARK_SYNONYMS, OBJECT_SYNONYMS, ParsedCommand
     from .grounding import (AREA_DOMINANCE_RATIO, AREA_INDICATOR_CLASSES,
                             Detection, _landmark_ok, _target_ok)
+    from .yolo_adapter import SMALL_TARGET_MIN_CONF
 except ImportError:               # flat import (offline_score.py 등, taejeong/ 자체가 sys.path)
     from command_parser import LANDMARK_SYNONYMS, OBJECT_SYNONYMS, ParsedCommand
     from grounding import (AREA_DOMINANCE_RATIO, AREA_INDICATOR_CLASSES,
                            Detection, _landmark_ok, _target_ok)
+    from yolo_adapter import SMALL_TARGET_MIN_CONF
 
 log = logging.getLogger("participant_app")
 
@@ -463,3 +465,154 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
                     score=float(box.conf[0])))
                 log.info("[fallback] DINO rescued target %r on %s (conf=%.2f)",
                          parsed.target_type, cam_id, float(box.conf[0]))
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# YOLO 타일링 (작은 target 클래스 전용) -- 2026-08-29, 테스트 필요
+# ────────────────────────────────────────────────────────────────────────────
+# DINO 의 _dino_best_box_tiled 와 같은 원리("장면 대비 작은 물체는 고정
+# 입력 해상도로 리샘플될 때 상대 비중이 줄어 confidence 가 낮게 나온다,
+# 8분할하면 로컬 프레임에서 커져 완화된다")를 YOLO 에도 적용한다 -- 이
+# 원리 자체는 검출기 종류를 안 탄다.
+#
+# 다만 실측(2026-08-29, scratchpad/diag_yolo_tile.py, conf=0.001 raw, GT
+# 카메라 기준)으로는 "항상 듣는" 게 아니라 클래스/카메라 조합에 따라
+# 갈렸다:
+#   umbrella@rig_3_c(taxi, lf11/rt04b): whole 0.090/0.102 -> 8타일
+#     0.331/0.463  (문턱을 확실히 넘김 -- 타일링이 실제로 duty 하는 케이스)
+#   pencilcase@rig_3_b(picnic table, lf07/hf02/rtC2): whole 0.000 -> 8타일
+#     0.065~0.108  (여전히 문턱(0.20) 한참 밑 -- 안 뜬다. DINO 는 같은
+#     클래스에서 0.129->0.428 로 뜨는 걸 보면 이 화면의 pencilcase 를 이
+#     YOLO 가중치가 원래 잘 못 배운 것으로 보인다 -- 타일링이 만능은 아님)
+#   umbrella@rig_3_b(trash can, lf06/hf06): whole 0.001~0.003 -> 8타일도
+#     0.000~0.001  (전혀 안 뜸 -- 검출기가 아니라 그 각도/렌더에서 물체
+#     자체가 거의 안 보이는 문제일 가능성)
+# 그래서 "항상 이긴다"고 가정하지 않고 DINO 와 동일하게 조건부(whole 이
+# 문턱 미만일 때만 타일링, 타일링도 문턱을 못 넘으면 그냥 포기하고 다음
+# 단계인 DINO 로 넘어가게 둠)로 건다.
+#
+# 그런데 이 "손해 볼 여지가 없다"는 가정이 실제로는 깨졌다 -- 39문항 전수
+# 회귀 검증(2026-08-29, report_yolotile.json)에서 rtC2_fallenbike_pencil 이
+# 65.53 -> 35.00 으로 떨어졌다(카메라 오선택 rig_3_b -> rig_1_a). 원인을
+# 추적한 결과: picnic_table 랜드마크가 이 씬에 **두 인스턴스**(picnic_
+# table_01 @ rig_1_a, picnic_table_02 @ rig_3_b) 있는데, YOLO whole-frame
+# 이 둘 다 "picnic_table" 로 잡아서 target_scope 가 두 카메라 모두로
+# 열린다(위 police_car 두 인스턴스 문제와 뿌리가 같다). 원래(DINO만 있던)
+# 흐름에서는 이래도 안전했다 -- DINO 가 rig_3_b 에서 진짜 pencilcase 를
+# 타일링으로 찾고(0.129->0.428), rig_1_a 에서는 그만큼 강한 오탐을 안
+# 만들었다. 그런데 YOLO 타일링을 rig_1_a 에도 똑같이 걸었더니, 거기서
+# **엉뚱한 걸 pencilcase 로 오인하는 오탐이 0.003->0.330 으로 뜬다**(이
+# 카메라엔 진짜 pencilcase 가 없는데도). 이 오탐이 먼저 등록되면
+# dino_augment 의 "이미 찾음" 스킵에 걸려 DINO 가 그 카메라를 재검증할
+# 기회조차 없어진다.
+#
+# 그래서 두 겹으로 막는다:
+#   1) 클래스를 umbrella 하나로 좁힌다. pencilcase 는 애초에 타일링해도
+#      문턱을 못 넘어(위 pencilcase@rig_3_b 실측) 얻을 게 없고, tumbler 는
+#      코퍼스 전부가 이미 문턱을 넉넉히 넘거나(정상 케이스) 기록 자체가
+#      없는 경우(lf02/lf03, 레코딩 문제 -- 이 파일의 담당 범위 밖)뿐이라
+#      타일링이 아무것도 못 얻으면서 위와 같은 오탐 위험만 진다.
+#   2) scope_cams 가 **정확히 카메라 1대**로 좁혀졌을 때만 타일링한다
+#      (이 파일 위쪽 taxi 게이트 확장 버그와 동일한 "변별력 판단은 1대일
+#      때만 성립" 원칙). umbrella@taxi(lf11/rt04b) 는 애초에 YOLO 가
+#      taxi 를 rig_3_c 한 대에서만 찾아 이 조건을 만족한다 -- 다른
+#      카메라가 타일링 후보에 들 여지 자체가 없어 안전하다.
+_YOLO_TILE_CLASSES = frozenset({"umbrella"})
+
+
+def _target_scope_cams(parsed: ParsedCommand, images: dict,
+                       detections: dict) -> Optional[set]:
+    """dino_augment() 의 target_scope 계산과 같은 로직(의도적 중복) --
+    이미 검증된 dino_augment 본문은 안 건드리고 이 함수 하나만 따로 둔다."""
+    scope_cams: Optional[set] = None
+    lm = parsed.landmark_type
+    if lm:
+        landmark_cams = {cid for cid, dets in detections.items()
+                         if any(_landmark_ok(d.label, lm) for d in dets)}
+        if landmark_cams:
+            scope_cams = landmark_cams
+    indicators = AREA_INDICATOR_CLASSES.get(parsed.area_hint or "")
+    if indicators:
+        counts = {cid: sum(1 for d in detections.get(cid, []) if d.label in indicators)
+                 for cid in images}
+        top = max(counts.values(), default=0)
+        if top > 0:
+            leaders = {cid for cid, n in counts.items() if n == top}
+            runner_up = max((n for cid, n in counts.items() if cid not in leaders),
+                           default=0)
+            if top >= AREA_DOMINANCE_RATIO * runner_up:
+                if scope_cams is not None:
+                    both = scope_cams & leaders
+                    scope_cams = both if both else scope_cams
+                else:
+                    scope_cams = leaders
+    return scope_cams
+
+
+def _yolo_best_box_tiled(model, img, target_label: str, min_conf: float):
+    """whole-frame 먼저, 그 클래스 최고 conf 가 min_conf 미만이면 8분할 재탐색.
+
+    DINO 쪽(_dino_best_box_tiled)과 달리 재귀 줌은 아직 안 한다 -- 실측
+    코퍼스(이 파일 위쪽 주석의 3그룹)에서는 1단계 타일링만으로 이미
+    승패가 갈렸다(뜨는 건 8타일에서 문턱을 넉넉히 넘고, 안 뜨는 건 8타일도
+    거의 0). 재귀 줌이 필요한 사례가 나오면 그때 추가한다.
+    """
+    whole = model.predict(img, conf=0.001, imgsz=1280, verbose=False)[0]
+    best_conf, best_box = 0.0, None
+    for b in whole.boxes:
+        if whole.names[int(b.cls[0])] != target_label:
+            continue
+        c = float(b.conf[0])
+        if c > best_conf:
+            best_conf, best_box = c, tuple(float(v) for v in b.xyxy[0])
+    if best_conf >= min_conf:
+        return best_box, best_conf
+
+    H, W = img.shape[:2]
+    for (x1, y1, x2, y2) in _tile_grid(H, W):
+        tile = img[y1:y2, x1:x2]
+        res = model.predict(tile, conf=0.001, imgsz=1280, verbose=False)[0]
+        for b in res.boxes:
+            if res.names[int(b.cls[0])] != target_label:
+                continue
+            c = float(b.conf[0])
+            if c > best_conf:
+                lx1, ly1, lx2, ly2 = (float(v) for v in b.xyxy[0])
+                best_conf = c
+                best_box = (x1 + lx1, y1 + ly1, x1 + lx2, y1 + ly2)
+    if best_conf >= min_conf:
+        return best_box, best_conf
+    return None, best_conf
+
+
+def yolo_tile_augment(parsed: ParsedCommand, images: dict, detections: dict,
+                      model) -> None:
+    """작은 target 클래스(현재 umbrella 만)를 YOLO 타일링으로 보강.
+
+    dino_augment() 보다 먼저 불러야 한다 -- 여기서 채우면 dino_augment 의
+    카메라별 스킵("이미 찾음")이 그대로 적용돼 그 카메라의 DINO 호출을
+    아낀다. model 이 None 이거나 target 이 대상 클래스가 아니거나 사람
+    문제면 아무것도 안 한다(사람 문제는 target 재탐지 자체가 대상 밖 --
+    dino_augment 와 동일 이유).
+
+    scope_cams 가 카메라 정확히 1대로 안 좁혀지면 아예 타일링을 안 한다 --
+    근거/실측(rtC2 회귀 사례)은 위 _YOLO_TILE_CLASSES 주석 참고.
+    """
+    if model is None or parsed.is_person or parsed.target_type not in _YOLO_TILE_CLASSES:
+        return
+    min_conf = SMALL_TARGET_MIN_CONF[parsed.target_type]
+    scope_cams = _target_scope_cams(parsed, images, detections)
+    if scope_cams is None or len(scope_cams) != 1:
+        return
+    for cam_id, img in images.items():
+        if cam_id not in scope_cams:
+            continue
+        if any(_target_ok(d.label, parsed) for d in detections.get(cam_id, [])):
+            continue          # YOLO whole-frame(전체 카메라 1회) 이 이미 찾음
+        box, conf = _yolo_best_box_tiled(model, img, parsed.target_type, min_conf)
+        if box is None:
+            continue
+        detections.setdefault(cam_id, []).append(Detection(
+            label=parsed.target_type, bbox=box, score=conf))
+        log.info("[fallback] YOLO 타일링으로 target %r 구제: %s (conf=%.2f)",
+                 parsed.target_type, cam_id, conf)
