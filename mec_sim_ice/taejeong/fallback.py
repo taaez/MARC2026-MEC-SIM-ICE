@@ -64,6 +64,50 @@ _LANDMARK_MIN_CONF = 0.65
 # dino_augment 랜드마크 루프 참고).
 _SAME_INSTANCE_IOU = 0.3
 
+# DINO 의 target 재탐지가 실제로는 YOLO 가 이미 다른 클래스로 확신하는 물건을
+# 오분류한 것인지 거르는 문턱. 실측(2026-08-29): rig_3_b 의 콜라캔 하나가
+# 질의 phrase 에 따라 "pencilcase"(conf 0.44, rtC2/lf07/hf02)로도,
+# "mug"(conf 0.42, hf03)로도 잡혔다 -- 둘 다 실제로는 YOLO 가 0.95+ 로
+# 확신하는 cola_can 과 픽셀 단위로 거의 같은 박스였다. DINO 는 열린 어휘라
+# 이런 오분류를 스스로 못 거르고, confidence 도 진짜(약함)보다 가짜(강함)가
+# 높을 수 있어(hf03: 진짜 mug 0.356 < 가짜 mug 0.419) confidence 비교만으로도
+# 못 가린다. "YOLO 가 이미 높은 확신으로 다른 이름을 붙인 바로 그 박스"면
+# 기각한다 -- _SAME_INSTANCE_IOU(0.3, "다른 인스턴스로 볼지" 판단)보다 높게
+# 잡는다(0.5): 저건 "이 정도면 다른 물건일 수도 있다"는 관대한 기준이고,
+# 여기는 "이건 확실히 같은 박스다"를 요구해야 진짜 탐지를 잘못 버리지 않는다.
+#
+# 클래스 이름으로 예외를 두는 방식은 두 번 틀렸다(2026-08-29):
+#   1차: 제외 없음 -- hf04_park_sunblock 이 깨짐(DINO 가 sunblock 을 못
+#        찾자 picnic_table 박스를 거의 그대로 반환, IoU=0.972 -- 랜드마크
+#        위/옆에 있는 정상 관계라 오탐이 아닌데 걸러버림).
+#   2차: "랜드마크 계열 클래스는 제외" -- hf03_table_mug 가 다시 깨짐.
+#        진범이 picnic_table 이 아니라 "bicycle"(쓰러진 자전거, IoU=0.96)
+#        이었는데, bicycle 도 LANDMARK_SYNONYMS 소속이라 똑같이 봐줘버렸다.
+# 클래스가 랜드마크냐 아니냐가 진짜 구분선이 아니었다 -- **박스 크기**가
+# 진짜 구분선이다. hf04 의 "테이블째 반환"은 프레임의 11.5%(가로세로 다
+# 몇백 px)인데, hf03 의 자전거(3.7%)와 콜라캔(0.09%) 오인은 실제 소품
+# 크기 그대로다. 즉 후보 박스가 충분히 크면 "특정 소품과 착각"한 게
+# 아니라 "작은 물체를 못 찾아 그나마 유력한 넓은 지역째로 반환"한 것으로
+# 보고 오탐 검사 자체를 건너뛴다 -- 이러면 랜드마크 여부와 무관하게 두
+# 실패 모드가 정확히 갈린다.
+_DECOY_OVERLAP_IOU = 0.5
+_DECOY_MIN_CONF = 0.5
+_DECOY_MAX_CANDIDATE_FRAC = 0.08   # 이 이상이면 "넓은 지역째 반환"으로 보고 예외
+
+
+def _is_known_decoy(new_bbox: tuple, cam_dets: list, target_type: str,
+                    frame_area: float) -> bool:
+    """new_bbox 가 YOLO 가 이미 다른 클래스로 확신하는 박스와 사실상
+    같은지. 후보 자체가 이미 프레임 대부분을 덮는 넓은 박스면(작은
+    소품일 수 없는 크기) 검사하지 않는다."""
+    x1, y1, x2, y2 = new_bbox
+    cand_area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    if frame_area > 0 and cand_area / frame_area >= _DECOY_MAX_CANDIDATE_FRAC:
+        return False
+    return any(d.label != target_type and d.score >= _DECOY_MIN_CONF
+              and _iou(new_bbox, d.bbox) >= _DECOY_OVERLAP_IOU
+              for d in cam_dets)
+
 
 def _iou(a: tuple, b: tuple) -> float:
     ax1, ay1, ax2, ay2 = a
@@ -459,12 +503,20 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
             if any(_target_ok(d.label, parsed) for d in detections.get(cam_id, [])):
                 continue                  # 이 카메라는 YOLO 가 이미 찾음 -- 스킵
             box = _dino_best_box_tiled(dino, img, target_phrases)
-            if box is not None:
-                detections.setdefault(cam_id, []).append(Detection(
-                    label=parsed.target_type, bbox=tuple(box.xyxy[0]),
-                    score=float(box.conf[0])))
-                log.info("[fallback] DINO rescued target %r on %s (conf=%.2f)",
+            if box is None:
+                continue
+            new_bbox = tuple(float(v) for v in box.xyxy[0])
+            frame_area = float(img.shape[0] * img.shape[1])
+            if _is_known_decoy(new_bbox, detections.get(cam_id, []), parsed.target_type, frame_area):
+                log.info("[fallback] DINO target %r on %s 기각 (YOLO가 이미 다른 "
+                         "클래스로 확신하는 박스와 겹침, conf=%.2f)",
                          parsed.target_type, cam_id, float(box.conf[0]))
+                continue
+            detections.setdefault(cam_id, []).append(Detection(
+                label=parsed.target_type, bbox=new_bbox,
+                score=float(box.conf[0])))
+            log.info("[fallback] DINO rescued target %r on %s (conf=%.2f)",
+                     parsed.target_type, cam_id, float(box.conf[0]))
 
 
 # ────────────────────────────────────────────────────────────────────────────
