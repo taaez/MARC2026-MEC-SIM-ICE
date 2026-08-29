@@ -19,9 +19,17 @@ situation, anchor_coord, target_coord 전부 포함). voice_command 로 조인�
     중심점 거리만으로는 알 수 없는 정보가 관여함). 아래 target 점수는 **참고용
     근사치**이며, 실제 라이브 채점과 다를 수 있다 — 코드 변화의 방향(개선/악화)을
     가늠하는 용도로만 쓰고, 정확한 target 점수/총점은 라이브 실행으로 확인할 것.
-person 문제의 "object_type" 칸은 target_type 문자열이 아니라 situation 일치 여부로
-채점된다 (이것도 39문항 전수 대조로 확인 — object_type_score == 1.0 은 항상 situation
-일치와 정확히 일치했다).
+사람 문항(sar*/sarH*)의 배점은 분실물과 다르다 — 39문항 전수 대조로 확인했다:
+  * "object_type" 칸은 target_type 이 아니라 **situation 일치 여부**다. 제출
+    target_type 은 규격상 항상 "person" 이라 14문항이 전부 같은 값인데 object_type 은
+    9/5 로 갈렸고, 그 5건이 situation 오답 5건과 정확히 일치했다.
+  * **landmark 와 relation 은 배점 0** 이다 (점수 자체는 플랫폼이 계산해 돌려준다).
+    남은 가중치 합 0.8 을 100점으로 정규화하므로 실효 배점은
+    camera 12.5 / situation 18.75 / anchor 18.75 / target 50 이 된다.
+    landmark 에 배점을 주면 14문항 전부 총점 재현에 실패한다 (sar01 실제 18.75 vs 27.78).
+그래서 리포트는 situation 을 따로 보여준다 — 섹션마다 "[배점]" 줄, "[situation 판정]"
+절(정답/제출/혼동 패턴/landmark 참고), 문항별 표의 ``sit`` 칸(O/X/–), --json 의 라운드별
+``situation`` 항목. 실점 원인 분류도 배점 0 인 항목은 원인에서 제외한다.
 
 target 미탐지(``grounding.resolve`` 가 None)일 때의 fallback 값은 실제 라이브 코드
 (``demo_agents/taejeong_agent_vla.py._ground``)와 동일하게 재현한다: camera_id="",
@@ -647,8 +655,9 @@ def main() -> int:
             final["stage2_borrowed_rounds"] = len(s2) - len(measured2)
     scored_rounds = primary
     print("!" * 78)
-    print("주의: camera/object_type/landmark/relation/anchor 는 과거 39건 전수 대조로")
-    print("검증된 정확한 채점식이지만, target(좌표) 점수는 근사치다 -- 실제 라이브 채점은")
+    print("주의: camera/object_type(사람은 situation)/landmark/relation/anchor 와 유형별")
+    print("배점(사람 문항은 landmark·relation 이 0)은 과거 39건 전수 대조로 검증된")
+    print("채점식이지만, target(좌표) 점수는 근사치다 -- 실제 라이브 채점은")
     print("물체 크기/영역까지 보는 것으로 보여 중심점 거리(1-오차/5)만으로는 벗어나는")
     print("사례가 있었다. 총점도 그 영향을 받으니 참고용으로만 볼 것 (정확한 총점은")
     print("Isaac Sim 라이브 실행에서만 확인 가능).")
