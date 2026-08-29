@@ -270,6 +270,12 @@ class GroundingConfig:
     above_clearance_m: float = 0.15  # anchor 상면보다 이만큼 높이 떠 있으면 above
     directional_min_gap_m: float = 0.15  # 방향 relation 을 고려할 최소 수평 거리
     footprint_push: float = 1.0      # locate(): 접촉점 → 중심 보정 계수 (radius 배수)
+    open_space_margin_m: float = 0.5  # _open_space_pick(): 1등-2등 여유 차이가
+    # 이 미만이면 "확실히 비어 있다" 판단을 접고 일반 pair 경로로 되돌아간다
+    # (AREA_DOMINANCE_RATIO 와 같은 철학 -- 압도적일 때만 인정). 실측
+    # 코퍼스(lf09/rt01 tumbler 3.5m vs 0.9m)는 전부 이 문턱보다 훨씬 크게
+    # 벌어져 있어 이 가드가 걸리는 문항이 없다 -- 지금 점수에는 영향 없고,
+    # 다른 배경/하드웨어에서 근소한 차이로 갈릴 때만 작동하는 보험이다.
 
 
 def classify_relation(cam: CameraModel, anchor: Located, target: Located,
@@ -442,6 +448,8 @@ def _open_space_pick(gated, per_cam, a_locs, target_ok,
         return None
     cands.sort(key=lambda c: (-c[0], -c[1]))
     clearance, score, cam_id, t_loc, a_loc = cands[0]
+    if clearance - cands[1][0] < cfg.open_space_margin_m:
+        return None    # 애매하면 일반 pair 경로로 (게이트 폴백 원칙과 동일)
     return (clearance, 0.0, score, cam_id, t_loc, a_loc)
 
 
@@ -732,11 +740,30 @@ def resolve(parsed: ParsedCommand,
                  pose_relaxed=relaxed))
 
     # -- 3) target 미탐지 → 랜드마크만으로 제출 --
+    #
+    # confidence 최댓값으로 고르면 "그 클래스가 맞는가"만 보고 "이게 기준
+    # 랜드마크인가"는 안 본다 -- 실측(2026-08-29, lf08/rt02 "empty parking
+    # space"): umbrella 가 하나도 안 잡혀 이 경로를 타는데, kick_scooter 가
+    # police_car(GT anchor) 보다 confidence 가 높아서 엉뚱한 걸 골랐다
+    # (25.00점, landmark 0/10).
+    #
+    # area_hint 가 있으면(주차장이면 차량류) 그 구역의 지표 클래스를 먼저
+    # 우대한다 -- "주차 구역의 기준물은 차"는 씬이 아니라 단어 뜻에서 나오는
+    # 판단이라 배경이 바뀌어도 성립한다(AREA_INDICATOR_CLASSES, resolve()
+    # 상단 구역 게이트와 같은 판단을 재사용할 뿐, 새 원칙이 아니다). 지표가
+    # 하나도 없으면 원래 동작(confidence 최댓값)으로 그대로 돌아간다 --
+    # 나빠지는 경로가 없다.
+    indicators = AREA_INDICATOR_CLASSES.get(parsed.area_hint or "")
     anchor_best = None                 # (det_score, cam_id, a_loc)
+    anchor_best_indicator = None       # 위 중 label 이 indicators 에 속하는 것
     for cam_id in gated:
         for adet, a_loc in a_locs[cam_id]:
             if anchor_best is None or adet.score > anchor_best[0]:
                 anchor_best = (adet.score, cam_id, a_loc)
+            if indicators and adet.label in indicators:
+                if anchor_best_indicator is None or adet.score > anchor_best_indicator[0]:
+                    anchor_best_indicator = (adet.score, cam_id, a_loc)
+    anchor_best = anchor_best_indicator or anchor_best
     if anchor_best is None:
         return None                    # 타겟도 랜드마크도 없음 → 상위 폴백
     _, cam_id, a_loc = anchor_best
