@@ -18,6 +18,10 @@ real_agent_vla.py 는 ultralytics Boxes 객체(.xyxy, .conf, .cls)를 그대로 
 
 환경변수:
   MARC_DISABLE_DINO_FALLBACK   "1"이면 폴백 자체를 비활성화 (디버그/타임아웃 대비)
+  MARC_DINO_BATCH              배치 forward 1회에 넣을 최대 이미지 수(기본: 제한 없음).
+                               VRAM 이 작은 카드에서 첫 OOM 비용 없이 바로 시작하려면
+                               지정한다 (8GB 카드 권장: 2). 미지정이어도 OOM 이 나면
+                               자동으로 절반씩 줄여 맞춘다 -- _detect_batch 참고.
   MARC_DET_MODEL               기본 IDEA-Research/grounding-dino-base
 """
 
@@ -59,6 +63,26 @@ class _DinoBox:
         self.conf = [conf]
 
 
+def _is_oom(e: Exception) -> bool:
+    """CUDA/MPS 메모리 부족 예외인가 (torch 미설치 환경에서도 안전)."""
+    try:
+        import torch
+        if isinstance(e, torch.cuda.OutOfMemoryError):
+            return True
+    except Exception:                          # noqa: BLE001
+        pass
+    return "out of memory" in str(e).lower()
+
+
+def _free_gpu_cache() -> None:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:                          # noqa: BLE001
+        pass
+
+
 class DinoFallbackDetector:
     """YOLO11 실패 시 2차로 태우는 제로샷 탐지기. 생성자에서 1회 로드(§7 규칙)."""
 
@@ -84,7 +108,15 @@ class DinoFallbackDetector:
         self.model = _from_pretrained_local_first(
             AutoModelForZeroShotObjectDetection, self.model_name).to(self.device).eval()
         self.box_thr, self.text_thr = box_thr, text_thr
-        log.info("[dino-fallback] loaded %s on %s", self.model_name, self.device)
+        # 배치 forward 1회에 넣을 최대 이미지 수. None = 제한 없음(그대로 다
+        # 넣음). OOM 이 나면 _detect_batch 가 절반씩 줄여 여기에 기록하고,
+        # 이후 호출은 그 크기를 그대로 쓴다 -- GPU 마다 다르므로 상수로 박지
+        # 않고 첫 OOM 에서 한 번만 학습한다. MARC_DINO_BATCH 로 미리 지정하면
+        # 그 값으로 시작해 첫 OOM 비용도 건너뛸 수 있다(8GB 카드 권장: 2).
+        env_batch = os.getenv("MARC_DINO_BATCH", "").strip()
+        self._max_batch = int(env_batch) if env_batch.isdigit() and int(env_batch) > 0 else None
+        log.info("[dino-fallback] loaded %s on %s (batch=%s)", self.model_name,
+                 self.device, self._max_batch or "auto")
 
     def best_box(self, img_bgr: np.ndarray, phrases: Sequence[str]) -> Optional[_DinoBox]:
         """phrases 중 아무거나 매치되는 것 중 가장 점수 높은 박스 하나. 없으면 None.
@@ -145,8 +177,42 @@ class DinoFallbackDetector:
     def _detect_batch(self, imgs_rgb: Sequence[np.ndarray], phrase: str,
                       box_thr: Optional[float] = None):
         """phrase 하나를 이미지 여러 장에 배치로 적용 -- 이미지 순서대로
-        (bbox, score) 리스트(없으면 (None, -1.0)). box_thr 는 _detect_one 과
-        같은 용도(이 호출 전용 문턱 오버라이드)."""
+        (bbox, score) 리스트(없으면 (None, -1.0)).
+
+        VRAM 이 모자라면 배치를 쪼개서 순차 처리한다. 크기를 특정 GPU 에
+        맞춘 상수로 박지 않고 **OOM 이 나면 절반으로 줄여 재시도하고 그
+        크기를 기억**하는 방식이다 -- 채점 서버(48GB)에서는 8장을 그대로
+        한 번에 처리해 빠르고, 랩 데스크탑(8GB)에서는 자기 카드에 맞는
+        크기를 스스로 찾아간다. 근거: 2026-08-29 실측(RTX 5060 Ti 8GB,
+        lf07 pencilcase 타일링) -- 8타일 fp32 forward 하나가 6.37GiB 를
+        실제로 할당해 7.53GiB 카드에서 터졌다. empty_cache/
+        expandable_segments 로는 못 푼다(캐시가 아니라 실사용량이라,
+        그 조치 후에도 "reserved but unallocated" 만 1.96GiB->112MiB 로
+        줄고 OOM 은 그대로였다). dtype 을 bf16 으로 낮추는 건 이 모델에서
+        이미 크래시 이력이 있어(위 __init__ 주석) 손대지 않는다.
+        """
+        results = []
+        chunk = self._max_batch or len(imgs_rgb)
+        i = 0
+        while i < len(imgs_rgb):
+            part = list(imgs_rgb[i:i + chunk])
+            try:
+                results.extend(self._detect_batch_once(part, phrase, box_thr))
+            except Exception as e:            # noqa: BLE001
+                if not _is_oom(e) or chunk <= 1:
+                    raise
+                chunk = max(1, chunk // 2)
+                self._max_batch = chunk
+                log.warning("[dino-fallback] CUDA OOM -- 배치를 %d 장으로 줄여 "
+                            "재시도(이후 호출에도 적용)", chunk)
+                _free_gpu_cache()
+                continue                      # 같은 i 부터 줄인 크기로 다시
+            i += len(part)
+        return results
+
+    def _detect_batch_once(self, imgs_rgb: Sequence[np.ndarray], phrase: str,
+                           box_thr: Optional[float] = None):
+        """_detect_batch 의 실제 forward 1회분 (쪼개진 한 덩어리)."""
         import torch
         from PIL import Image
 
