@@ -192,6 +192,11 @@ class Detection:
     label: str                       # 클래스명 (공식 로스터 / person_* pose 클래스)
     bbox: tuple                      # (x1, y1, x2, y2) 픽셀
     score: float = 1.0
+    # 사람 탐지에 한해 pose 모델이 찍어 준 '발목 가로 픽셀' (pose_keypoints.py).
+    # 플랫폼의 정답이 사람의 중심이 아니라 발이라, 제출 target 좌표의 가로
+    # 위치를 이걸로 옮긴다 (_foot_adjusted_point). 선택 기하(locate)는 일부러
+    # 건드리지 않는다 -- 이유는 그 함수의 docstring. None 이면 기존 동작 그대로.
+    foot_u: Optional[float] = None
 
 
 @dataclass
@@ -492,6 +497,39 @@ def _relation_fit(cam: CameraModel, a_loc: Located, t_loc: Located,
     return (1.0 if geo == hint else 0.0, prox)
 
 
+def _foot_adjusted_point(cam: CameraModel, t_loc: Located,
+                         cfg: GroundingConfig) -> list:
+    """사람 target 의 **제출 좌표만** 발목 가로 위치로 옮긴다.
+
+    플랫폼의 정답은 사람의 중심이 아니라 발이라, bbox 가로 중앙을 쓰면 누운
+    사람에서 몸길이의 절반만큼 어긋난다 (근거·실측은 pose_keypoints.py
+    docstring). 발목 keypoint 가 그 가로 위치를 준다.
+
+    **선택 기하(``Located.base``)는 일부러 건드리지 않는다.** base 는 제출
+    좌표이자 relation 판정·anchor 선택의 입력이기도 해서, locate() 안에서
+    같이 옮기면 (target, anchor) 쌍 선택이 뒤집힌다 -- 실측에서 sar07/sarH6
+    의 anchor 가 0.95 -> 0.04 로 무너져 target 이득(+0.07)을 넘는 손해가
+    났다. 그래서 보정은 payload 를 만드는 이 지점에서만 적용한다.
+
+    세로는 접지선(bbox 아랫변)을 그대로 쓴다. 얕게 내려다보는 카메라에서
+    세로 픽셀 오차는 world 로 크게 증폭되므로(rig_7_a 실측 1px = 0.075m)
+    발목의 세로까지 쓰면 오히려 나빠진다.
+    """
+    u = t_loc.det.foot_u
+    if u is None:
+        return t_loc.ground_point
+    _, _, _, y2 = t_loc.det.bbox
+    z = float(t_loc.base[2])
+    near = pixel_to_plane(cam, float(u), y2, plane_z=z)
+    if near is None:
+        return t_loc.ground_point
+    away = near[:2] - cam.C_w[:2]
+    n = float(np.linalg.norm(away))
+    away = away / n if n > 1e-9 else np.zeros(2)
+    xy = near[:2] + cfg.footprint_push * t_loc.radius * away
+    return [float(xy[0]), float(xy[1]), z]
+
+
 def _build_decision(parsed: ParsedCommand, cam: CameraModel, cam_id: str,
                     t_loc: Optional[Located], a_loc: Optional[Located],
                     cfg: GroundingConfig, ground_surface_token: Optional[str],
@@ -510,7 +548,8 @@ def _build_decision(parsed: ParsedCommand, cam: CameraModel, cam_id: str,
     # target 미탐지 시 anchor 좌표를 target 좌표로 대신 낸다: 허용 반경(5m)에
     # 비해 실측 anchor↔target 거리가 훨씬 짧아 부분점수를 크게 건진다.
     # anchor 와 같은 ground_point 규약을 쓴다 (Located.ground_point docstring).
-    target_coord = t_loc.ground_point if t_loc is not None else list(anchor_coord)
+    target_coord = (_foot_adjusted_point(cam, t_loc, cfg) if t_loc is not None
+                    else list(anchor_coord))
 
     relation: Optional[str] = None
     situation: Optional[str] = None
@@ -572,8 +611,18 @@ def resolve(parsed: ParsedCommand,
          맞아도 camera/landmark/anchor 배점이 살아있다.
 
     ground_surface_token: 사람이 랜드마크 위가 아닐 때 situation 규칙에 넣을
-    지면 토큰(grass/road/...). 판정 수단이 없으면 None → 공식 fallback 경로.
+    지면 토큰(grass/road/...). 미지정이면 명령에서 파싱한 area_hint 를 쓴다.
     """
+    # 명령이 지목한 구역을 지지면 토큰으로 쓴다 -- "parking lot 바닥에 쓰러진"
+    # 처럼 사람이 랜드마크 위가 아닌 문항에서, 지금까지 support 가 None 이라
+    # 공식 규칙표(situation_rules.yaml)를 못 타고 자세 기본값으로 떨어졌다.
+    # 랜드마크 위(on/above)인 경우는 _build_decision 이 랜드마크를 우선하므로
+    # 이 값이 끼어들지 않는다 -- 즉 순수 추가 계층이라 나빠지는 경로가 없다.
+    # (실측 39문항: sar01/sarH4/sar06 의 situation 이 맞아지고 회귀 0건,
+    #  Stage1 평균 68.54 -> 70.25.)
+    if ground_surface_token is None:
+        ground_surface_token = parsed.area_hint
+
     per_cam = {}
     for cam_id, dets in detections.items():
         cam = cameras.get(cam_id)

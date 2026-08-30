@@ -18,6 +18,7 @@ taejeong/validation/offline_score.py(오프라인, records/ 재실행)가 똑같
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Optional
 
 try:                              # package import (e.g. `from taejeong.fallback import ...`)
@@ -104,3 +105,33 @@ def dino_augment(parsed: ParsedCommand, images: dict, detections: dict,
                 detections.setdefault(cam_id, []).append(Detection(
                     label=lm, bbox=tuple(box.xyxy[0]), score=float(box.conf[0])))
                 log.info("[fallback] DINO rescued landmark %r on %s", lm, cam_id)
+
+
+def pose_augment(parsed: ParsedCommand, images: dict, detections: dict, pose) -> None:
+    """사람 탐지에 발목 가로좌표(``Detection.foot_u``)를 채운다 (제자리 수정).
+
+    ``pose`` 가 None 이거나 사람 문항이 아니면 아무것도 하지 않는다. 사람
+    문항에서만 도는 이유는 플랫폼 정답이 '사람의 발' 이라는 사실에 근거한
+    보정이기 때문이다 -- 물체·랜드마크는 지금(bbox 가로 중앙)이 맞는 값이다
+    (pose_keypoints.py 모듈 docstring 의 실측표 참조).
+
+    dino_augment 와 마찬가지로 순수 추가 계층이다: 발목을 못 찾은 탐지는
+    건드리지 않으므로 pose 모델이 없거나 실패해도 기존 동작 그대로다.
+    """
+    if pose is None or not parsed.is_person:
+        return
+    for cam_id, dets in detections.items():
+        img = images.get(cam_id)
+        if img is None:
+            continue
+        idx = [i for i, d in enumerate(dets)
+               if d.label == "person" or d.label.startswith("person_")]
+        if not idx:
+            continue
+        found = pose.foot_u(img, [dets[i].bbox for i in idx])
+        for k, u in found.items():
+            i = idx[k]
+            dets[i] = replace(dets[i], foot_u=u)
+        if found:
+            log.info("[pose-kp] %s: %d/%d person detections got an ankle column",
+                     cam_id, len(found), len(idx))

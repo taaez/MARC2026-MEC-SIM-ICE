@@ -19,9 +19,17 @@ situation, anchor_coord, target_coord 전부 포함). voice_command 로 조인�
     중심점 거리만으로는 알 수 없는 정보가 관여함). 아래 target 점수는 **참고용
     근사치**이며, 실제 라이브 채점과 다를 수 있다 — 코드 변화의 방향(개선/악화)을
     가늠하는 용도로만 쓰고, 정확한 target 점수/총점은 라이브 실행으로 확인할 것.
-person 문제의 "object_type" 칸은 target_type 문자열이 아니라 situation 일치 여부로
-채점된다 (이것도 39문항 전수 대조로 확인 — object_type_score == 1.0 은 항상 situation
-일치와 정확히 일치했다).
+사람 문항(sar*/sarH*)의 배점은 분실물과 다르다 — 39문항 전수 대조로 확인했다:
+  * "object_type" 칸은 target_type 이 아니라 **situation 일치 여부**다. 제출
+    target_type 은 규격상 항상 "person" 이라 14문항이 전부 같은 값인데 object_type 은
+    9/5 로 갈렸고, 그 5건이 situation 오답 5건과 정확히 일치했다.
+  * **landmark 와 relation 은 배점 0** 이다 (점수 자체는 플랫폼이 계산해 돌려준다).
+    남은 가중치 합 0.8 을 100점으로 정규화하므로 실효 배점은
+    camera 12.5 / situation 18.75 / anchor 18.75 / target 50 이 된다.
+    landmark 에 배점을 주면 14문항 전부 총점 재현에 실패한다 (sar01 실제 18.75 vs 27.78).
+그래서 리포트는 situation 을 따로 보여준다 — 섹션마다 "[배점]" 줄, "[situation 판정]"
+절(정답/제출/혼동 패턴/landmark 참고), 문항별 표의 ``sit`` 칸(O/X/–), --json 의 라운드별
+``situation`` 항목. 실점 원인 분류도 배점 0 인 항목은 원인에서 제외한다.
 
 target 미탐지(``grounding.resolve`` 가 None)일 때의 fallback 값은 실제 라이브 코드
 (``demo_agents/taejeong_agent_vla.py._ground``)와 동일하게 재현한다: camera_id="",
@@ -84,7 +92,9 @@ sys.path.insert(0, _TAEJEONG_DIR)   # command_parser / grounding / yolo_adapter 
 from command_parser import parse_command          # noqa: E402
 from dino_fallback import DinoFallbackDetector      # noqa: E402
 from dino_fallback import is_disabled as dino_disabled  # noqa: E402
-from fallback import dino_augment, vlm_assist       # noqa: E402
+from fallback import dino_augment, pose_augment, vlm_assist   # noqa: E402
+from pose_keypoints import AnkleKeypointEstimator   # noqa: E402
+from pose_keypoints import is_disabled as pose_disabled       # noqa: E402
 from grounding import resolve                      # noqa: E402
 from run_offline import load_round                 # noqa: E402
 from vlm_fallback import VlmTargetResolver          # noqa: E402
@@ -385,6 +395,15 @@ def main() -> int:
                          "Stage1/Stage2(retrieval) 구분도 여기서 읽는다")
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--imgsz", type=int, default=1280)
+    ap.add_argument("--small-weights", default=None,
+                    help="소형객체 서브모델 가중치. 기본: small_t640_r2 best.pt "
+                         "(존재할 때만 자동 사용 — yolo_adapter.load_detector 참조)")
+    ap.add_argument("--tiling", default=None,
+                    help="타일링 설정 폴더(tiling.json). 기본: datasets/dataset_small_t640")
+    ap.add_argument("--small-conf", type=float, default=0.25,
+                    help="서브모델 전용 conf (B 와 스케일이 다르다 — evaluate.py 스윕 근거)")
+    ap.add_argument("--no-small", action="store_true",
+                    help="서브모델 라우팅 없이 B 단독으로 채점 (도입 전과의 비교용)")
     ap.add_argument("--json", default=None)
     ap.add_argument("--no-stage2-exec", action="store_true",
                     help="Stage2 실행(주행/집기/배달) 시뮬을 건너뛴다. "
@@ -431,8 +450,16 @@ def main() -> int:
 
     answer_key = load_answer_key(args.answer_key, args.scenario)
 
-    from ultralytics import YOLO
-    model = YOLO(args.weights)
+    if args.no_small:
+        from ultralytics import YOLO
+        model = YOLO(args.weights)
+        print("[detector] B 단독 (--no-small)")
+    else:
+        from yolo_adapter import load_detector
+        model = load_detector(args.weights, conf=args.conf, imgsz=args.imgsz,
+                              small_weights=args.small_weights, tiling=args.tiling,
+                              small_conf=args.small_conf)
+        print(f"[detector] {'라우팅 B+소형' if hasattr(model, 'small_to_det') else 'B 단독'}")
 
     use_fallback, why = resolve_fallback_mode(args.fallback)
     print(f"[fallback] {'사용' if use_fallback else '건너뜀'} -- {why}")
@@ -451,6 +478,16 @@ def main() -> int:
             vlm = VlmTargetResolver()
         except Exception as e:  # noqa: BLE001
             print(f"[fallback] VLM 로드 실패, behind 중재/OOV 재해석 없이 진행: {e}",
+                  file=sys.stderr)
+    # 사람 target 의 발목 keypoint. DINO/VLM 폴백과 달리 --fallback 여부와
+    # 무관하게 켠다 -- 라이브 에이전트가 항상 켜므로 여기서도 항상 켜야 두
+    # 경로의 동작이 갈라지지 않는다 (fallback.py 모듈 docstring 의 원칙).
+    pose = None
+    if not pose_disabled():
+        try:
+            pose = AnkleKeypointEstimator()
+        except Exception as e:  # noqa: BLE001
+            print(f"[pose-kp] 로드 실패, 사람 좌표는 bbox 중앙 기준으로 진행: {e}",
                   file=sys.stderr)
     args.fallback = use_fallback
 
@@ -474,10 +511,14 @@ def main() -> int:
         """
         problem_id, expected, weights, kind = hit
         parsed = parse_command(cmd)
+        # 아래 augment 들이 dets 를 제자리 수정하므로 항상 복사한다 (한 라운드의
+        # 프레임을 여러 문항에 재사용하기 때문 -- 원본을 건드리면 앞 문항이
+        # 뒤 문항에 새어 들어간다).
+        dets = {cid: list(v) for cid, v in dets.items()}
         if args.fallback:
-            dets = {cid: list(v) for cid, v in dets.items()}
             target_phrases = vlm_assist(cmd, parsed, vlm)
             dino_augment(parsed, images, dets, target_phrases, dino)
+        pose_augment(parsed, images, dets, pose)
         decision = resolve(parsed, dets, cams)
         submission = (flatten_payload(decision.to_payload()) if decision is not None
                       else fallback_submission(parsed))
@@ -631,8 +672,9 @@ def main() -> int:
             final["stage2_borrowed_rounds"] = len(s2) - len(measured2)
     scored_rounds = primary
     print("!" * 78)
-    print("주의: camera/object_type/landmark/relation/anchor 는 과거 39건 전수 대조로")
-    print("검증된 정확한 채점식이지만, target(좌표) 점수는 근사치다 -- 실제 라이브 채점은")
+    print("주의: camera/object_type(사람은 situation)/landmark/relation/anchor 와 유형별")
+    print("배점(사람 문항은 landmark·relation 이 0)은 과거 39건 전수 대조로 검증된")
+    print("채점식이지만, target(좌표) 점수는 근사치다 -- 실제 라이브 채점은")
     print("물체 크기/영역까지 보는 것으로 보여 중심점 거리(1-오차/5)만으로는 벗어나는")
     print("사례가 있었다. 총점도 그 영향을 받으니 참고용으로만 볼 것 (정확한 총점은")
     print("Isaac Sim 라이브 실행에서만 확인 가능).")
