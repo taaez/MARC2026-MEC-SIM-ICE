@@ -51,7 +51,12 @@ payload = decision.to_payload()   # GroundingResult 필드 구조 그대로
 - **'on' 판정**: 이미지상 겹침(저비용 사전판정) → anchor 상면 평면으로 재투영 →
   **재투영이 target 을 anchor 중심으로 끌어당길 때만 채택** (앞/뒤 지면에 서 있는
   물체는 재투영하면 오히려 멀어지므로 자동으로 걸러짐 — 합성 씬으로 검증).
-- **relation**: 텍스트 confident 면 텍스트 우선, 아니면 기하(on/above/beside/near).
+- **relation**: 텍스트 confident 면 텍스트 우선 → 명령이 '빈 자리/열린 바닥'이라는
+  영역을 가리키면 near(확인된 의미 예외) → 그 외에는 기하(on/above/beside/near).
+  **near/beside 는 XY 평면 OBB 표면거리로 가른다** (중심거리 아님, 임계값 0.63m).
+  규칙·유도는 리포 루트의 `MARC2026_Chungmu_near_beside_OBB_analysis.md`. 문서의
+  0.58m 는 공식 OBB 척도의 값이고, 우리는 같은 쌍을 단안으로 0.61m 로 재므로
+  **우리 척도의 경계인 0.63m 로 재보정**했다 (2026-08-30, 39라운드 재채점 확인).
   방향(behind/front/left/right)은 텍스트가 방향을 말할 때만 기하로 확인 — 기준
   시점은 카메라 광축의 지면 투영으로 **가정**(채점 정의 미공개, 실측 검증 항목).
 - **사람 문제**: pose 버킷으로 후보 자세 좁혀 사람 선택 → landmark 위('on')면
