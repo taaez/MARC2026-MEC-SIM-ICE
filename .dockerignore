@@ -8,3 +8,8 @@ tokens.env
 *.egg-info/
 build/
 dist/
+
+# mec_sim_ice/ 는 이제 통째로 COPY 되므로(docker/Dockerfile), 런타임에 안 쓰이는
+# 대용량/개발용 서브디렉토리는 여기서 명시적으로 제외한다.
+mec_sim_ice/records/
+mec_sim_ice/docs/

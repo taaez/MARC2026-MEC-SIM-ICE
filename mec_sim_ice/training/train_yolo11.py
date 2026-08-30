@@ -2,7 +2,7 @@
 
 STATUS: staged in test/ (repo root, sibling of demo/) while the class list/pipeline is
 still being shaken out -- see test/README.md. Once verified, det_classes.py and this file
-move into demo/ so real_agent_vla.py (also in demo/) can import det_classes directly.
+move into demo/ so record_agent_vla.py (also in demo/) can import det_classes directly.
 
 Two steps, run once each (from this test/ directory):
 
@@ -39,7 +39,7 @@ earlier draft of this comment pointed at the wrong path):
     you run this script -- run it from test/ so it lands next to this file).
   - training run artifacts: ./runs/detect/train/ (Ultralytics default, relative to CWD) --
     test/runs/ if you ran `train` from test/. weights/best.pt lives under there; once the
-    pipeline is verified, copy the final one to demo/weights/best.pt for real_agent_vla.py /
+    pipeline is verified, copy the final one to demo/weights/best.pt for record_agent_vla.py /
     submission (see the guide, step 3-1) -- note the demo/ prefix, this file's own directory
     changes. test/dataset/ and test/runs/ are gitignored -- do not commit raw images or
     training logs, only the final demo/weights/best.pt once it's placed there.

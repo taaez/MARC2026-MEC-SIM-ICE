@@ -7,7 +7,7 @@ Isaac Sim 데스크탑에서 한 번 수집해 둔 `mec_sim_ice/records/` 폴더
 ## 1. record 자료가 뭔가
 
 라이브 실행 시 `MARC_RECORD_DIR` 를 주면 라운드마다 이렇게 덤프된다
-(수집 방법 자체는 `RUNBOOK_real_vla.md` 3절 참고 — 이 문서는 **수집된 뒤** 얘기다):
+(수집 방법 자체는 `RUNBOOK_record.md` 3절 참고 — 이 문서는 **수집된 뒤** 얘기다):
 
 ```
 mec_sim_ice/records/
@@ -40,7 +40,7 @@ pip install ultralytics pillow pyyaml
 mkdir -p mec_sim_ice/demo_agents/weights && cp <받은 best.pt> mec_sim_ice/demo_agents/weights/best.pt
 ```
 
-## 3. 실행 — RealVLA 파이프라인 (`mec_sim_ice/real_agent_vla.py`)
+## 3. 실행 — record 전용 파이프라인 (`mec_sim_ice/record_agent_vla.py`)
 
 레포 루트에서:
 
@@ -54,7 +54,7 @@ python3 mec_sim_ice/tools/run_offline_real_vla.py --records ./mec_sim_ice/record
 
 # (c) 공식 시나리오 expected 와 비교 — camera/target/landmark/relation 일치 여부
 python3 mec_sim_ice/tools/run_offline_real_vla.py --records ./mec_sim_ice/records --weights mec_sim_ice/demo_agents/weights/best.pt \
-    --gt mec_sim_ice/taejeong/content-image-2026.R03/marc2026_chungmu.yaml
+    --gt mec_sim_ice/vla_grounding/content-image-2026.R03/marc2026_chungmu.yaml
 ```
 
 옵션: `--conf 0.35`(탐지 confidence), `--imgsz 1280`. Windows 는 `python3` 대신
@@ -76,12 +76,12 @@ command: Find the tumbler on the bench.
 - `camera`/`target_type`/`landmark`/`relation`/`situation` — GT 와 일치 여부.
   `null` 은 그 GT 형식에 해당 필드가 없다는 뜻 (예: 공식 expected 엔 좌표가 없음).
 - `anchor_score`/`target_score` — 좌표 점수 `max(0, 1 - 3D오차/5m)`
-  (`mec_sim_ice/taejeong/validation/score_report.py` 와 같은 실측 역산식). `*_err_m` 은 오차 미터.
+  (`mec_sim_ice/vla_grounding/validation/score_report.py` 와 같은 실측 역산식). `*_err_m` 은 오차 미터.
 - 마지막 `summary` — 전체 라운드의 필드별 정답률과 좌표 점수 평균.
 
 ### 개선 루프
 
-1. `command_parser` / `real_agent_vla.py` / weights 수정
+1. `command_parser` / `record_agent_vla.py` / weights 수정
 2. 위 (b) 재실행 → summary 비교
 3. 어느 필드에서 갈렸는지(`vs GT` 라인)로 원인 분리: 탐지 실패인지, 파싱 오답인지,
    카메라 오선택인지, 좌표 오차인지
@@ -92,22 +92,24 @@ command: Find the tumbler on the bench.
 
 | 도구 | 재실행 대상 |
 |---|---|
-| `mec_sim_ice/tools/run_offline_real_vla.py` | `mec_sim_ice/real_agent_vla.py` (RealVLA) |
-| `mec_sim_ice/taejeong/run_offline.py` | taejeong 파이프라인 (command_parser → yolo_adapter → grounding) — 라운드별 payload만 출력 |
-| `mec_sim_ice/taejeong/validation/offline_score.py` | taejeong 파이프라인 + **그 자리에서 채점까지** (camera/object_type/landmark/relation/anchor/target 표, `score_report.py` 와 동일 포맷) |
-| `mec_sim_ice/tools/eval_offline.py` | `mec_sim_ice/stage1/` 파이프라인 (Grounding DINO 실험 계열) |
+| `mec_sim_ice/tools/run_offline_real_vla.py` | `mec_sim_ice/record_agent_vla.py` (record 전용) |
+| `mec_sim_ice/vla_grounding/run_offline.py` | vla_grounding 파이프라인 (command_parser → yolo_adapter → grounding) — 라운드별 payload만 출력 |
+| `mec_sim_ice/vla_grounding/validation/offline_score.py` | vla_grounding 파이프라인 + **그 자리에서 채점까지** (camera/object_type/landmark/relation/anchor/target 표, `score_report.py` 와 동일 포맷) |
 
-예) taejeong 파이프라인 (payload만, 채점 없음):
+(`mec_sim_ice/stage1/` 파이프라인과 그 재실행 도구 `tools/eval_offline.py` 는 제출 경로에서
+전혀 안 쓰이는 죽은 코드라 2026-08-31에 삭제했다.)
+
+예) vla_grounding 파이프라인 (payload만, 채점 없음):
 
 ```bash
-cd mec_sim_ice/taejeong
+cd mec_sim_ice/vla_grounding
 python3 run_offline.py --records ../records --weights ../demo_agents/weights/best.pt
 ```
 
-예) taejeong 파이프라인 + 즉시 채점 (권장 — chungmu 39문항 정답이 `validation/runs/`에 이미 있음):
+예) vla_grounding 파이프라인 + 즉시 채점 (권장 — chungmu 39문항 정답이 `validation/runs/`에 이미 있음):
 
 ```bash
-cd mec_sim_ice/taejeong/validation
+cd mec_sim_ice/vla_grounding/validation
 python3 offline_score.py --weights ../../demo_agents/weights/best.pt
 ```
 
@@ -163,7 +165,7 @@ Stage2 grounding 평균 :  65.85   (6문항)
 
 ## 4-2. Stage2 **실행** 시뮬 (2026-08-27 추가)
 
-`taejeong/validation/stage2_sim.py` 는 `demo/participant_app.py` 를 **원본 그대로 실행한다.**
+`vla_grounding/validation/stage2_sim.py` 는 `demo/participant_app.py` 를 **원본 그대로 실행한다.**
 가짜 `MARCClient`(`validation/fake_client.py`)를 `MARCClient.from_env()` 자리에 끼워 넣는
 방식이라, ROS·Isaac Sim 없이 주행 제어루프와 팔 서보가 실제로 돈다.
 
@@ -171,7 +173,7 @@ Stage2 grounding 평균 :  65.85   (6문항)
 개별 문항을 파고들거나 대조군을 돌릴 때만 직접 쓴다.
 
 ```bash
-python3 mec_sim_ice/taejeong/validation/stage2_sim.py                      # 6문항 전부
+python3 mec_sim_ice/vla_grounding/validation/stage2_sim.py                      # 6문항 전부
 python3 ... --problem rt01_parking_tumbler --verbose                       # 한 문항 + 앱 로그
 python3 ... --occupancy mec_sim_ice/records/occupancy.npz                  # 실제 지도가 있으면
 ```
@@ -233,8 +235,8 @@ python3 ... --fix-approach-cap     # 정지규칙 ON + 상한 적용 -> 6/6 (수
 
 - 공식 항목별 가중치·채점 세부는 플랫폼만 안다. 오프라인 결과는 **개선 전후의 상대
   비교와 실패 원인 분리**에 쓰고, 최종 점수 확인은 라이브 실행(`results/scores.jsonl`
-  → `mec_sim_ice/taejeong/validation/score_report.py`)으로 한다.
+  → `mec_sim_ice/vla_grounding/validation/score_report.py`)으로 한다.
 - record 는 수집 시점의 씬 스냅샷이다. 시나리오/에셋이 갱신되면 데스크탑에서 다시
-  수집해야 한다 (`RUNBOOK_real_vla.md` 3절, `MARC_RECORD_ONLY=1` 이면 몇 분).
+  수집해야 한다 (`RUNBOOK_record.md` 3절, `MARC_RECORD_ONLY=1` 이면 몇 분).
 - `mock_demo_data.yaml` GT 는 시나리오에서 추출된 값(+노이즈 가능성)이라 좌표 점수가
   실제 채점과 1:1 은 아니다. 공식 expected(`marc2026_chungmu.yaml`)는 해석 필드만 있다.

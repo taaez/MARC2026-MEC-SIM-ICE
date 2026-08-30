@@ -149,7 +149,7 @@ class RoutedDetector:
         self.conf, self.iou, self.imgsz, self.device = conf, iou, imgsz, device
         self.fuse, self.fuse_iou = fuse, fuse_iou
         # Map the sub-model's 0..2 onto the shared 34-class taxonomy so downstream code
-        # (score.py, real_agent_vla.py) never learns there were two models.
+        # (score.py, record_agent_vla.py) never learns there were two models.
         self.small_to_det = np.array([DET_CLASSES.index(n) for n in small.names], dtype=int)
         self.owned = set(self.small_to_det.tolist())
 

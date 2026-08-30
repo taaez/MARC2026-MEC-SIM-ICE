@@ -5,8 +5,8 @@ huggingface_hub==0.33.4
 pillow>=10.0
 numpy<2.3
 opencv-python-headless>=4.9
-ultralytics==8.3.170        # taejeong YOLO 파이프라인
+ultralytics==8.3.170        # vla_grounding YOLO 파이프라인
 
-# 2026-08-29 제거: bitsandbytes(4bit), qwen-vl-utils -- taejeong/vlm_fallback.py
+# 2026-08-29 제거: bitsandbytes(4bit), qwen-vl-utils -- vla_grounding/vlm_fallback.py
 # 가 VL(비전-언어) 모델 지원을 통째로 뺐다(텍스트 전용 소형 LM만 씀, 이미지
 # 인코더/4bit 양자화 둘 다 필요 없음). 되돌릴 일이 생기면 여기부터 복구할 것.

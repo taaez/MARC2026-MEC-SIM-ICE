@@ -1,7 +1,7 @@
 """MARC 2026 participant app -- team default entry point.
 
-Stage 1 grounding runs the taejeong pipeline (``taejeong_agent_vla`` ->
-``taejeong/``: closed-vocabulary command parsing, pure-geometry grounding, and
+Stage 1 grounding runs the vla_grounding pipeline (``vla_grounding_agent`` ->
+``vla_grounding/``: closed-vocabulary command parsing, pure-geometry grounding, and
 the organizer's official pose x support situation rules), on top of the team's
 YOLO detector weights (``demo/weights/best.pt``, classes per
 ``test/det_classes.py``). Stage 2 is the starter kit's occupancy A* driving
@@ -9,12 +9,12 @@ YOLO detector weights (``demo/weights/best.pt``, classes per
 
 ``demo/mock_agent_vla.py`` is intentionally left untouched: the guide's
 requirement is the ``process()`` / ``process_stage2()`` signature returning a
-``GroundingResult``, which ``TaejeongVLAGrounding`` satisfies -- so this file
+``GroundingResult``, which ``VLAGroundingAgent`` satisfies -- so this file
 swaps the implementation without changing the protocol wiring.
 
 Per-round scores are appended to ``./results/scores.jsonl``
-(``MARC_SCORE_LOG``); ``taejeong/validation/`` reads that file for self-scoring
-against marc2026_chungmu. See ``taejeong/RUNBOOK.md``.
+(``MARC_SCORE_LOG``); ``vla_grounding/validation/`` reads that file for self-scoring
+against marc2026_chungmu. See ``vla_grounding/RUNBOOK.md``.
 The protocol/ROS wiring (register, subscribe/publish, world_pose, occupancy) is all
 handled by ``MARCClient``, so only the participant logic (mock VLA + nav) is connected
 through handlers.
@@ -39,7 +39,7 @@ import time
 
 from marc_sdk import MARCClient
 
-from taejeong_agent_vla import TaejeongVLAGrounding
+from vla_grounding_agent import VLAGroundingAgent
 from mock_agent_navigation import (
     OccupancyGridPlanner, PathFollower, GoalSeekController,
     load_obstacles, obstacles_excluding_goal, load_mock_data,
@@ -97,18 +97,18 @@ class DemoParticipant:
 
     def __init__(self):
         self.client = MARCClient.from_env()
-        # Stage 1/2 grounding: taejeong pipeline (command_parser -> YOLO -> grounding
+        # Stage 1/2 grounding: vla_grounding pipeline (command_parser -> YOLO -> grounding
         # geometry -> situation_resolver). YOLO weights load here, once, before connect().
-        self.vla = TaejeongVLAGrounding(self.client)
+        self.vla = VLAGroundingAgent(self.client)
         # Per-round detail-score JSONL log (see _on_score). Round -> voice_command so each
-        # score line can be joined back to the question that produced it; taejeong/validation
+        # score line can be joined back to the question that produced it; vla_grounding/validation
         # reads this file for self-scoring.
         self._round_commands = {}
         self._score_log_path = os.environ.get("MARC_SCORE_LOG", "./results/scores.jsonl")
         # world -> arm_base_link tf, used by _object_arm_xy for the real (not assumed)
         # chassis->arm mount offset/rotation. The listener must be kept alive (held as an
         # attribute) or it stops receiving tf broadcasts.
-        # Offline harnesses (taejeong/validation/stage2_sim.py) run without ROS, so a
+        # Offline harnesses (vla_grounding/validation/stage2_sim.py) run without ROS, so a
         # missing tf2_ros is not fatal here -- _object_arm_xy falls back to the pose-based
         # computation when the buffer is None.
         try:
@@ -398,7 +398,7 @@ class DemoParticipant:
 
         When tf2 is unavailable (offline harness: no ROS, no live platform) we fall back
         to the previous pose-based computation with the ARM_BASE_FWD assumption. That
-        fallback is an approximation, but it lets taejeong/validation/stage2_sim.py run
+        fallback is an approximation, but it lets vla_grounding/validation/stage2_sim.py run
         the whole Stage 2 flow without Isaac Sim. Live runs always take the tf2 path.
         """
         if self._tf_buffer is not None:

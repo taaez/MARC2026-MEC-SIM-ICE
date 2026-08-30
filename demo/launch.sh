@@ -8,9 +8,9 @@
 #   MARC_TOKEN=<token> MARC_TEAM_ID=u1 ./launch.sh      # set env vars directly
 #   ./launch.sh u1                                       # if tokens.env exists, u1 -> U1_TOKEN
 #   ROS_DOMAIN_ID=0 ./launch.sh u2
-#   MARC_ENTRYPOINT=participant_app_agent_vla.py ./launch.sh u1   # run a different entry point
-#     default: participant_app.py = taejeong pipeline (YOLO + command parsing + geometry).
-#     participant_app_agent_vla.py = the Grounding DINO + Qwen2.5-VL experiment.
+#   MARC_ENTRYPOINT=participant_app_record.py ./launch.sh u1   # run a different entry point
+#     default: participant_app.py = vla_grounding pipeline (YOLO + command parsing + geometry).
+#     participant_app_record.py = record-only pipeline (dumps MARC_RECORD_DIR, no live scoring).
 #
 # ROS2 distribution:
 #   The runtime uses IsaacSim's built-in humble FastDDS. The client must also be humble
@@ -22,8 +22,8 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SDK_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"   # starter kit root (parent of marc_sdk)
 # Team code lives under mec_sim_ice/ after the repo cleanup (organizer's demo/ stays
-# untouched). taejeong_agent_vla.py/agent_vla.py/etc. moved to mec_sim_ice/demo_agents/,
-# and they import the mec_sim_ice/stage1 + mec_sim_ice/taejeong packages.
+# untouched). vla_grounding_agent.py/record_agent_vla.py/etc. live in mec_sim_ice/demo_agents/,
+# and it imports the mec_sim_ice/vla_grounding package.
 TEAM_ROOT="${SDK_ROOT}/mec_sim_ice"
 TEAM_AGENTS_DIR="${TEAM_ROOT}/demo_agents"
 
@@ -78,8 +78,8 @@ fi
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 
 # -- PYTHONPATH: marc_sdk (=SDK_ROOT) + demo local modules (=SCRIPT_DIR) + team code
-#    (=TEAM_ROOT, for `import stage1`/`import taejeong`) + team local modules (=TEAM_AGENTS_DIR,
-#    for `import agent_vla`/`import taejeong_agent_vla` etc.) --
+#    (=TEAM_ROOT, for `import vla_grounding`) + team local modules (=TEAM_AGENTS_DIR,
+#    for `import vla_grounding_agent`/`import record_agent_vla` etc.) --
 # (If the SDK is pip installed, SDK_ROOT is unnecessary, but it is kept so the repo runs directly)
 export PYTHONPATH="${SDK_ROOT}:${SCRIPT_DIR}:${TEAM_ROOT}:${TEAM_AGENTS_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
@@ -105,7 +105,7 @@ if ! "${RUN_PY}" -c "import placo" >/dev/null 2>&1; then
 fi
 
 # -- locate the entry point script: organizer's demo/ first, then the team's
-#    mec_sim_ice/demo_agents/ (e.g. participant_app_agent_vla.py) --
+#    mec_sim_ice/demo_agents/ (e.g. participant_app_record.py) --
 ENTRY_NAME="${MARC_ENTRYPOINT:-participant_app.py}"
 if [ -f "${SCRIPT_DIR}/${ENTRY_NAME}" ]; then
     ENTRY_PATH="${SCRIPT_DIR}/${ENTRY_NAME}"
