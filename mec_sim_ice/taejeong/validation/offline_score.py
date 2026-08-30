@@ -780,7 +780,9 @@ def main() -> int:
     final["fallback"] = {
         "used": bool(use_fallback), "why": why,
         "dino": dino is not None, "vlm": vlm is not None,
+        "pose": pose is not None,
     }
+
     def _avg(rs):
         return sum(r["scores"]["total"] for r in rs) / len(rs) if rs else None
 
