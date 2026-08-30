@@ -19,7 +19,7 @@ services:
     environment:
       # 제출용: ':-' 뒤 기본값이 곧 제출값 (주최측은 env 없이 실행)
       MARC_TEAM_ID:  "${MARC_TEAM_ID:-mec_sim_ice}"
-      MARC_TOKEN:    "${MARC_TOKEN:-PASTE_TEAM_TOKEN_HERE}"
+      MARC_TOKEN:    "${MARC_TOKEN:-2a5b6258f40b17057ba4a863529c0e2d}"
       ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
       RMW_IMPLEMENTATION: "rmw_fastrtps_cpp"
       # YOLO 가중치 override -- taejeong_agent_vla.py 가 읽는 변수는
