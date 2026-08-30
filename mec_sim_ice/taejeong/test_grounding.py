@@ -357,16 +357,27 @@ def main() -> int:
           f"obb={obb_gap_xy(a, b):.3f} circle={circle_gap:.3f}")
 
     # T26. 임계값이 실측 근거가 허용하는 창 안에 있는가.
-    #      아래가 지금 가진 증거 전부다 (근거: 리포 루트 분석 문서 + 오프라인 재채점):
-    #        0.470m  자판기-우산, 공식 OBB,   정답 beside
-    #        0.615m  자판기-우산, **우리 단안 추정**, 정답 beside  ← 임계값은 이보다 커야 한다
-    #        0.697m  쓰레기통-우산, 공식 OBB,  정답 near     ← 이보다는 작아야 한다
-    #      우리 척도로 잰 near 쪽 표본이 아직 없다(lf06/hf06 은 카메라를 잘못 골라
-    #      그 쌍을 측정하지 못한다). 그 표본이 생기면 이 창이 좁아진다.
-    check("T26-threshold-above-measured-beside", cfg.beside_gap_m > 0.615,
+    #      **창의 양 끝을 이제 둘 다 우리 척도로 잰다** (2026-08-30 2차 재보정).
+    #      이전 버전은 하한만 우리 단안 추정(0.615)이고 상한은 공식 OBB(0.697)라
+    #      척도가 섞여 있었다. "우리 척도의 near 표본이 생기면 이 창이 좁아진다"고
+    #      적어 둔 그 표본이 실제로 생겨서(hf06 쓰레기통-우산 0.987m) 교체한다.
+    #
+    #      현재 검출기 조합(소형모델 라우팅 + 새 B 가중치)으로 39라운드를 돌려
+    #      geometry 경로 near/beside 문항의 gap 을 전수 수집한 결과:
+    #        beside 정답:  0.604, 0.606                       ← 임계값은 이보다 커야 한다
+    #        near   정답:  0.987, 2.858, 2.858, 3.084, 3.087  ← 이보다는 작아야 한다
+    #      임계값은 이 (0.606, 0.987) 구간 안에 있어야 하고, 가급적 중앙에 두어야
+    #      한다 -- 한쪽에 붙으면 단안 추정의 프레임 간 흔들림에 뒤집힌다.
+    #      검출기를 바꾸면 이 표는 다시 떠야 한다 (grounding.py 주석 참조).
+    check("T26-threshold-above-measured-beside", cfg.beside_gap_m > 0.606,
           cfg.beside_gap_m)
-    check("T26-threshold-below-official-near", cfg.beside_gap_m < 0.696786,
+    check("T26-threshold-below-measured-near", cfg.beside_gap_m < 0.987,
           cfg.beside_gap_m)
+    # 경계에 바짝 붙어 있으면(양쪽 여유 0.10m 미만) 라이브에서 뒤집힌다.
+    check("T26-threshold-has-margin-both-sides",
+          cfg.beside_gap_m - 0.606 >= 0.10 and 0.987 - cfg.beside_gap_m >= 0.10,
+          f"{cfg.beside_gap_m} (beside여유 {cfg.beside_gap_m - 0.606:.3f} / "
+          f"near여유 {0.987 - cfg.beside_gap_m:.3f})")
 
     # T27. 다각형 표면거리 자체의 성질: 자기 자신과는 0, 대칭.
     A = rect(0, 0, 1.0, 0.4).footprint_xy

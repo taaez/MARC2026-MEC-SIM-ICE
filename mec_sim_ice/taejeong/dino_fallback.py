@@ -17,7 +17,9 @@ real_agent_vla.py 는 ultralytics Boxes 객체(.xyxy, .conf, .cls)를 그대로 
 코드를 새로 만들지 않고 그대로 재사용할 수 있게 한다.
 
 환경변수:
-  MARC_DISABLE_DINO_FALLBACK   "1"이면 폴백 자체를 비활성화 (디버그/타임아웃 대비)
+  MARC_ENABLE_DINO_FALLBACK    "1"이면 폴백을 켠다. **기본은 꺼짐**(2026-08-30 변경)
+  MARC_DISABLE_DINO_FALLBACK   "1"이면 폴백 자체를 비활성화 -- 기본이 이미 꺼짐이라
+                               보통은 불필요하지만, ENABLE 보다 우선한다
   MARC_DET_MODEL               기본 IDEA-Research/grounding-dino-base
 """
 
@@ -107,4 +109,17 @@ class DinoFallbackDetector:
 
 
 def is_disabled() -> bool:
-    return os.getenv("MARC_DISABLE_DINO_FALLBACK", "").lower() in ("1", "true", "yes")
+    """DINO 폴백은 **기본 꺼짐**이다 (2026-08-30). 켜려면 MARC_ENABLE_DINO_FALLBACK=1.
+
+    기본값을 뒤집은 이유: 이 폴백은 YOLO 가 다 실패한 뒤에만 도는 구제 경로인데,
+    Isaac Sim 데스크탑에서 기본으로 켜져 있으면 라운드마다 6개 카메라를 개방어휘
+    탐지기에 다시 태워 지연·VRAM 을 먹는다. 구제가 필요한 문항에서만 명시적으로
+    켜는 편이 기본 경로(YOLO+기하)의 예측 가능성을 지킨다.
+
+    MARC_DISABLE_DINO_FALLBACK=1 은 그대로 둔다 -- 이미 그 변수를 쓰는 스크립트와
+    문서가 있고, '끈다'는 의도는 기본값이 무엇이든 항상 유효해야 한다. 둘이 동시에
+    주어지면 disable 이 이긴다 (끄는 쪽이 항상 우선).
+    """
+    if os.getenv("MARC_DISABLE_DINO_FALLBACK", "").lower() in ("1", "true", "yes"):
+        return True
+    return os.getenv("MARC_ENABLE_DINO_FALLBACK", "").lower() not in ("1", "true", "yes")

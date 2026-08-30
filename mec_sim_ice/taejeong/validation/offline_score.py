@@ -469,11 +469,19 @@ def main() -> int:
 
     dino = vlm = None
     if use_fallback:
-        try:
-            dino = DinoFallbackDetector()
-        except Exception as e:  # noqa: BLE001
-            print(f"[fallback] DINO 로드 실패, target/landmark 재탐색 없이 진행: {e}",
-                  file=sys.stderr)
+        # DINO 는 기본 꺼짐이다(dino_fallback.is_disabled docstring). 라이브
+        # 에이전트가 같은 스위치를 같은 자리에서 보므로 여기서도 똑같이 존중해야
+        # 두 경로의 점수가 갈라지지 않는다 -- --fallback 을 줘도 DINO 만은
+        # MARC_ENABLE_DINO_FALLBACK=1 이 있어야 올라온다.
+        if dino_disabled():
+            print("[fallback] DINO 건너뜀 -- 기본 꺼짐 "
+                  "(켜려면 MARC_ENABLE_DINO_FALLBACK=1)")
+        else:
+            try:
+                dino = DinoFallbackDetector()
+            except Exception as e:  # noqa: BLE001
+                print(f"[fallback] DINO 로드 실패, target/landmark 재탐색 없이 진행: {e}",
+                      file=sys.stderr)
         try:
             vlm = VlmTargetResolver()
         except Exception as e:  # noqa: BLE001
