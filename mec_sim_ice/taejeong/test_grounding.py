@@ -14,8 +14,9 @@ from __future__ import annotations
 import numpy as np
 
 from command_parser import parse_command
-from grounding import (CameraModel, Detection, GroundingConfig, locate,
-                       pixel_to_plane, resolve, world_to_pixel)
+from grounding import (CameraModel, Detection, GroundingConfig, Located,
+                       locate, obb_gap_xy, pixel_to_plane, polygon_gap_xy,
+                       resolve, world_to_pixel)
 
 FX = 900.0
 W, H = 1280, 720
@@ -328,6 +329,60 @@ def main() -> int:
           and np.allclose(left.anchor_coord, base.anchor_coord)
           and np.allclose(right.anchor_coord, base.anchor_coord),
           f"{left.landmark}/{left.anchor_coord} vs {base.landmark}/{base.anchor_coord}")
+
+    # ── T23~T26. XY 평면 OBB 표면거리 (near/beside 의 판정 척도) ──────────
+    def rect(cx, cy, hu, hv, ux=1.0, uy=0.0):
+        """중심 (cx,cy), 깊이축 (ux,uy) 인 직사각형 footprint 를 가진 Located."""
+        u = np.array([ux, uy], dtype=np.float64)
+        u /= np.linalg.norm(u)
+        return Located(det=Detection("x", (0, 0, 1, 1)),
+                       base=np.array([cx, cy, 0.0]), top_z=1.0,
+                       radius=hv, view_axis=u, half_depth=hu)
+
+    # T23. 축이 같은 두 사각형: 표면거리 = 중심거리 - 두 반길이.
+    g = obb_gap_xy(rect(0, 0, 1.0, 0.5), rect(3.0, 0, 0.5, 0.5))
+    check("T23-obb-gap-axis-aligned", close(g, 1.5, 1e-9), g)
+
+    # T24. 겹치면 0 (음수가 아니다).
+    g = obb_gap_xy(rect(0, 0, 1.0, 1.0), rect(1.0, 0, 1.0, 1.0))
+    check("T24-obb-gap-overlap-zero", g == 0.0, g)
+
+    # T25. 원 근사와의 차이: 모서리 방향으로 놓인 이웃.
+    #      반경 1 인 원 두 개는 대각선으로 (2,2) 떨어지면 간격 2.83-2=0.83 이라고
+    #      보지만, 실제 사각형 footprint 는 모서리끼리 √2*(2-1-1)... 즉 0.0 에
+    #      가깝다. 이 과대평가가 beside 를 near 로 뒤집던 원인이다.
+    a, b = rect(0, 0, 1.0, 1.0), rect(2.0, 2.0, 1.0, 1.0)
+    circle_gap = float(np.linalg.norm(b.base[:2] - a.base[:2])) - a.radius - b.radius
+    check("T25-obb-tighter-than-circle", obb_gap_xy(a, b) < circle_gap - 0.5,
+          f"obb={obb_gap_xy(a, b):.3f} circle={circle_gap:.3f}")
+
+    # T26. 임계값이 실측 근거가 허용하는 창 안에 있는가.
+    #      아래가 지금 가진 증거 전부다 (근거: 리포 루트 분석 문서 + 오프라인 재채점):
+    #        0.470m  자판기-우산, 공식 OBB,   정답 beside
+    #        0.615m  자판기-우산, **우리 단안 추정**, 정답 beside  ← 임계값은 이보다 커야 한다
+    #        0.697m  쓰레기통-우산, 공식 OBB,  정답 near     ← 이보다는 작아야 한다
+    #      우리 척도로 잰 near 쪽 표본이 아직 없다(lf06/hf06 은 카메라를 잘못 골라
+    #      그 쌍을 측정하지 못한다). 그 표본이 생기면 이 창이 좁아진다.
+    check("T26-threshold-above-measured-beside", cfg.beside_gap_m > 0.615,
+          cfg.beside_gap_m)
+    check("T26-threshold-below-official-near", cfg.beside_gap_m < 0.696786,
+          cfg.beside_gap_m)
+
+    # T27. 다각형 표면거리 자체의 성질: 자기 자신과는 0, 대칭.
+    A = rect(0, 0, 1.0, 0.4).footprint_xy
+    B = rect(2.5, 0.3, 0.5, 0.5).footprint_xy
+    check("T27-polygon-gap-self-zero", polygon_gap_xy(A, A) == 0.0)
+    check("T27-polygon-gap-symmetric",
+          close(polygon_gap_xy(A, B), polygon_gap_xy(B, A), 1e-12))
+
+    # T28. 영역 지시문("빈 주차 공간")은 거리와 무관하게 near 다 — 확인된 의미
+    #      예외. 실측: police_car-umbrella 는 공식 OBB 표면거리 0m 인데 정답 near.
+    parsed28 = parse_command("Find the umbrella dropped in the empty parking space.")
+    dets28 = [synth_det(cam, "umbrella", (6.0, 0.2), 0.9, 0.05),
+              synth_det(cam, "police_car", (6.0, 1.2), 1.5, 1.0)]
+    d = resolve(parsed28, {"cam_a": dets28}, {"cam_a": cam}, cfg)
+    check("T28-open-space-is-near", d.relation == "near",
+          f"{d.relation} gap={d.debug.get('obb_gap_xy')}")
 
     print("PASS" if fails == 0 else f"FAIL ({fails})")
     return 1 if fails else 0

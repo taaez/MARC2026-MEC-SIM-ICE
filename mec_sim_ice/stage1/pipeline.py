@@ -31,7 +31,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .geometry import CameraModel, detection_to_world, relation_scores, RELATIONS
+from .geometry import (CameraModel, detection_to_world, footprint_obb_xy,
+                       relation_scores, RELATIONS)
 
 log = logging.getLogger("stage1.pipeline")
 
@@ -460,7 +461,13 @@ class Stage1Pipeline:
                     T = detection_to_world(cam, t.bbox, t.mask)
                     if T is None:
                         continue
-                    rs = relation_scores(cam, A, T)
+                    # near/beside 는 물체 크기를 반영한 XY OBB 표면거리로
+                    # 가른다 (geometry.BESIDE_GAP_M 주석). footprint 를 못
+                    # 만들면(가장자리 bbox 등) 점 거리로 자동 퇴화한다.
+                    rs = relation_scores(
+                        cam, A, T,
+                        anchor_fp=footprint_obb_xy(cam, a.bbox),
+                        target_fp=footprint_obb_xy(cam, t.bbox))
                     rel_ok = rs.get(it.relation, 0.0) if it.relation else max(rs.values())
                     # 후보 점수: 탐지 신뢰도 + 관계 일관성
                     s = (1 - self.cfg.relation_weight) * (0.5 * a.score + 0.5 * t.score) \
