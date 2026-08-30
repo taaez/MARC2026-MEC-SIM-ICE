@@ -1,7 +1,8 @@
-# SESSION REPORT 2026-08-30 — 소형객체 서브모델 완성·통합 + trash_can 실점 원인 확정
+# SESSION REPORT 2026-08-30 — 소형객체 서브모델 통합 + trash_can 실점 원인 확정 + 라이브 진입점 연결
 
 작성: 2026-08-30. 소형객체 서브모델 학습~평가~파이프라인 통합, rig_3_b
-trash_can "탐지 실패" 의혹의 실측 반증, trash_can 관련 6문항 채점 분석까지.
+trash_can "탐지 실패" 의혹의 실측 반증, trash_can 관련 6문항 채점 분석,
+그리고 §4/§5 개선이 실제 라이브 진입점엔 비어 있던 문제(§7)까지.
 
 ---
 
@@ -159,11 +160,62 @@ grounding.resolve() 의 카메라 선택 자체는 손대지 않았으니 당연
 두 세트 모두 object_type 15.00/15.0(만점), landmark·relation 8~10/10대
 유지 — B 31클래스 출력이 그대로 통과한다는 §4 설계대로. 회귀 없음.
 
-## 6. 남은 일
+## 7. 라이브 진입점 연결 — §4/§5 의 개선이 실제 라이브에 비어 있던 문제 수정
+
+**증상**: 사용자가 `demo/launch.sh`(옵션 없이, 즉 기본 진입점)로 Isaac Sim
+라이브를 직접 돌렸는데 성능 차이가 미미했다. §5 offline_score.py 재측정으로
+본 sar09/sarH1 의 47→89.8점 도약이 라이브엔 안 보였다.
+
+**원인**: `launch.sh` 기본 진입점 `participant_app.py` 는 `real_agent_vla.py`
+(RealVLAGrounding, §4 에서 고친 파일) 가 아니라 별도 파일
+**`demo_agents/taejeong_agent_vla.py`**(TaejeongVLAGrounding) 를 쓴다.
+여기가 §4/§5 개선을 둘 다 안 타고 있었다:
+
+- `self._det = YOLO(det_weights)` 로 B 단독을 직접 로드 → 소형모델
+  라우팅이 이 파일에는 애초에 연결된 적이 없었다(§4 는 real_agent_vla.py 만
+  고쳤다).
+- `pose_augment()` 호출부가 `offline_score.py` 에만 있고 `fallback.py`/
+  `grounding.py` 자체(ptj 브랜치 pull, §3)에는 정의만 있어 어디서도 안
+  불렀다 → `Detection.foot_u` 가 항상 `None` → `_foot_adjusted_point()`
+  가 no-op. offline_score.py 쪽 주석은 "라이브가 항상 켜므로 여기서도
+  켠다"고 전제했지만, 그 전제 자체가 아직 사실이 아니었다.
+- 반면 `grounding.py` 의 `ground_surface_token = parsed.area_hint` 폴백
+  (ptj pull, §3) 은 `resolve()` 안의 순수 로직이라 게이트 없이 즉시
+  적용됐다 — 사용자가 본 "미미한 차이"의 정체는 이것 하나였다.
+
+**조치**: `taejeong_agent_vla.py` 한 곳만 수정 (+19/-5줄).
+`YOLO(det_weights)` → `load_detector(det_weights, ...)`,
+생성자에서 `AnkleKeypointEstimator` 로드, `dino_augment` 다음 줄에
+`pose_augment(parsed, images, detections, self._pose)` 추가 —
+offline_score.py 의 `run_round()` 와 같은 자리·같은 순서로 맞췄다.
+두 기능 모두 산출물/모델이 없으면 조용히 기존 동작(B 단독, bbox 중앙)으로
+떨어져 나빠지는 경로가 없다.
+
+**검증**(record_260829 실프레임, 정답지 GT, `run_offline.load_round` 로
+카메라/이미지 구성 → `infer_cameras` → `pose_augment` ON/OFF → `resolve`
+전체 파이프라인 재현):
+
+| 문항 | pose OFF | pose ON | 비고 |
+|---|---|---|---|
+| sar04_table_lie | target 0.89m | **0.51m** | |
+| sar07_parking_prone | target 1.08m | **0.75m** | |
+| sar09_park_bending | target 0.98m | **0.76m** | 합격선(0.62~0.98) 통과 |
+
+anchor 는 세 문항 모두 불변 — 보정이 제출 좌표에만 적용된다는 설계 그대로.
+검출기 로드 로그로 라우팅 활성(`[yolo] routed B+small`) 확인, pose 모델
+로드 확인, `MARC_DISABLE_SMALL_DET=1` 로 라우팅이 실제로 꺼지는 것도 확인.
+회귀 3종(test_command_parser/test_situation_resolver/test_grounding) PASS.
+
+커밋: `feature/init` 브랜치 `f9e76ff` (기존에 스테이징돼 있던 records
+229개 파일과는 분리해서 이 파일 1개만 커밋·push).
+
+## 8. 남은 일
 
 1. **lf06/hf06 카메라 선택 로직 (P2)** — 유일하게 남은 큰 구멍. target
    부재 시 landmark 고신뢰 카메라를 쌍 있는 카메라가 무조건 이기지 않도록
    — relation 오프셋으로 target 추정하는 경로 검토. +25~30점×2 기대.
-2. (보류) tile 320 재학습 — 본선 문제셋에서 원거리 소형 타깃이 나오면.
-3. 이번 회귀 채점은 `--no-fallback` 하한선이라, DINO/VLM 켠 상태(라이브
+2. §7 수정 후 **라이브(Isaac Sim) 재측정** — 이번 절의 검증은 오프라인
+   파이프라인 재현이라, 실제 launch.sh 라이브 실행으로 한 번 더 확인할 것.
+3. (보류) tile 320 재학습 — 본선 문제셋에서 원거리 소형 타깃이 나오면.
+4. §5 회귀 채점은 `--no-fallback` 하한선이라, DINO/VLM 켠 상태(라이브
    조건) 재측정도 한 번 더 돌려서 최종 비교선을 만들어 둘 것.
