@@ -20,7 +20,7 @@ demo/weights/
 *.pt
 *.pt.bak
 # 채점 결과 원본은 results/(위에서 무시) 에 쌓이고, 보존할 실행만 아래로 복사한다.
-!taejeong/validation/runs/*.jsonl
+!/mec_sim_ice/vla_grounding/validation/runs/*.jsonl
 
 # 2026-08-29 폴더 정리: mec_sim_ice/test/ 를 코드/데이터셋/결과물로 분리하면서
 # 데이터셋·학습 결과물(용량 큼, trainer_output/results 와 같은 성격)은 기존 컨벤션대로 git 밖에 둔다.

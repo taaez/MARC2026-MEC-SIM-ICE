@@ -4,7 +4,7 @@
 # 스타터킷 demo/Dockerfile 과 같은 구조를 따른다:
 #   베이스 ros:humble-ros-base, 루트 /agent, COPY marc_sdk + demo,
 #   PYTHONPATH=/agent:/agent/demo, ROS 소싱은 /ros_entrypoint.sh (베이스 제공).
-# 거기에 stage1/ 파이프라인, 모델 가중치 baking, HF 오프라인 고정을 얹는다.
+# 거기에 vla_grounding/ 파이프라인, 모델 가중치 baking, HF 오프라인 고정을 얹는다.
 #
 # Build context = 스타터킷 루트 (compose build.context=. , dockerfile=docker/Dockerfile)
 # ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ COPY docker/requirements.txt /tmp/requirements.txt
 RUN pip3 install -r /tmp/requirements.txt
 
 # --- 모델 가중치 baking (여기가 핵심: 런타임 다운로드 금지) ---
-# 2026-08-29: VL(비전-언어) 모델을 완전히 뺐다(taejeong/vlm_fallback.py 참고) --
+# 2026-08-29: VL(비전-언어) 모델을 완전히 뺐다(vla_grounding/vlm_fallback.py 참고) --
 # 이 파이프라인의 VLM 은 텍스트 분류 두 건(OOV 물체명 재해석, "behind" 구동사/
 # 공간관계 중의성 판정)뿐이라 이미지 인코더가 필요 없다. 기본값을 텍스트 전용
 # 소형 LM(1.5B, ~3GB)으로 바꿔서 DINO(~1GB)와 합쳐도 여유 있게 들어간다.
@@ -61,24 +61,28 @@ ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 \
 
 # --- [SDK] marc_sdk + 에이전트 코드 (원본 demo/Dockerfile 과 동일한 /agent 레이아웃) ---
 # 팀 제작 코드는 리포 정리로 mec_sim_ice/ 아래에 있다 (organizer 원본 demo/ 와는 별도).
-# demo/ 와 mec_sim_ice/demo_agents/ 를 같은 /agent/demo 로 순서대로 COPY 해서 원래
-# 하나였던 디렉토리처럼 합친다 (agent_vla.py 등 로컬 임포트가 그대로 동작).
+# mec_sim_ice/ 를 로컬과 같은 상대구조 그대로 통째로 COPY 한다 (demo/launch.sh 의
+# SDK_ROOT:SCRIPT_DIR:TEAM_ROOT:TEAM_AGENTS_DIR 배선과 동일한 의미). vla_grounding/
+# 안의 pose_keypoints.py·yolo_adapter.py 는 dirname(dirname(__file__)) 로 형제
+# 디렉토리(demo_agents/weights/, training/, datasets/)를 찾는데, 예전처럼
+# demo_agents/ 를 /agent/demo 로 병합해버리면 이 형제 관계가 깨져서 가중치/서브모델
+# 경로 계산이 컨테이너 안에서만 조용히 어긋난다 (로컬 실행은 멀쩡해서 못 알아챘던 버그).
+# mec_sim_ice/ 를 그대로 두면 이 계산이 로컬과 컨테이너에서 완전히 동일하게 풀린다.
+# records/(264MB, 오프라인 채점 전용)와 docs/ 는 .dockerignore 로 이미지에서 뺀다.
 WORKDIR /agent
-COPY marc_sdk           /agent/marc_sdk
-COPY mec_sim_ice/stage1   /agent/stage1
-COPY mec_sim_ice/taejeong /agent/taejeong
-COPY demo                /agent/demo
-COPY mec_sim_ice/demo_agents /agent/demo
-COPY manipulation        /agent/manipulation
-COPY mec_sim_ice/models   /agent/models
+COPY marc_sdk     /agent/marc_sdk
+COPY demo         /agent/demo
+COPY manipulation /agent/manipulation
+COPY mec_sim_ice  /agent/mec_sim_ice
 
-# 런타임 플랫폼과 같은 RMW (FastDDS). import 경로: marc_sdk·stage1(/agent) + demo 로컬 모듈(/agent/demo).
+# 런타임 플랫폼과 같은 RMW (FastDDS). import 경로: marc_sdk(/agent) + demo 로컬 모듈
+# (/agent/demo) + vla_grounding 패키지·demo_agents 플랫 모듈(/agent/mec_sim_ice 이하).
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-ENV PYTHONPATH=/agent:/agent/demo
+ENV PYTHONPATH=/agent:/agent/demo:/agent/mec_sim_ice:/agent/mec_sim_ice/demo_agents
 
 # 빌드 단계에서 모델이 오프라인으로 로드되는지 자가 검증 (실패하면 빌드 실패 → 제출 전 발견)
 RUN python3 -c "from transformers import AutoProcessor; AutoProcessor.from_pretrained('${DET_MODEL}'); print('det ok')"
-# VLM 은 이제 텍스트 전용(SmallLmBackend, taejeong/vlm_fallback.py) -- VL
+# VLM 은 이제 텍스트 전용(SmallLmBackend, vla_grounding/vlm_fallback.py) -- VL
 # 모델을 여기 넣으면(예: 실수로 되돌리면) AutoTokenizer 로드 자체가 chat
 # template 없이 깨지거나 여기서 걸린다. AutoProcessor 가 아니라 실제 코드가
 # 쓰는 클래스(AutoTokenizer)로 검증해야 이 불일치를 잡는다.
@@ -86,7 +90,7 @@ RUN python3 -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretr
 # 위 두 줄은 processor/tokenizer 만 확인한다 -- 그건 가중치 파일을 안 건드리므로,
 # snapshot_download 의 allow_patterns 에 안 걸린 형식(*.bin 등)으로만 올라온
 # repo 였다면 **빌드는 통과하고 런타임에 조용히 폴백이 꺼진다**(로드 실패를
-# taejeong_agent_vla.py 가 경고만 남기고 삼킨다). 실제 모델 클래스로 한 번 더
+# vla_grounding_agent.py 가 경고만 남기고 삼킨다). 실제 모델 클래스로 한 번 더
 # 로드해서 그 경우를 빌드에서 잡는다.
 RUN python3 -c "from transformers import AutoModelForZeroShotObjectDetection as M; M.from_pretrained('${DET_MODEL}'); print('det weights ok')"
 RUN python3 -c "from transformers import AutoModelForCausalLM as M; M.from_pretrained('${VLM_MODEL}'); print('vlm weights ok')"
@@ -98,18 +102,9 @@ WORKDIR /agent/demo
 COPY docker/entrypoint.sh /agent/entrypoint.sh
 RUN chmod +x /agent/entrypoint.sh
 ENTRYPOINT ["/agent/entrypoint.sh"]
-# participant_app.py (팀 기본) 는 taejeong 파이프라인(YOLO + 명령파싱 + 기하)으로
-# 연결돼 있다 -- demo/participant_app.py 가 `from taejeong_agent_vla import
-# TaejeongVLAGrounding` 을 하고, mec_sim_ice/demo_agents/ 가 COPY 로 같은
-# /agent/demo 에 합쳐지므로 taejeong_agent_vla.py(=demo_agents/ 안의 그 파일)
-# 가 그대로 잡힌다.
-#
-# 2026-08-29 결정 완료(이전엔 ⚠️ 로 표시돼 있었다): taejeong 파이프라인으로
-# 확정한다. 이전엔 이 CMD 가 GroundingDINO+Qwen2.5-VL 전용 진입점
-# (participant_app_agent_vla.py, agent_vla.py 기반 -- taejeong 과 다른 구현체)
-# 을 가리키고 있어서, 지금까지 이 리포에서 검증해 온 taejeong 개선사항(YOLO
-# 타일링/명령파싱/기하 판정 등)이 실제로는 하나도 제출되지 않는 상태였다.
-# YOLO 가중치는 best.pt 를 강제로 커밋해서 해결했다(.gitignore 의 `*.pt` 에
-# 걸려 그동안 아무 브랜치에도 안 올라가 있었다 -- 새로 clone 하면 파일 자체가
-# 없어서 런타임에 크래시났을 것).
+# participant_app.py (팀 기본) 는 vla_grounding 파이프라인(YOLO + 명령파싱 + 기하)으로
+# 연결돼 있다 -- demo/participant_app.py 가 `from vla_grounding_agent import
+# VLAGroundingAgent` 를 하고, mec_sim_ice/demo_agents/ 가 /agent/mec_sim_ice/demo_agents
+# 로 baking되며 PYTHONPATH 에 포함되므로 vla_grounding_agent.py 가 flat import 로
+# 그대로 잡힌다. YOLO 가중치(best.pt)는 .gitignore 예외로 강제 커밋돼 있다.
 CMD ["python3", "participant_app.py"]

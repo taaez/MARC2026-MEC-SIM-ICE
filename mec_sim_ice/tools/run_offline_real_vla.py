@@ -1,20 +1,20 @@
-"""MARC_RECORD_DIR 덤프를 Isaac Sim/ROS 없이 재실행 -- RealVLAGrounding 오프라인 자가 채점.
+"""MARC_RECORD_DIR 덤프를 Isaac Sim/ROS 없이 재실행 -- RecordOnlyVLAGrounding 오프라인 자가 채점.
 
 데스크탑 라이브 실행이 남긴 records/s1_* 폴더(라운드별 CCTV PNG + meta.json)를 읽어,
-루트 real_agent_vla.py 의 라운드 결정 로직을 기록된 카메라 파라미터(K/R_cw/C_w/ground_z)로
-그대로 재현한다. 탐지 헬퍼/클래스 상수는 real_agent_vla 에서 직접 import 하므로
+루트 record_agent_vla.py 의 라운드 결정 로직을 기록된 카메라 파라미터(K/R_cw/C_w/ground_z)로
+그대로 재현한다. 탐지 헬퍼/클래스 상수는 record_agent_vla 에서 직접 import 하므로
 (그 파일의 ROS 의존은 지연 import) 로직이 어긋날 일이 없고, 카메라 루프와
-pixel->world 만 여기서 미러링한다 (`keep in sync with RealVLAGrounding._ground`).
+pixel->world 만 여기서 미러링한다 (`keep in sync with RecordOnlyVLAGrounding._ground`).
 
 사용 (리포 루트에서, ultralytics + PyYAML + Pillow 만 있으면 됨 -- ROS/Isaac Sim 불필요):
   python mec_sim_ice/tools/run_offline_real_vla.py --records ./mec_sim_ice/records \
       --weights mec_sim_ice/demo_agents/weights/best.pt \
       [--gt demo/mock_demo_data.yaml]                # 좌표 포함 GT (payload 형식, organizer demo/ 는 루트에 그대로 있음)
-      [--gt mec_sim_ice/taejeong/content-image-2026.R03/marc2026_chungmu.yaml]  # 공식 expected (해석 필드만)
+      [--gt mec_sim_ice/vla_grounding/content-image-2026.R03/marc2026_chungmu.yaml]  # 공식 expected (해석 필드만)
       [--conf 0.35] [--imgsz 1280]
 
 출력: 라운드별 제출 payload + (GT 지정 시) 필드별 정답 여부와 좌표 오차
-(좌표 점수 = max(0, 1 - 3D오차/5m), taejeong/validation/score_report.py 와 같은 실측 역산식),
+(좌표 점수 = max(0, 1 - 3D오차/5m), vla_grounding/validation/score_report.py 와 같은 실측 역산식),
 마지막에 전체 요약.
 """
 
@@ -31,8 +31,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from real_agent_vla import (  # noqa: E402
-    CAR_CLASSES, DET_CONF, DET_IMGSZ, POSE_BUCKET_CLASSES, RealVLAGrounding,
+from record_agent_vla import (  # noqa: E402
+    CAR_CLASSES, DET_CONF, DET_IMGSZ, POSE_BUCKET_CLASSES, RecordOnlyVLAGrounding,
     parse_command, resolve_situation,
 )
 
@@ -58,7 +58,7 @@ def load_round(d: str):
 
 
 def pixel_to_world(cam: dict, pixel):
-    """RealVLAGrounding._pixel_to_world 와 동일한 지면 역투영 (기록된 파라미터 사용)."""
+    """RecordOnlyVLAGrounding._pixel_to_world 와 동일한 지면 역투영 (기록된 파라미터 사용)."""
     K, R, C = cam["K"], cam["R_cw"], cam["C_w"]
     gz = cam["ground_z"]
     u, v = pixel
@@ -83,11 +83,11 @@ def to_payload(camera_id, target_type, landmark, relation, situation, anchor, ta
 
 def ground_offline(model, command: str, cams: dict, images: dict,
                    conf: float, imgsz: int) -> dict:
-    """RealVLAGrounding._ground 의 오프라인 미러 -- keep in sync."""
+    """RecordOnlyVLAGrounding._ground 의 오프라인 미러 -- keep in sync."""
     parsed = parse_command(command)
     target_type = parsed.target_type or ("person" if parsed.is_person else "")
     landmark = parsed.landmark_type or ""
-    G = RealVLAGrounding    # static 탐지 헬퍼 재사용
+    G = RecordOnlyVLAGrounding    # static 탐지 헬퍼 재사용
 
     for cam_id, img in images.items():
         det = model.predict(img, imgsz=imgsz, conf=conf, verbose=False)[0]

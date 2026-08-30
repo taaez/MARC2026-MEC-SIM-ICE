@@ -18,7 +18,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Participant algorithm dependencies. numpy + pyyaml (stdlib/ROS2 for the rest), placo for
 # the closed-loop arm IK pick (Pinocchio-based), ultralytics for YOLO11 detection/pose, and
-# ros-humble-tf2-ros for the CCTV extrinsic (world<-camera) lookups in taejeong_agent_vla.py.
+# ros-humble-tf2-ros for the CCTV extrinsic (world<-camera) lookups in vla_grounding_agent.py.
 # The network is used at build time only -- the judging runtime environment has no internet
 # (no runtime dependency) -- so best.pt and the yolo11n-pose.pt COCO weights must both be
 # present in the image after this step.
@@ -29,23 +29,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /agent
 
-# context = starter kit root -> copy marc_sdk (library) + taejeong (Stage 1 pipeline)
-# + manipulation (arm kit, for the world->arm_base tf helper) + demo (agent)
-# taejeong/ is imported as a package (`from taejeong.grounding import ...`) by
-# taejeong_agent_vla.py, so it must land under /agent (which is on PYTHONPATH below).
-# manipulation/ is imported as a package too (`from manipulation import transform_via_tf2`).
-# Team code lives under mec_sim_ice/ after the repo cleanup (organizer's own demo/ is
-# copied separately, then mec_sim_ice/demo_agents/ merges the team's local modules
-# -- taejeong_agent_vla.py, agent_vla.py, weights/ -- into the same /agent/demo dir).
-COPY marc_sdk             /agent/marc_sdk
-COPY mec_sim_ice/taejeong /agent/taejeong
-COPY manipulation         /agent/manipulation
-COPY demo                 /agent/demo
-COPY mec_sim_ice/demo_agents /agent/demo
+# context = starter kit root -> copy marc_sdk (library) + manipulation (arm kit, for the
+# world->arm_base tf helper) + demo (organizer agent) + mec_sim_ice (team code: the
+# vla_grounding/ Stage 1 pipeline package + demo_agents/ local modules, incl. weights/).
+# mec_sim_ice/ is copied wholesale, preserving its own local layout under /agent, so
+# vla_grounding_agent.py's flat `from vla_grounding.grounding import ...`-style imports and
+# vla_grounding/'s own dirname(dirname(__file__))-based weight-path lookups resolve exactly
+# like they do locally (see docker/Dockerfile for the same fix, applied there first).
+COPY marc_sdk     /agent/marc_sdk
+COPY manipulation /agent/manipulation
+COPY demo         /agent/demo
+COPY mec_sim_ice  /agent/mec_sim_ice
 
-# Same RMW as the runtime platform (FastDDS). Import paths for marc_sdk (/agent) + demo local modules (/agent/demo).
+# Same RMW as the runtime platform (FastDDS). Import paths for marc_sdk (/agent) + demo
+# local modules (/agent/demo) + vla_grounding package/demo_agents flat modules (/agent/mec_sim_ice).
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-ENV PYTHONPATH=/agent:/agent/demo
+ENV PYTHONPATH=/agent:/agent/demo:/agent/mec_sim_ice:/agent/mec_sim_ice/demo_agents
 
 WORKDIR /agent/demo
 
@@ -53,7 +52,7 @@ WORKDIR /agent/demo
 # internet). Downloaded into this WORKDIR so YOLO('yolo11n-pose.pt') finds it locally
 # at runtime instead of retrying the download. mec_sim_ice/demo_agents/weights/best.pt
 # (the fine-tuned detector) must already exist before building -- see
-# mec_sim_ice/test/train_yolo11.py.
+# mec_sim_ice/training/train_yolo11.py.
 RUN python3 -c "from ultralytics import YOLO; YOLO('yolo11n-pose.pt')"
 
 # The ros:humble ENTRYPOINT (/ros_entrypoint.sh) sources /opt/ros/humble/setup.bash

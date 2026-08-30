@@ -13,8 +13,8 @@
 > `docker compose up` 실행) 와 `problems.yaml` (organizer `simulation-platform/`가
 > `../problems.yaml` 고정 경로로 마운트). `demo/`는 organizer 원본이지만
 > `participant_app.py`/`Dockerfile`/`launch.sh`는 그 자리에서 직접 수정해 쓰는 파일이라
-> 함께 남아 있다 — 팀이 새로 만든 대체 진입점(`agent_vla.py`,
-> `participant_app_agent_vla.py` 등)만 `mec_sim_ice/demo_agents/`로 옮겼다.
+> 함께 남아 있다 — 팀이 새로 만든 대체 진입점(`vla_grounding_agent.py`,
+> `participant_app_record.py` 등)만 `mec_sim_ice/demo_agents/`로 옮겼다.
 > 자세한 팀 구조는 [`mec_sim_ice/` 절](#5-mec_sim_ice--팀-제작-코드문서기록) 참고.
 
 ## 최상위 구조
@@ -106,22 +106,43 @@ Joint-angle 제어만 허용되는 6축 로봇 팔로 pick-and-place를 풀기 �
 
 대회측 원본(1~4절)과 구분해서 **우리 팀이 만든 것만** 모아 둔 폴더.
 
+이 안에는 서로 다른 용도의 3갈래 진입점이 있다 (이전에 `taejeong`/`stage1`/`real_agent_vla`
+3가지 파이프라인이 병렬로 얽혀 있던 걸 2026-08-31에 정리):
+
+1. **메인 제출** — `vla_grounding/` 패키지 + `demo_agents/vla_grounding_agent.py`.
+   `demo/participant_app.py`(대회측 원본, 팀이 그 자리에서 수정)가 기본으로 wiring하는
+   경로이고, 루트 `docker-compose.yml`/`docker/`가 빌드하는 게 바로 이 경로다.
+2. **record 전용** — `record_agent_vla.py` + `demo_agents/participant_app_record.py`
+   (`RUNBOOK_record.md`). 메인과 같은 코드를 태우면 느려서 별도 파이프라인으로 유지한다
+   (`MARC_ENTRYPOINT=participant_app_record.py`로 선택, `MARC_RECORD_DIR`로 세션 덤프).
+   `records/`에 있는 기록은 이 경로로 수집됐다.
+3. **로컬 오프라인 채점** — `score.py`(얇은 래퍼) → `vla_grounding/validation/offline_score.py`.
+   `records/`를 재실행해 Stage1/2 점수를 로컬에서 재현한다 (인터넷·Isaac Sim 불필요).
+   Stage2 채점은 `demo/participant_app.py`의 실제 주행/픽업 로직을 가짜 `MARCClient`
+   (`vla_grounding/validation/fake_client.py`)로 그대로 실행한다.
+
+DINO+Qwen2.5-VL 실험 파이프라인(`stage1/`)은 제출 경로에서 전혀 쓰이지 않아 삭제했다
+(git 히스토리에는 남아 있음).
+
 ```
 mec_sim_ice/
-├── stage1/            # Grounding DINO + Qwen2.5-VL 파이프라인 (geometry/pipeline/agent)
-├── taejeong/           # 텍스트 파싱 + 순수 기하 기반 파이프라인 (팀 기본, RUNBOOK.md 포함)
-├── demo_agents/         # organizer demo/ 의 대체 진입점 (agent_vla.py, taejeong_agent_vla.py,
-│                        # participant_app_agent_vla.py, participant_app_real_vla.py, weights/)
-│                        # -- launch.sh/Dockerfile 이 demo/ 와 병합해서 쓴다
-├── test/                # YOLO11 학습 스테이징 (det_classes.py, train_yolo11.py)
-├── tests/                # 단위 테스트 (pytest, ROS 불필요)
-├── tools/                 # 오프라인 재실행/평가 스크립트 (eval_offline.py 등)
-├── scripts/                # 환경 점검/링크 진단/오프라인 검증 셸 스크립트
-├── models/                  # 파인튜닝 YOLO 가중치 배치 위치
-├── records/                  # Isaac Sim 세션에서 수집한 라운드별 기록 (오프라인 재현용)
-├── real_agent_vla.py          # YOLO11 기반 RealVLA grounding (RUNBOOK_real_vla.md)
-├── problems.yaml.bak           # problems.yaml 백업
-└── *.md                        # 설계/브리프/런북/세션 리포트 문서
+├── vla_grounding/       # ① 메인 제출 파이프라인 (텍스트 파싱 + 순수 기하, RUNBOOK.md 포함)
+│   └── validation/      # ③ 오프라인 채점 로직 (offline_score.py, fake_client.py, runs/*.jsonl)
+├── demo_agents/         # organizer demo/ 의 대체 진입점
+│   ├── vla_grounding_agent.py    # ① 제출 진입점이 쓰는 에이전트
+│   ├── participant_app_record.py # ② record 전용 진입점
+│   └── weights/                  # best.pt, yolo11m-pose.pt
+├── record_agent_vla.py    # ② record 전용 파이프라인 (RUNBOOK_record.md)
+├── score.py                # ③ 오프라인 채점 실행기 (mec_sim_ice/score.py)
+├── records/                  # ③ 입력 데이터 -- Isaac Sim 세션에서 수집한 라운드별 기록
+├── training/                   # YOLO11 학습 코드 (det_classes.py, train_yolo11.py, small_object_detection/)
+├── datasets/                    # 학습/소형객체 서브모델 데이터셋
+├── tests/                         # 단위 테스트 (pytest, ROS 불필요)
+├── tools/                          # 오프라인 재실행 스크립트 (run_offline_real_vla.py 등)
+├── scripts/                         # 환경 점검/링크 진단/오프라인 검증 셸 스크립트
+├── models/                           # (현재 비어 있음, .gitkeep)
+├── problems.yaml.bak                  # problems.yaml 백업
+└── *.md                                 # 설계/브리프/런북/세션 리포트 문서
 ```
 
 각 서브디렉토리의 내부 구조는 대회측 원본과 별개로 팀이 자유롭게 정한 것이라 필요 시

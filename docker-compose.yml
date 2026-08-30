@@ -5,11 +5,11 @@
 services:
   agent:
     build:
-      context: .                  # 스타터킷 루트 (marc_sdk + stage1 + demo + models 포함)
+      context: .                  # 스타터킷 루트 (marc_sdk + demo + mec_sim_ice + manipulation 포함)
       dockerfile: docker/Dockerfile
       args:
         # 텍스트 전용 소형 LM(1.5B, 2026-08-29 -- VL 모델 지원 자체를 뺐다,
-        # taejeong/vlm_fallback.py 참고). 여기가 실제 빌드에 쓰이는 값이다
+        # vla_grounding/vlm_fallback.py 참고). 여기가 실제 빌드에 쓰이는 값이다
         # (주최측은 이 파일 그대로 `docker compose up` 만 실행 -- Dockerfile
         # 의 ARG 기본값은 여기서 덮어써짐).
         VLM_MODEL: "Qwen/Qwen2.5-1.5B-Instruct"
@@ -22,12 +22,12 @@ services:
       MARC_TOKEN:    "${MARC_TOKEN:-2a5b6258f40b17057ba4a863529c0e2d}"
       ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
       RMW_IMPLEMENTATION: "rmw_fastrtps_cpp"
-      # YOLO 가중치 override -- taejeong_agent_vla.py 가 읽는 변수는
-      # TAEJEONG_DET_WEIGHTS 다(MARC_YOLO_WEIGHTS 가 아니다 -- 그건 다른
-      # 진입점(stage1/pipeline.py, 지금 CMD 로는 안 쓰임)의 변수라 여기 있으면
-      # 오해만 산다. 기본은 이미지 안 경로(/agent/demo/weights/best.pt, Dockerfile
-      # 의 COPY mec_sim_ice/demo_agents 로 자동 baking됨)라 지정 안 해도 된다.
-      TAEJEONG_DET_WEIGHTS: "${TAEJEONG_DET_WEIGHTS:-/agent/demo/weights/best.pt}"
+      # YOLO 가중치 override -- vla_grounding_agent.py 가 읽는 변수는
+      # VLA_GROUNDING_DET_WEIGHTS 다. 기본값을 여기 지정하지 않는다: 그 코드
+      # 자체의 기본값이 이미 dirname(__file__)/weights/best.pt 로 자기 위치
+      # 기준 상대경로라 컨테이너 안에서도 올바르게 풀린다 -- 여기서 절대경로를
+      # 박아두면 mec_sim_ice/ 의 COPY 위치가 바뀔 때마다 다시 어긋나는 종류의
+      # 버그가 재발한다 (실제로 이전에 그랬다).
       # Grounding DINO 폴백 OFF (기본은 ON). "1"이면 dino_fallback.is_disabled()가
       # True -> 라이브 에이전트/오프라인 채점 둘 다 DINO 재탐색을 건너뛴다.
       # 되돌리려면 이 줄을 지우거나 "0" 으로.

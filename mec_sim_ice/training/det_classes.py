@@ -7,7 +7,7 @@ which is what TARGET_CLASSES/LANDMARK_CLASSES below now match exactly. POSE_CLAS
 matches the panel's stated pose count. Still worth re-confirming once more scenes are
 generated (see that doc's warning) -- this file is the definitive list until proven otherwise.
 
-Both `train_yolo11.py` (label conversion) and the eventual `real_agent_vla.py` (real-time
+Both `train_yolo11.py` (label conversion) and the eventual `record_agent_vla.py` (real-time
 inference) must import from here so the two stay in lock-step.
 """
 
