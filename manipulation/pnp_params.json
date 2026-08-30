@@ -1,6 +1,6 @@
 {
-  "grasp_fwd": 0.4,
-  "grasp_lat": 0.0,
+  "grasp_fwd": 0.47,
+  "grasp_lat": -0.05,
   "grasp_down": -0.28,
   "pre_up": 0.12,
   "carry_up": 0.24,
