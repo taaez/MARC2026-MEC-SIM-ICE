@@ -22,7 +22,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # 네트워크는 빌드 시점에만 사용 — 채점 런타임은 인터넷 차단.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-numpy python3-yaml python3-pip python3-dev \
-        libgl1 libglib2.0-0 \
+        libgl1 libglib2.0-0 ros-humble-tf2-ros \
     && pip3 install --no-cache-dir placo \
     && rm -rf /var/lib/apt/lists/*
 
@@ -69,6 +69,7 @@ COPY mec_sim_ice/stage1   /agent/stage1
 COPY mec_sim_ice/taejeong /agent/taejeong
 COPY demo                /agent/demo
 COPY mec_sim_ice/demo_agents /agent/demo
+COPY manipulation        /agent/manipulation
 COPY mec_sim_ice/models   /agent/models
 
 # 런타임 플랫폼과 같은 RMW (FastDDS). import 경로: marc_sdk·stage1(/agent) + demo 로컬 모듈(/agent/demo).
@@ -82,6 +83,13 @@ RUN python3 -c "from transformers import AutoProcessor; AutoProcessor.from_pretr
 # template 없이 깨지거나 여기서 걸린다. AutoProcessor 가 아니라 실제 코드가
 # 쓰는 클래스(AutoTokenizer)로 검증해야 이 불일치를 잡는다.
 RUN python3 -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('${VLM_MODEL}'); print('vlm ok')"
+# 위 두 줄은 processor/tokenizer 만 확인한다 -- 그건 가중치 파일을 안 건드리므로,
+# snapshot_download 의 allow_patterns 에 안 걸린 형식(*.bin 등)으로만 올라온
+# repo 였다면 **빌드는 통과하고 런타임에 조용히 폴백이 꺼진다**(로드 실패를
+# taejeong_agent_vla.py 가 경고만 남기고 삼킨다). 실제 모델 클래스로 한 번 더
+# 로드해서 그 경우를 빌드에서 잡는다.
+RUN python3 -c "from transformers import AutoModelForZeroShotObjectDetection as M; M.from_pretrained('${DET_MODEL}'); print('det weights ok')"
+RUN python3 -c "from transformers import AutoModelForCausalLM as M; M.from_pretrained('${VLM_MODEL}'); print('vlm weights ok')"
 
 WORKDIR /agent/demo
 
