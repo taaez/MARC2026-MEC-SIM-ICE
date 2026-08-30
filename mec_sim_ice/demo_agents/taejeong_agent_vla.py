@@ -28,7 +28,8 @@ from marc_sdk import GroundingResult
 from taejeong.command_parser import parse_command
 from taejeong.dino_fallback import DinoFallbackDetector
 from taejeong.dino_fallback import is_disabled as dino_disabled
-from taejeong.fallback import dino_augment, pose_augment, vlm_assist
+from taejeong.fallback import (dino_augment, pose_augment, vlm_assist,
+                                yolo_tile_augment)
 from taejeong.grounding import camera_from_ros, resolve
 from taejeong.pose_keypoints import AnkleKeypointEstimator
 from taejeong.pose_keypoints import is_disabled as pose_disabled
@@ -68,9 +69,14 @@ class TaejeongVLAGrounding:
         self._imgsz = imgsz
         self._tf_buffer = None
         self._tf_listener = None
-        # DINO/VLM 폴백 (real_agent_vla 와 동일 정책). §7 규칙대로 생성자에서
-        # 로드하고, 로드 실패는 경고만 -- 기본 YOLO+기하 경로는 절대 안 깨진다.
-        # MARC_DISABLE_DINO_FALLBACK / MARC_DISABLE_VLM 으로 개별 차단 가능.
+        # DINO/VLM 폴백. §7 규칙대로 생성자에서 로드하고, 로드 실패는 경고만
+        # -- 기본 YOLO+기하 경로는 절대 안 깨진다.
+        # DINO 는 기본 ON (chungmu 39/39 실측으로 검증: rig_3_b 3문항 구제,
+        # +107.3점 -- MARC_DISABLE_DINO_FALLBACK=1 로 끌 수 있음).
+        # VLM 은 기본 OFF (2026-08-29부터, vlm_fallback.py 참고 -- 같은 실측에서
+        # 39/39 전부 호출 조건이 안 걸려 0회 호출되면서 ~7GB 만 상주했다. 이
+        # 데스크탑은 그 8GB 를 Isaac Sim 과 나눠 쓰므로 얻는 것 없이 OOM
+        # 위험만 진다. 본선 대비 OOV 보험으로 켜려면 MARC_ENABLE_VLM=1).
         self._dino = None
         if not dino_disabled():
             try:
@@ -123,7 +129,11 @@ class TaejeongVLAGrounding:
 
         detections = infer_cameras(self._det, images, min_conf=self._conf,
                                    imgsz=self._imgsz)
-        dino_augment(parsed, images, detections, target_phrases, self._dino)
+        # DINO 보다 먼저 -- YOLO 타일링으로 구제되면 dino_augment 의 카메라별
+        # 스킵이 그대로 적용돼 그만큼 DINO 호출이 줄어든다.
+        yolo_tile_augment(parsed, images, detections, self._det)
+        dino_augment(parsed, images, detections, target_phrases, self._dino, self._vlm)
+        # 마지막 -- 위 두 단계가 추가한 person 탐지까지 발목 보정을 받아야 한다.
         pose_augment(parsed, images, detections, self._pose)
 
         cameras = {}

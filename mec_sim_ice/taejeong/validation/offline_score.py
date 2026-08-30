@@ -78,9 +78,11 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import logging
 import math
 import os
 import sys
+import time
 from collections import defaultdict
 
 _VALIDATION_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -92,13 +94,14 @@ sys.path.insert(0, _TAEJEONG_DIR)   # command_parser / grounding / yolo_adapter 
 from command_parser import parse_command          # noqa: E402
 from dino_fallback import DinoFallbackDetector      # noqa: E402
 from dino_fallback import is_disabled as dino_disabled  # noqa: E402
-from fallback import dino_augment, pose_augment, vlm_assist   # noqa: E402
+from fallback import (dino_augment, pose_augment, vlm_assist,  # noqa: E402
+                      yolo_tile_augment)
 from pose_keypoints import AnkleKeypointEstimator   # noqa: E402
 from pose_keypoints import is_disabled as pose_disabled       # noqa: E402
 from grounding import resolve                      # noqa: E402
 from run_offline import load_round                 # noqa: E402
 from vlm_fallback import VlmTargetResolver          # noqa: E402
-from vlm_fallback import is_disabled as vlm_disabled    # noqa: E402
+from vlm_fallback import is_disabled as vlm_disabled  # noqa: E402
 from yolo_adapter import infer_cameras              # noqa: E402
 
 from chungmu_gt import DEFAULT_SCENARIO, load_gt    # noqa: E402  (same dir)
@@ -342,8 +345,11 @@ def resolve_fallback_mode(flag) -> tuple:
     flag 는 --fallback 이면 True, --no-fallback 이면 False, 아무것도 안 주면 None(자동).
     자동일 때의 규칙은 '라이브와 같게 맞추되, 못 돌릴 환경이면 조용히 빠지지 말고 알린다':
 
-      * 라이브와 같은 env 스위치(MARC_DISABLE_DINO_FALLBACK / MARC_DISABLE_VLM)가 켜져
-        있으면 끈다 -- 두 경로가 같은 스위치를 보게 해서 동작이 갈라지지 않게 한다.
+      * 이 함수가 켜는 건 DINO 뿐이다. VLM 은 2026-08-29부터 기본이 꺼져 있고
+        (vlm_fallback.is_disabled -- chungmu 39/39 에서 호출 0회, 상주 비용만
+        ~7GB) MARC_ENABLE_VLM=1 로 따로 켜야 한다 -- 라이브 에이전트
+        (taejeong_agent_vla.py)도 같은 함수를 보므로 둘이 갈라지지 않는다.
+      * 라이브와 같은 env 스위치(MARC_DISABLE_DINO_FALLBACK)가 켜져 있으면 끈다.
       * transformers 가 없으면 끈다 (노트북 기본 환경).
       * 가속기(CUDA 또는 Apple Silicon MPS)가 없으면 끈다. Qwen2.5-VL / Grounding DINO
         를 CPU 로 올리면 몇십 분씩 걸리거나 메모리가 터진다. MPS 는 dino_fallback.py /
@@ -355,8 +361,12 @@ def resolve_fallback_mode(flag) -> tuple:
         return False, "--no-fallback 지정"
     forced = flag is True
     if dino_disabled() and vlm_disabled():
+        # VLM 은 기본이 이미 꺼져 있어(위 docstring) 이 조건은 사실상
+        # "DINO 도 꺼졌으면"이다 -- 그러면 폴백 전체가 할 일이 없으니
+        # transformers import 조차 시도하지 않고 여기서 바로 끝낸다.
         if not forced:
-            return False, "MARC_DISABLE_DINO_FALLBACK / MARC_DISABLE_VLM 이 켜져 있음"
+            return False, ("DINO 도 VLM 도 꺼짐 (--no-dino / VLM 기본 OFF 또는 "
+                           "MARC_DISABLE_DINO_FALLBACK) -- 폴백 계층이 할 일이 없다")
     try:
         import transformers  # noqa: F401
     except ImportError:
@@ -426,6 +436,33 @@ def main() -> int:
     # 오프라인도 켜는 게 맞다. 다만 노트북에는 보통 GPU 가 없고 Qwen2.5-VL / Grounding DINO
     # 는 GPU 전제라, CUDA 가 안 보이면 자동으로 건너뛰고 그 사실을 리포트에 명시한다
     # (조용히 빠지면 '폴백 없는 점수'를 라이브 점수로 착각하게 된다).
+    # 모델별 on/off. --fallback/--no-fallback 은 "폴백 계층 전체"를 켜고 끄는
+    # 마스터 스위치이고, 아래 둘은 그 안에서 어느 모델을 올릴지 고른다 --
+    # 8GB 한 장으로 검증할 때 "DINO 만", "VLM 만" 을 나눠 돌려야 하기 때문이다
+    # (둘을 같이 올리면 DINO fp32 타일링 피크 + Qwen bf16 상주가 겹쳐 터진다;
+    #  근거는 dino_fallback.py._detect_batch 주석의 6.37GiB 실측).
+    #
+    # 플래그는 **환경변수로 번역해서** 적용한다. 판정의 단일 출처는 여전히
+    # dino_fallback.is_disabled() / vlm_fallback.is_disabled() 이고 라이브
+    # 에이전트도 같은 함수를 보므로, 여기서 별도 분기를 만들면 두 경로가
+    # 갈라진다 -- 그래서 스위치만 바꾸고 판정 로직은 건드리지 않는다.
+    ap.add_argument("--dino", dest="dino", action="store_true", default=None,
+                    help="Grounding DINO 폴백을 켠다 (기본: 켜짐).")
+    ap.add_argument("--no-dino", dest="dino", action="store_false",
+                    help="Grounding DINO 폴백만 끈다 -- VLM 만 단독으로 재볼 때. "
+                         "MARC_DISABLE_DINO_FALLBACK=1 과 같다.")
+    ap.add_argument("--vlm", dest="vlm", action="store_true", default=None,
+                    help="소형 LM(Qwen) 폴백을 켠다 (기본: 꺼짐 -- chungmu 39/39 "
+                         "에서 호출 0회라 상주 비용만 든다. 본선 OOV 대비 검증용). "
+                         "MARC_ENABLE_VLM=1 과 같다.")
+    ap.add_argument("--no-vlm", dest="vlm", action="store_false",
+                    help="소형 LM 폴백을 확실히 끈다 (MARC_DISABLE_VLM=1 과 같다).")
+    ap.add_argument("--dino-box-thr", type=float, default=None,
+                    help="DINO box confidence 임계값 (기본 DinoFallbackDetector 기본값 0.3). "
+                         "실측(2026-08-28)상 소형물체(pencilcase) score가 0.11까지 나와 "
+                         "기본값에선 폴백이 사실상 발동 안 함 -- 낮춰서 스윕할 때 씀.")
+    ap.add_argument("--dino-text-thr", type=float, default=None,
+                    help="DINO text 임계값 (기본 0.25).")
 
     # macOS 는 입력 중 "--" 를 em-dash("—") 로 자동 치환하는 경우가 있다.
     # 그대로 두면 argparse 가 "unrecognized arguments" 만 뱉어 원인을 알기 어렵다.
@@ -437,6 +474,25 @@ def main() -> int:
             return 2
 
     args = ap.parse_args()
+
+    # 모델별 플래그 -> 환경변수 (라이브와 같은 스위치를 그대로 쓴다, 위 주석 참고).
+    # 플래그를 안 주면 아무것도 안 건드린다 -- 셸에서 미리 export 한 값이 그대로 산다.
+    if args.dino is True:
+        os.environ.pop("MARC_DISABLE_DINO_FALLBACK", None)
+    elif args.dino is False:
+        os.environ["MARC_DISABLE_DINO_FALLBACK"] = "1"
+    if args.vlm is True:
+        os.environ["MARC_ENABLE_VLM"] = "1"
+        os.environ.pop("MARC_DISABLE_VLM", None)
+    elif args.vlm is False:
+        os.environ["MARC_DISABLE_VLM"] = "1"
+
+    # 기본 root logger 레벨은 WARNING이라 fallback.py/grounding.py 의 log.info(...)
+    # (DINO 구제, pair 후보 경쟁 등 진행상황 로그)가 조용히 버려진다 -- 39문항처럼
+    # 오래 걸리는 실행에서 화면에 아무 것도 안 찍혀 멈춘 것처럼 보이는 원인이었다
+    # (2026-08-29, 실제 진행 중이었는데 GPU 사용률로만 확인 가능했던 사례).
+    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s",
+                        datefmt="%H:%M:%S", stream=sys.stderr)
 
     if not os.path.exists(args.weights):
         print(f"가중치를 찾을 수 없습니다: {args.weights}\n"
@@ -467,23 +523,46 @@ def main() -> int:
         print("[fallback] 주의: 라이브 에이전트는 폴백을 항상 켠다. 아래 점수는 폴백이 "
               "구제했을 문항을 실패로 계산하므로 데스크탑 실측보다 낮게 나올 수 있다.")
 
+    # 8GB 한 장으로 검증할 때 "지금 뭐가 올라가 있고 얼마나 남았는지"를 모르면
+    # OOM 이 나야 알게 된다 -- 모델을 하나 올릴 때마다 찍는다 (CUDA 일 때만;
+    # MPS/CPU 는 통합 메모리라 같은 의미의 숫자가 안 나온다).
+    def _vram(tag):
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                return
+            free, total = torch.cuda.mem_get_info()
+            print(f"[vram] {tag}: 프로세스 할당 "
+                  f"{torch.cuda.memory_allocated() / 2**30:.2f} GiB / 카드 여유 "
+                  f"{free / 2**30:.2f} GiB (총 {total / 2**30:.2f} GiB)", flush=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    _vram("YOLO 로드 후")
     dino = vlm = None
-    if use_fallback:
-        # DINO 는 기본 꺼짐이다(dino_fallback.is_disabled docstring). 라이브
-        # 에이전트가 같은 스위치를 같은 자리에서 보므로 여기서도 똑같이 존중해야
-        # 두 경로의 점수가 갈라지지 않는다 -- --fallback 을 줘도 DINO 만은
-        # MARC_ENABLE_DINO_FALLBACK=1 이 있어야 올라온다.
-        if dino_disabled():
-            print("[fallback] DINO 건너뜀 -- 기본 꺼짐 "
-                  "(켜려면 MARC_ENABLE_DINO_FALLBACK=1)")
-        else:
-            try:
-                dino = DinoFallbackDetector()
-            except Exception as e:  # noqa: BLE001
-                print(f"[fallback] DINO 로드 실패, target/landmark 재탐색 없이 진행: {e}",
-                      file=sys.stderr)
+    # DINO 는 **기본 꺼짐**이다(dino_fallback.is_disabled docstring, 2026-08-30).
+    # 라이브 에이전트가 같은 스위치를 같은 자리에서 보므로 여기서도 존중해야 두
+    # 경로의 점수가 갈라지지 않는다 -- --fallback 을 줘도 DINO 만은
+    # MARC_ENABLE_DINO_FALLBACK=1 이 있어야 올라온다.
+    if use_fallback and dino_disabled():
+        print("[fallback] DINO 건너뜀 -- 기본 꺼짐 "
+              "(켜려면 MARC_ENABLE_DINO_FALLBACK=1)")
+    if use_fallback and not dino_disabled():
+        try:
+            dino_kw = {}
+            if args.dino_box_thr is not None:
+                dino_kw["box_thr"] = args.dino_box_thr
+            if args.dino_text_thr is not None:
+                dino_kw["text_thr"] = args.dino_text_thr
+            dino = DinoFallbackDetector(**dino_kw)
+            _vram("DINO 로드 후")
+        except Exception as e:  # noqa: BLE001
+            print(f"[fallback] DINO 로드 실패, target/landmark 재탐색 없이 진행: {e}",
+                  file=sys.stderr)
+    if use_fallback and not vlm_disabled():
         try:
             vlm = VlmTargetResolver()
+            _vram("VLM 로드 후")
         except Exception as e:  # noqa: BLE001
             print(f"[fallback] VLM 로드 실패, behind 중재/OOV 재해석 없이 진행: {e}",
                   file=sys.stderr)
@@ -494,9 +573,16 @@ def main() -> int:
     if not pose_disabled():
         try:
             pose = AnkleKeypointEstimator()
+            _vram("pose 로드 후")
         except Exception as e:  # noqa: BLE001
             print(f"[pose-kp] 로드 실패, 사람 좌표는 bbox 중앙 기준으로 진행: {e}",
                   file=sys.stderr)
+    print(f"[모델] YOLO=on  DINO={'on' if dino else 'off'}  "
+          f"VLM={'on' if vlm else 'off'}  pose={'on' if pose else 'off'}")
+    if dino is not None and vlm is not None:
+        print("[모델] 주의: 8GB 한 장이면 DINO 타일링 피크(실측 8타일 fp32 = 6.37GiB)와 "
+              "Qwen 상주(~3.1GiB)가 겹쳐 OOM 이 난다. MARC_DINO_BATCH=2 를 주거나 "
+              "--no-vlm / --no-dino 로 나눠 돌릴 것.")
     args.fallback = use_fallback
 
     # s1_* 는 Stage1 단계에서, s2_* 는 Stage2 단계에서 뜬 기록이다. 어느 단계에서 떴는지와
@@ -513,25 +599,53 @@ def main() -> int:
         """명령 + (카메라, 프레임, 검출) → 채점된 라운드 dict. 파이프라인은 라이브와 동일.
 
         ``dets`` 는 프레임에만 의존하므로 (명령과 무관) 한 프레임을 여러 문항에 재사용할
-        수 있다. 다만 ``dino_augment`` 는 명령별 폴백 탐지를 dets 에 **in-place 로 넣기**
+        수 있다. 다만 augment 들은 명령별 폴백 탐지를 dets 에 **in-place 로 넣기**
         때문에, 재사용할 때는 카메라별 리스트를 복사해서 넘긴다 -- 안 그러면 앞 문항이
         구제한 탐지가 뒤 문항에 새어 들어간다.
+
+        단계별 초를 함께 잰다: 시나리오의 time_limit 이 문항당 30초라, 폴백이 그
+        예산을 넘기면 점수가 올라도 라이브에서는 못 쓴다. 어느 단계가 먹는지
+        갈라 둬야 그 판단을 할 수 있다 (리포트의 ``sec`` 항목).
         """
         problem_id, expected, weights, kind = hit
-        parsed = parse_command(cmd)
-        # 아래 augment 들이 dets 를 제자리 수정하므로 항상 복사한다 (한 라운드의
-        # 프레임을 여러 문항에 재사용하기 때문 -- 원본을 건드리면 앞 문항이
-        # 뒤 문항에 새어 들어간다).
+        # augment 들이 dets 를 제자리 수정하므로 항상 복사한다 (위 docstring).
         dets = {cid: list(v) for cid, v in dets.items()}
+
+        t = {}
+        t0 = time.perf_counter()
+        parsed = parse_command(cmd)
+        target_phrases = vlm_assist(cmd, parsed, vlm) if args.fallback else None
+        t["vlm"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
         if args.fallback:
-            target_phrases = vlm_assist(cmd, parsed, vlm)
-            dino_augment(parsed, images, dets, target_phrases, dino)
+            # DINO 보다 먼저 -- YOLO 타일링으로 구제되면 dino_augment 의
+            # 카메라별 스킵이 그대로 적용돼 그만큼 DINO 호출이 줄어든다.
+            yolo_tile_augment(parsed, images, dets, model)
+        t["yolo_tile"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        if args.fallback:
+            dino_augment(parsed, images, dets, target_phrases, dino, vlm)
+        t["dino"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
         pose_augment(parsed, images, dets, pose)
+        t["pose"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
         decision = resolve(parsed, dets, cams)
+        t["resolve"] = time.perf_counter() - t0
+        # YOLO 추론(infer_cameras)은 프레임당 1회라 이 함수 밖에서 돈다 -- 대여
+        # 채점이 같은 dets 를 여러 문항에 재사용하기 때문. 호출부가 재 둔 값을
+        # 여기에 합쳐야 total 이 라이브 한 문항의 실제 비용과 같아진다.
+        t["yolo"] = _yolo_sec.get(record_name, 0.0)
+        t["total"] = sum(t.values())
+
         submission = (flatten_payload(decision.to_payload()) if decision is not None
                       else fallback_submission(parsed))
+        if t["total"] >= 10.0:      # 30초 예산의 1/3을 넘긴 라운드는 그 자리에서 알린다
+            print(f"      느림: {t['total']:.1f}s (yolo {t['yolo']:.1f} / "
+                  f"dino {t['dino']:.1f} / vlm {t['vlm']:.1f} / pose {t['pose']:.1f})",
+                  flush=True)
         return {"stage": 2 if kind == "retrieval" else 1,
-                "voice_command": cmd, "record": record_name,
+                "voice_command": cmd, "record": record_name, "sec": t,
                 "borrowed": borrowed,
                 "scores": score_round(problem_id, weights, expected, submission)}
 
@@ -570,12 +684,22 @@ def main() -> int:
     # 커진다. 그때는 최신 라운드 몇 개로만 표본을 잡는다 -- 중앙값의 취지는 유지된다.
     borrow_dirs = round_dirs if not args.fallback else round_dirs[-BORROW_SAMPLES_FALLBACK:]
     borrow_pool = defaultdict(list)
+    # YOLO 추론은 프레임당 1회라 run_round 밖에서 돈다(대여 채점이 같은 dets 를
+    # 여러 문항에 재사용하기 때문). 레코드별로 재 두고 run_round 가 자기 total 에
+    # 합쳐 쓴다 -- 그래야 sec.total 이 라이브 한 문항의 실제 비용과 같아진다.
+    _yolo_sec = {}
 
-    for d in round_dirs:
+    for i, d in enumerate(round_dirs, 1):
+        # 라운드당 DINO/VLM 폴백까지 겹치면 수 초~수십 초가 걸릴 수 있어, 진행상황이
+        # 하나도 안 찍히면 (특히 --fallback 켰을 때) 멈춘 것처럼 보인다 -- 최소한
+        # "몇 번째 도는 중"인지는 알 수 있게 매 라운드 시작마다 찍는다.
+        print(f"[{i}/{len(round_dirs)}] {os.path.basename(d)}", flush=True)
         meta, cams, images = load_round(d)
         cmd = meta["command"]
         name = os.path.basename(d)
+        t0 = time.perf_counter()
         dets = infer_cameras(model, images, min_conf=args.conf, imgsz=args.imgsz)
+        _yolo_sec[name] = time.perf_counter() - t0
         hit = answer_key.get(cmd)
         if hit is None:
             unmatched.append((name, cmd))
@@ -585,6 +709,20 @@ def main() -> int:
             for bcmd, bhit in borrow_targets:
                 borrow_pool[bhit[0]].append(
                     run_round(bcmd, bhit, cams, images, dets, name, borrowed=True))
+
+        # 8GB급 GPU(랩 데스크탑)에서 41라운드를 도는 동안 PyTorch 캐싱 allocator 가
+        # 안 쓰는 블록을 계속 쥐고 있다가 결국 OOM 이 났다 (2026-08-29 실측, CUDA,
+        # "GPU 0 has a total capacity of 7.53 GiB" -- 자기 프로세스가 6.62GiB 를 이미
+        # 물고 있는 상태에서 타일링 배치 하나(1.91GiB)를 더 요청해 터짐). dtype 을
+        # bf16 으로 낮추는 건 이미 grounding-dino 의 dtype 불일치로 크래시한 이력이
+        # 있어(dino_fallback.py 상단 주석) 재시도하지 않는다 -- 대신 라운드마다 안 쓰는
+        # 캐시를 돌려준다. 실제 사용 중인 텐서는 안 건드리므로 정확도에는 영향이 없고,
+        # 코퍼스가 끝까지 도는가만 바뀐다. 대여 채점이 붙으면 라운드당 모델 호출이
+        # (문항 x 프레임)으로 늘어 이 반납이 더 중요해진다.
+        if args.fallback:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     if borrow_pool:
         spread = []
@@ -660,6 +798,15 @@ def main() -> int:
     s1 = [r for r in primary if r["stage"] == 1]
     s2 = [r for r in primary if r["stage"] == 2]
     final = {"source": "offline"}   # 플랫폼 실측이 아니라 이 스크립트가 계산한 값이라는 표시
+    # 폴백 on/off 는 점수를 크게 바꾸는데(라이브 에이전트는 항상 켠다) 터미널에만
+    # 찍혀서, 나중에 report.json 만 보면 어느 쪽 점수인지 알 수 없었다. 리포트에
+    # 남겨야 서로 다른 머신에서 나온 리포트를 비교할 때 사과-오렌지를 피한다.
+    final["fallback"] = {
+        "used": bool(use_fallback), "why": why,
+        "dino": dino is not None, "vlm": vlm is not None,
+        "pose": pose is not None,
+    }
+
     def _avg(rs):
         return sum(r["scores"]["total"] for r in rs) / len(rs) if rs else None
 
