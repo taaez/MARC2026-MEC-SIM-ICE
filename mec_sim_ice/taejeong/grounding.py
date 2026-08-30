@@ -17,8 +17,9 @@ GENERAL by design — 대회 요구사항("문제·배경이 바뀐다, 씬 하�
   camera: ROS optical (+Z 전방, +X 오른쪽, +Y 아래) — CameraInfo.K 와 동일 규약.
   /tf_static (world→camera_id): p_world = R @ p_cam + t.
 
-제출 좌표 정의(팀 결정): target_coord/anchor_coord 는 **물체 중심점** —
-바닥 접촉점 (x, y) 에 z 를 (base+top)/2 로 올린 값.
+제출 좌표 정의: target_coord/anchor_coord 둘 다 **접촉면 위의 점** — 바닥
+접촉점 (x, y) 에 z 는 그 물체가 놓인 면의 높이(지면, 또는 'on' 이면 랜드마크
+상면). 시나리오 yaml 실측 근거는 Located.ground_point 의 docstring 참조.
 
 의존성: numpy 만 (ROS 무의존 → 어느 머신에서든 합성 씬으로 테스트 가능).
 탐지기 무관: Detection(label, bbox, score) 만 맞추면 YOLO/DINO 어느 쪽이든 연결.
@@ -194,6 +195,11 @@ class Detection:
     label: str                       # 클래스명 (공식 로스터 / person_* pose 클래스)
     bbox: tuple                      # (x1, y1, x2, y2) 픽셀
     score: float = 1.0
+    # 사람 탐지에 한해 pose 모델이 찍어 준 '발목 가로 픽셀' (pose_keypoints.py).
+    # 플랫폼의 정답이 사람의 중심이 아니라 발이라, 제출 target 좌표의 가로
+    # 위치를 이걸로 옮긴다 (_foot_adjusted_point). 선택 기하(locate)는 일부러
+    # 건드리지 않는다 -- 이유는 그 함수의 docstring. None 이면 기존 동작 그대로.
+    foot_u: Optional[float] = None
 
 
 @dataclass
@@ -206,18 +212,39 @@ class Located:
 
     @property
     def center(self) -> list:
-        """중심점 = 접촉점 (x,y) + z 는 (base+top)/2. target 좌표에 쓴다."""
+        """중심점 = 접촉점 (x,y) + z 는 (base+top)/2.
+
+        **제출 좌표에는 쓰지 않는다** (ground_point 의 docstring 참조 -- GT 는
+        중심이 아니라 접촉면이다). 높이를 쓰는 판정용으로만 남겨 둔다.
+        """
         return [float(self.base[0]), float(self.base[1]),
                 float((self.base[2] + self.top_z) / 2.0)]
 
     @property
     def ground_point(self) -> list:
-        """접촉점 (x, y, base_z). anchor(랜드마크) 좌표에 쓴다.
+        """접촉점 (x, y, base_z). anchor/target 제출 좌표 **양쪽 모두**에 쓴다.
 
-        실측(clean 12라운드 스윕): 랜드마크 정답 좌표는 중심점이 아니라 **지면
-        접촉점**이다. 자판기·택시처럼 큰 랜드마크에서 center 를 쓰면 물체 높이의
-        절반이 그대로 z 오차가 된다 -- 평균 오차 1.00m -> 0.64m (점수 0.800 ->
-        0.872). target(작은 물체)은 반대로 center 가 맞아 그대로 둔다.
+        GT 는 물체가 놓인 **면의 높이**다 (중심점이 아니다). 근거는 시나리오
+        yaml(`content-image-2026.R03/marc2026_chungmu.yaml`) 실측 -- 채점
+        정답지가 그 파일의 `resolved.position` 을 그대로 쓰므로(validation/
+        chungmu_gt.py) 이것이 GT 정의 그 자체다. 지면 대비 prim z 중앙값:
+
+            person_prone   +0.006   person_lying_down +0.025
+            person_bending +0.097   person_walking    -0.125
+            mug            +0.848   (= 피크닉 테이블 상판)
+            person_sitting +1.537   (= 자판기 위)
+
+        1.7m 인체의 GT 가 지면 ±0.1m 인 것이 결정적이다 -- 중심점 규약이면
+        +0.85 가 나와야 한다. 'on' 인 경우도 상판 높이지 상판+물체높이/2 가
+        아니다(mug +0.848).
+
+        이력: 랜드마크는 큰 물체라 center 의 z 오차가 바로 드러나 먼저 고쳤고
+        (clean 12라운드 스윕, 평균 오차 1.00m -> 0.64m), 그때 "target(작은
+        물체)은 center 가 맞다"고 판단해 남겨 뒀다. 그 스윕이 **캔·티슈 같은
+        소형 물체만** 봤기 때문에 생긴 오판이다 -- 높이 0.1m 물체에서는 두 규약
+        차이가 5cm 라 구분되지 않는다. 사람 문항(1.7m)에서만 드러났다: target
+        오차 중앙값이 물체 0.47m 대 사람 1.10m 로 갈렸고, sqrt(0.47^2+0.85^2)
+        = 0.97m 로 '중심점 규약이 z 에 +0.85 를 더한다'는 설명과 정합한다.
         """
         return [float(self.base[0]), float(self.base[1]), float(self.base[2])]
 
@@ -484,6 +511,39 @@ def _relation_fit(cam: CameraModel, a_loc: Located, t_loc: Located,
     return (1.0 if geo == hint else 0.0, prox)
 
 
+def _foot_adjusted_point(cam: CameraModel, t_loc: Located,
+                         cfg: GroundingConfig) -> list:
+    """사람 target 의 **제출 좌표만** 발목 가로 위치로 옮긴다.
+
+    플랫폼의 정답은 사람의 중심이 아니라 발이라, bbox 가로 중앙을 쓰면 누운
+    사람에서 몸길이의 절반만큼 어긋난다 (근거·실측은 pose_keypoints.py
+    docstring). 발목 keypoint 가 그 가로 위치를 준다.
+
+    **선택 기하(``Located.base``)는 일부러 건드리지 않는다.** base 는 제출
+    좌표이자 relation 판정·anchor 선택의 입력이기도 해서, locate() 안에서
+    같이 옮기면 (target, anchor) 쌍 선택이 뒤집힌다 -- 실측에서 sar07/sarH6
+    의 anchor 가 0.95 -> 0.04 로 무너져 target 이득(+0.07)을 넘는 손해가
+    났다. 그래서 보정은 payload 를 만드는 이 지점에서만 적용한다.
+
+    세로는 접지선(bbox 아랫변)을 그대로 쓴다. 얕게 내려다보는 카메라에서
+    세로 픽셀 오차는 world 로 크게 증폭되므로(rig_7_a 실측 1px = 0.075m)
+    발목의 세로까지 쓰면 오히려 나빠진다.
+    """
+    u = t_loc.det.foot_u
+    if u is None:
+        return t_loc.ground_point
+    _, _, _, y2 = t_loc.det.bbox
+    z = float(t_loc.base[2])
+    near = pixel_to_plane(cam, float(u), y2, plane_z=z)
+    if near is None:
+        return t_loc.ground_point
+    away = near[:2] - cam.C_w[:2]
+    n = float(np.linalg.norm(away))
+    away = away / n if n > 1e-9 else np.zeros(2)
+    xy = near[:2] + cfg.footprint_push * t_loc.radius * away
+    return [float(xy[0]), float(xy[1]), z]
+
+
 def _build_decision(parsed: ParsedCommand, cam: CameraModel, cam_id: str,
                     t_loc: Optional[Located], a_loc: Optional[Located],
                     cfg: GroundingConfig, ground_surface_token: Optional[str],
@@ -501,7 +561,9 @@ def _build_decision(parsed: ParsedCommand, cam: CameraModel, cam_id: str,
 
     # target 미탐지 시 anchor 좌표를 target 좌표로 대신 낸다: 허용 반경(5m)에
     # 비해 실측 anchor↔target 거리가 훨씬 짧아 부분점수를 크게 건진다.
-    target_coord = t_loc.center if t_loc is not None else list(anchor_coord)
+    # anchor 와 같은 ground_point 규약을 쓴다 (Located.ground_point docstring).
+    target_coord = (_foot_adjusted_point(cam, t_loc, cfg) if t_loc is not None
+                    else list(anchor_coord))
 
     relation: Optional[str] = None
     situation: Optional[str] = None
@@ -563,8 +625,18 @@ def resolve(parsed: ParsedCommand,
          맞아도 camera/landmark/anchor 배점이 살아있다.
 
     ground_surface_token: 사람이 랜드마크 위가 아닐 때 situation 규칙에 넣을
-    지면 토큰(grass/road/...). 판정 수단이 없으면 None → 공식 fallback 경로.
+    지면 토큰(grass/road/...). 미지정이면 명령에서 파싱한 area_hint 를 쓴다.
     """
+    # 명령이 지목한 구역을 지지면 토큰으로 쓴다 -- "parking lot 바닥에 쓰러진"
+    # 처럼 사람이 랜드마크 위가 아닌 문항에서, 지금까지 support 가 None 이라
+    # 공식 규칙표(situation_rules.yaml)를 못 타고 자세 기본값으로 떨어졌다.
+    # 랜드마크 위(on/above)인 경우는 _build_decision 이 랜드마크를 우선하므로
+    # 이 값이 끼어들지 않는다 -- 즉 순수 추가 계층이라 나빠지는 경로가 없다.
+    # (실측 39문항: sar01/sarH4/sar06 의 situation 이 맞아지고 회귀 0건,
+    #  Stage1 평균 68.54 -> 70.25.)
+    if ground_surface_token is None:
+        ground_surface_token = parsed.area_hint
+
     per_cam = {}
     for cam_id, dets in detections.items():
         cam = cameras.get(cam_id)

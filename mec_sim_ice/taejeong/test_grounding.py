@@ -34,6 +34,11 @@ def make_camera(cam_id: str, pos, look_at, ground_z: float = 0.0) -> CameraModel
     return CameraModel(cam_id, K, R_cw, pos, ground_z, W, H)
 
 
+def replace_foot(det: Detection, u: float) -> Detection:
+    """pose 모델이 발목 가로 픽셀을 채워 준 상태를 흉내 낸다."""
+    return Detection(det.label, det.bbox, det.score, float(u))
+
+
 def synth_det(cam: CameraModel, label: str, xy, height: float, radius: float,
               base_z: float = None, score: float = 0.9) -> Detection:
     """world 상의 직립 물체(원기둥 근사)를 카메라에 투영해 bbox 탐지를 합성."""
@@ -285,6 +290,44 @@ def main() -> int:
     check("T19-ambiguous-area-releases-gate",
           d.debug.get("gate_kind") == "landmark",
           f"gate={d.debug.get('gate_kind')} cams={d.debug.get('gate_cameras')}")
+
+    # ── T20~T22. 사람 발목 keypoint 보정 (Detection.foot_u) ────────────────
+    # 정답이 사람의 '중심' 이 아니라 '발' 이라, 제출 좌표의 가로 위치만 발목
+    # 픽셀로 옮긴다 (pose_keypoints.py / _foot_adjusted_point). 여기서 지키는
+    # 계약은 세 가지다.
+    parsed20 = parse_command("Find the person lying on the road near the bench.")
+    person = synth_det(cam, "person_lying_down", (5.0, 0.0), 0.4, 0.85)
+    bench20 = synth_det(cam, "bench", (5.0, 2.5), 0.9, 0.5)
+    base = resolve(parsed20, {"cam_a": [person, bench20]}, {"cam_a": cam}, cfg)
+
+    # T20. foot_u 가 없으면 기존 동작과 완전히 동일하다 (순수 추가 계층).
+    same = resolve(parsed20, {"cam_a": [Detection(person.label, person.bbox,
+                                                  person.score, None), bench20]},
+                   {"cam_a": cam}, cfg)
+    check("T20-foot_u-none-is-noop",
+          np.allclose(base.target_coord, same.target_coord),
+          f"{base.target_coord} vs {same.target_coord}")
+
+    # T21. bbox 왼쪽 끝에 발이 있으면 제출 좌표가 그쪽으로 옮겨간다.
+    x1, _, x2, _ = person.bbox
+    left = resolve(parsed20,
+                   {"cam_a": [replace_foot(person, x1 + 0.05 * (x2 - x1)), bench20]},
+                   {"cam_a": cam}, cfg)
+    right = resolve(parsed20,
+                    {"cam_a": [replace_foot(person, x2 - 0.05 * (x2 - x1)), bench20]},
+                    {"cam_a": cam}, cfg)
+    moved = float(np.linalg.norm(np.asarray(left.target_coord)
+                                 - np.asarray(right.target_coord)))
+    check("T21-foot_u-shifts-submitted-coord", moved > 0.5, f"moved={moved:.2f}m")
+
+    # T22. 그런데 relation/anchor 선택 기하는 흔들리지 않는다 -- foot_u 를 극단으로
+    #      줘도 고른 랜드마크와 anchor 좌표가 그대로여야 한다. (실측 회귀 사례:
+    #      locate() 안에서 옮겼더니 sar07/sarH6 의 anchor 가 0.95 -> 0.04 로 무너졌다.)
+    check("T22-foot_u-does-not-move-anchor",
+          left.landmark == base.landmark
+          and np.allclose(left.anchor_coord, base.anchor_coord)
+          and np.allclose(right.anchor_coord, base.anchor_coord),
+          f"{left.landmark}/{left.anchor_coord} vs {base.landmark}/{base.anchor_coord}")
 
     print("PASS" if fails == 0 else f"FAIL ({fails})")
     return 1 if fails else 0
