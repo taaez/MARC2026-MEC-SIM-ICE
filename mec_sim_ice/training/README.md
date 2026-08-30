@@ -1,11 +1,11 @@
-# test/ — YOLO11 파이프라인 WIP 스테이징
+# training/ — YOLO11 학습 코드
 
-`det_classes.py` / `train_yolo11.py`를 검증 끝나기 전까지 `demo/`가 아니라 여기 임시로 둠
+`det_classes.py` / `train_yolo11.py` (2026-08-29 `test/`에서 `training/`으로 이동, 데이터셋·결과물은 `datasets/`·`training_results/`로 분리)
 (정식 제출 구조인 `demo/`를 아직 확정 안 된 코드로 건드리지 않기 위함).
 
 ## 여기 있는 것
 - `det_classes.py` — `TARGET_CLASSES`/`LANDMARK_CLASSES`/`POSE_CLASSES`/`DET_CLASSES`.
-  근거: `정리폴더/MARC2026_객체_상태_분류.md` (아직 완결 아님, 계속 갱신 중).
+  근거: `../docs/MARC2026_객체_상태_분류.md` (아직 완결 아님, 계속 갱신 중).
 - `train_yolo11.py` — dataset-gen JSON → YOLO 라벨 변환 + 학습. 실행법/경로는 파일 상단 docstring 참고.
 
 ## 다음 단계 (검증되면 `demo/`로 이동)
