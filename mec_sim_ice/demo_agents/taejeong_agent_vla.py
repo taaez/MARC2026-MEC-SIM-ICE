@@ -28,8 +28,7 @@ from marc_sdk import GroundingResult
 from taejeong.command_parser import parse_command
 from taejeong.dino_fallback import DinoFallbackDetector
 from taejeong.dino_fallback import is_disabled as dino_disabled
-from taejeong.fallback import (dino_augment, pose_augment, vlm_assist,
-                                yolo_tile_augment)
+from taejeong.fallback import dino_augment, pose_augment, vlm_assist
 from taejeong.grounding import camera_from_ros, resolve
 from taejeong.pose_keypoints import AnkleKeypointEstimator
 from taejeong.pose_keypoints import is_disabled as pose_disabled
@@ -129,11 +128,8 @@ class TaejeongVLAGrounding:
 
         detections = infer_cameras(self._det, images, min_conf=self._conf,
                                    imgsz=self._imgsz)
-        # DINO 보다 먼저 -- YOLO 타일링으로 구제되면 dino_augment 의 카메라별
-        # 스킵이 그대로 적용돼 그만큼 DINO 호출이 줄어든다.
-        yolo_tile_augment(parsed, images, detections, self._det)
         dino_augment(parsed, images, detections, target_phrases, self._dino, self._vlm)
-        # 마지막 -- 위 두 단계가 추가한 person 탐지까지 발목 보정을 받아야 한다.
+        # 마지막 -- 위 단계가 추가한 person 탐지까지 발목 보정을 받아야 한다.
         pose_augment(parsed, images, detections, self._pose)
 
         cameras = {}
