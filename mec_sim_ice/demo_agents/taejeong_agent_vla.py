@@ -23,18 +23,18 @@ test/det_classes.py. Override with TAEJEONG_DET_WEIGHTS if needed.
 import logging
 import os
 
-from ultralytics import YOLO
-
 from marc_sdk import GroundingResult
 
 from taejeong.command_parser import parse_command
 from taejeong.dino_fallback import DinoFallbackDetector
 from taejeong.dino_fallback import is_disabled as dino_disabled
-from taejeong.fallback import dino_augment, vlm_assist
+from taejeong.fallback import dino_augment, pose_augment, vlm_assist
 from taejeong.grounding import camera_from_ros, resolve
+from taejeong.pose_keypoints import AnkleKeypointEstimator
+from taejeong.pose_keypoints import is_disabled as pose_disabled
 from taejeong.vlm_fallback import VlmTargetResolver
 from taejeong.vlm_fallback import is_disabled as vlm_disabled
-from taejeong.yolo_adapter import infer_cameras
+from taejeong.yolo_adapter import infer_cameras, load_detector
 
 log = logging.getLogger("participant_app")
 
@@ -60,7 +60,10 @@ class TaejeongVLAGrounding:
     def __init__(self, client, det_weights: str = DET_WEIGHTS,
                 conf: float = DET_CONF, imgsz: int = DET_IMGSZ):
         self._client = client
-        self._det = YOLO(det_weights)
+        # 소형객체 서브모델(sunblock/tissue/disposable_cup) 산출물이 있으면
+        # 라우팅 검출기로, 없으면 기존과 똑같은 B 단독 YOLO 로 로드된다
+        # (taejeong/yolo_adapter.load_detector). MARC_DISABLE_SMALL_DET=1 로 차단.
+        self._det = load_detector(det_weights, conf=conf, imgsz=imgsz)
         self._conf = conf
         self._imgsz = imgsz
         self._tf_buffer = None
@@ -80,6 +83,16 @@ class TaejeongVLAGrounding:
                 self._vlm = VlmTargetResolver()
             except Exception as e:  # noqa: BLE001
                 log.warning("[taejeong] VLM fallback unavailable (%s) -- OOV target = no rescue", e)
+        # 사람 target 의 발목 keypoint. DINO/VLM 과 달리 폴백 스위치와 무관하게
+        # 켠다 -- offline_score.py 가 "라이브는 항상 켠다"를 전제로 같은 자리에서
+        # 항상 호출하므로, 여기서 끄면 두 경로의 점수가 갈라진다.
+        self._pose = None
+        if not pose_disabled():
+            try:
+                self._pose = AnkleKeypointEstimator()
+            except Exception as e:  # noqa: BLE001
+                log.warning("[taejeong] pose keypoints unavailable (%s) -- "
+                            "사람 좌표는 bbox 중앙 기준", e)
 
     def _tf(self):
         if self._tf_buffer is None:
@@ -109,6 +122,7 @@ class TaejeongVLAGrounding:
         detections = infer_cameras(self._det, images, min_conf=self._conf,
                                    imgsz=self._imgsz)
         dino_augment(parsed, images, detections, target_phrases, self._dino)
+        pose_augment(parsed, images, detections, self._pose)
 
         cameras = {}
         for cam_id in images:
