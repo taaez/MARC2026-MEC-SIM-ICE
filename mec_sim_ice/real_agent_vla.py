@@ -48,7 +48,8 @@ sys.path.insert(0, _HERE)  # taejeong/ package lives next to this file
 # (repo cleanup: this file + test/ now live under mec_sim_ice/, while demo/ stays at
 # the repo root -- so the demo/ candidate is one level up from _HERE.)
 for _candidate in (os.path.join(_HERE, "test"), os.path.join(_HERE, "demo"),
-                   os.path.join(os.path.dirname(_HERE), "demo")):
+                   os.path.join(os.path.dirname(_HERE), "demo"),
+                   os.path.join(_HERE, "training")):  # 폴더 정리 후 현 위치
     if os.path.exists(os.path.join(_candidate, "det_classes.py")):
         sys.path.insert(0, _candidate)
         break
@@ -67,6 +68,7 @@ from taejeong.situation_resolver import (  # noqa: E402
 )
 from taejeong.vlm_fallback import VlmTargetResolver
 from taejeong.vlm_fallback import is_disabled as vlm_disabled  # noqa: E402
+from taejeong.yolo_adapter import load_detector, predict_result  # noqa: E402
 
 log = logging.getLogger("participant_app")
 
@@ -126,7 +128,10 @@ class RealVLAGrounding:
         # MARC_RECORD_DIR 에 덤프한 뒤 빈 payload 를 즉시 제출해 다음 라운드로
         # 넘어간다. 수집한 기록은 tools/run_offline_real_vla.py 로 재실행한다.
         self._record_only = os.getenv("MARC_RECORD_ONLY", "").lower() in ("1", "true", "yes")
-        self._det = None if self._record_only else YOLO(det_weights)
+        # 소형객체 서브모델 산출물이 있으면 라우팅(B 31클래스 + 서브 3클래스)으로,
+        # 없으면 기존 그대로 B 단독으로 로드된다 (taejeong/yolo_adapter.load_detector).
+        self._det = None if self._record_only else load_detector(
+            det_weights, conf=DET_CONF, imgsz=DET_IMGSZ)
         # DINO 2차 탐지 폴백: YOLO가 실패했을 때만 쓴다(§7 규칙대로 생성자에서 로드).
         # torch/transformers 미설치 개발 환경(예: GPU 없는 노트북)에서도 본 파이프라인
         # 자체는 죽지 않도록, 로드 실패는 경고만 남기고 폴백 없이 진행한다.
@@ -278,7 +283,7 @@ class RealVLAGrounding:
         # camera_ids 가 빈 리스트일 수 있고(_observe_images 가 그 사이 발견된 카메라까지
         # 채워 온다), images 의 키가 곧 '프레임이 있는 카메라'라 조건도 하나 준다.
         for cam_id, img in images.items():
-            det = self._det.predict(img, imgsz=DET_IMGSZ, conf=DET_CONF, verbose=False)[0]
+            det = predict_result(self._det, img, imgsz=DET_IMGSZ, conf=DET_CONF)
 
             if parsed.is_person:
                 target_box, pose_class = self._best_person_box(det, parsed.pose_hint)

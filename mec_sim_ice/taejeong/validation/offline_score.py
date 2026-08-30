@@ -395,6 +395,15 @@ def main() -> int:
                          "Stage1/Stage2(retrieval) 구분도 여기서 읽는다")
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--imgsz", type=int, default=1280)
+    ap.add_argument("--small-weights", default=None,
+                    help="소형객체 서브모델 가중치. 기본: small_t640_r2 best.pt "
+                         "(존재할 때만 자동 사용 — yolo_adapter.load_detector 참조)")
+    ap.add_argument("--tiling", default=None,
+                    help="타일링 설정 폴더(tiling.json). 기본: datasets/dataset_small_t640")
+    ap.add_argument("--small-conf", type=float, default=0.25,
+                    help="서브모델 전용 conf (B 와 스케일이 다르다 — evaluate.py 스윕 근거)")
+    ap.add_argument("--no-small", action="store_true",
+                    help="서브모델 라우팅 없이 B 단독으로 채점 (도입 전과의 비교용)")
     ap.add_argument("--json", default=None)
     ap.add_argument("--no-stage2-exec", action="store_true",
                     help="Stage2 실행(주행/집기/배달) 시뮬을 건너뛴다. "
@@ -441,8 +450,16 @@ def main() -> int:
 
     answer_key = load_answer_key(args.answer_key, args.scenario)
 
-    from ultralytics import YOLO
-    model = YOLO(args.weights)
+    if args.no_small:
+        from ultralytics import YOLO
+        model = YOLO(args.weights)
+        print("[detector] B 단독 (--no-small)")
+    else:
+        from yolo_adapter import load_detector
+        model = load_detector(args.weights, conf=args.conf, imgsz=args.imgsz,
+                              small_weights=args.small_weights, tiling=args.tiling,
+                              small_conf=args.small_conf)
+        print(f"[detector] {'라우팅 B+소형' if hasattr(model, 'small_to_det') else 'B 단독'}")
 
     use_fallback, why = resolve_fallback_mode(args.fallback)
     print(f"[fallback] {'사용' if use_fallback else '건너뜀'} -- {why}")

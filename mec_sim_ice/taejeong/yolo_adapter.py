@@ -13,10 +13,16 @@
 
 from __future__ import annotations
 
+import logging
+import os
+import sys
+
 try:                              # package import (e.g. `from taejeong.yolo_adapter import ...`)
     from .grounding import Detection
 except ImportError:               # run directly as a script from within taejeong/
     from grounding import Detection
+
+_log = logging.getLogger(__name__)
 
 
 def detections_from_result(result, min_conf: float = 0.25) -> list:
@@ -37,12 +43,131 @@ def detections_from_result(result, min_conf: float = 0.25) -> list:
 
 def infer_cameras(model, images_bgr: dict, min_conf: float = 0.25,
                   imgsz: int = 1280) -> dict:
-    """{cam_id: BGR ndarray} → {cam_id: [Detection, ...]}."""
+    """{cam_id: BGR ndarray} → {cam_id: [Detection, ...]}.
+
+    ``model`` 은 plain ultralytics YOLO 또는 load_detector() 가 돌려준
+    RoutedDetector. 라우팅 경로에서는 conf/imgsz 가 로드 시점에 이미
+    고정돼 있으므로 min_conf/imgsz 인자는 쓰지 않는다 (소형 3클래스의
+    confidence 는 B 와 스케일이 달라 min_conf 를 다시 걸면 소형 검출을
+    부당하게 잘라낸다 — predict.py 도입부 'WHY ROUTING' 참조).
+    """
     out = {}
+    routed = hasattr(model, "small_to_det")     # RoutedDetector 덕타이핑
     for cam_id, img in images_bgr.items():
-        results = model(img, imgsz=imgsz, verbose=False)
-        out[cam_id] = detections_from_result(results[0], min_conf=min_conf)
+        if routed:
+            out[cam_id] = detections_from_routed(model, img)
+        else:
+            results = model(img, imgsz=imgsz, verbose=False)
+            out[cam_id] = detections_from_result(results[0], min_conf=min_conf)
     return out
+
+
+# ── 소형객체 서브모델 라우팅 (training/small_object_detection/predict.py) ──
+#
+# 3클래스(sunblock/tissue/disposable_cup)는 원거리에서 8px 미만으로 찍혀
+# B 단독 recall 이 0.42~0.50 에 그친다. 타일 확대 서브모델을 붙이면
+# recall 0.58~0.71 (<8px 구간 최대 2.2배), 나머지 31클래스는 B 출력을
+# 그대로 쓰므로 회귀가 구조적으로 불가능하다 (2026-08-30 dataset_v2 val
+# 500장 실측 — evaluate.py 로 재확인 가능).
+#
+# 환경변수 MARC_DISABLE_SMALL_DET=1 이면 기본 경로가 있어도 B 단독으로
+# 돌아간다 (pose_keypoints 의 MARC_DISABLE_POSE_KEYPOINTS 와 같은 관례).
+
+_MEC_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SMALL_DIR = os.path.join(_MEC_ROOT, "training", "small_object_detection")
+DEFAULT_SMALL_WEIGHTS = os.path.join(
+    _SMALL_DIR, "runs", "detect", "small_t640_r2", "weights", "best.pt")
+DEFAULT_TILING = os.path.join(_MEC_ROOT, "datasets", "dataset_small_t640")
+
+
+def small_det_disabled() -> bool:
+    return os.environ.get("MARC_DISABLE_SMALL_DET", "").lower() in ("1", "true", "yes")
+
+
+def load_detector(weights: str, conf: float = 0.25, imgsz: int = 1280,
+                  small_weights: str = None, tiling: str = None,
+                  small_conf: float = 0.25):
+    """B 가중치 → plain YOLO 또는 (서브모델 산출물이 있으면) RoutedDetector.
+
+    small_weights/tiling 을 지정하지 않으면 기본 경로가 둘 다 존재할 때만
+    라우팅을 켠다. 없거나 MARC_DISABLE_SMALL_DET=1 이면 조용히 B 단독으로
+    떨어진다 — 나빠지는 경로가 없다.
+    """
+    from ultralytics import YOLO
+
+    small_weights = small_weights or DEFAULT_SMALL_WEIGHTS
+    tiling = tiling or DEFAULT_TILING
+    if (small_det_disabled() or not os.path.exists(small_weights)
+            or not os.path.exists(os.path.join(tiling, "tiling.json"))):
+        _log.info("[yolo] plain B (small-det %s)",
+                  "disabled by env" if small_det_disabled() else "artifacts not found")
+        return YOLO(weights)
+
+    if _SMALL_DIR not in sys.path:            # predict.py 는 자기 폴더 기준 import
+        sys.path.insert(0, _SMALL_DIR)
+    from predict import RoutedDetector, TiledPredictor  # noqa: E402
+
+    # batch=4: 8GB GPU 에서 DINO/pose 모델과 동시 상주하므로 기본 8 대신
+    # 절반으로. 타일 6장/프레임이라 호출당 2배치 — 속도 손해는 미미하다.
+    small = TiledPredictor(small_weights, tiling, conf=small_conf, batch=4)
+    det = RoutedDetector(weights, small, conf=conf, imgsz=imgsz)
+    _log.info("[yolo] routed B+small (small_conf=%.2f, %s)",
+              small_conf, os.path.basename(os.path.dirname(
+                  os.path.dirname(small_weights))))
+    return det
+
+
+class _ShimBox:
+    """ultralytics Box 의 우리가 쓰는 면만 흉내낸다 (box.xyxy[0]/conf[0]/cls[0])."""
+    __slots__ = ("xyxy", "conf", "cls")
+
+    def __init__(self, box, score, cls_id):
+        import numpy as np
+        self.xyxy = np.asarray([box], dtype=float)
+        self.conf = np.asarray([score], dtype=float)
+        self.cls = np.asarray([cls_id], dtype=float)
+
+
+class RoutedResult:
+    """RoutedDetector 출력 → ultralytics Results 호환 셸 (.boxes / .names)."""
+
+    def __init__(self, boxes, scores, classes, names: dict):
+        self.names = names
+        self.boxes = [_ShimBox(b, s, c) for b, s, c in zip(boxes, scores, classes)]
+
+
+def _routed_names(model) -> dict:
+    # RoutedDetector 의 클래스 id 는 DET_CLASSES 인덱스다 (predict.py 계약).
+    if _SMALL_DIR not in sys.path:
+        sys.path.insert(0, _SMALL_DIR)
+    tr_dir = os.path.join(_MEC_ROOT, "training")
+    if tr_dir not in sys.path:
+        sys.path.insert(0, tr_dir)
+    from det_classes import DET_CLASSES  # noqa: E402
+    return dict(enumerate(DET_CLASSES))
+
+
+def predict_result(model, img, imgsz: int = 1280, conf: float = 0.35):
+    """단일 프레임 추론 → .boxes/.names 를 가진 결과 (plain/routed 공용).
+
+    real_agent_vla 의 _best_box() 류가 그대로 동작하도록, 라우팅 경로에서는
+    RoutedResult 셸을 돌려준다. 라우팅의 conf 는 로드 시점 고정이라 여기
+    conf 인자는 plain 경로에서만 쓰인다.
+    """
+    if hasattr(model, "small_to_det"):
+        boxes, scores, classes = model.predict(img)
+        return RoutedResult(boxes, scores, classes, _routed_names(model))
+    return model.predict(img, imgsz=imgsz, conf=conf, verbose=False)[0]
+
+
+def detections_from_routed(model, img) -> list:
+    """RoutedDetector 한 프레임 → [Detection, ...] (infer_cameras 라우팅 경로)."""
+    names = _routed_names(model)
+    boxes, scores, classes = model.predict(img)
+    return [Detection(label=names[int(c)],
+                      bbox=(float(b[0]), float(b[1]), float(b[2]), float(b[3])),
+                      score=float(s))
+            for b, s, c in zip(boxes, scores, classes)]
 
 
 def verify_model_names(model, expected_classes) -> list:
