@@ -202,9 +202,15 @@ def detection_to_world(
 # ----------------------------------------------------------------------------
 # XY OBB 표면거리 임계값. 문서 11 절의 유도값은 0.58m 지만 그건 **공식 OBB 척도**의
 # 값이고, 여기서 재는 것은 bbox 로부터의 단안 추정치라 같은 쌍이 더 크게 나온다
-# (자판기-우산: 공식 0.470m vs 단안 0.61m). 우리 척도의 경계로 재보정한 값이 0.63m 다
-# (taejeong/grounding.py 의 GroundingConfig.beside_gap_m 과 같은 근거·같은 값).
-BESIDE_GAP_M = 0.63
+# (자판기-우산: 공식 0.470m vs 단안 0.61m). 우리 척도의 경계로 재보정한 값이다
+# (taejeong/grounding.py 의 GroundingConfig.beside_gap_m 과 같은 근거·같은 값 --
+#  근거 실측표는 그쪽 주석에 있다. 값을 바꿀 때는 반드시 두 곳을 같이 고칠 것).
+#
+# 2026-08-30 2차 재보정: 0.63 -> 0.80. 현재 검출기 조합(소형모델 라우팅 + 새 B
+# 가중치)의 실측 gap 은 beside 최대 0.606 / near 최소 0.987 로 분리되는데,
+# 0.63 은 beside 쪽 여유가 0.024m 뿐이라 라이브에서 뒤집혔다. 구간 중앙으로 옮겨
+# 양쪽 여유를 0.19m 로 맞춘다.
+BESIDE_GAP_M = 0.80
 
 
 def _point_seg_dist(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
