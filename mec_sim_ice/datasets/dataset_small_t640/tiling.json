@@ -1,0 +1,11 @@
+{
+  "tile": 640,
+  "overlap": 0.25,
+  "train_imgsz": 1280,
+  "classes": [
+    "sunblock",
+    "tissue",
+    "disposable_cup"
+  ],
+  "source": "/home/parktaejeong/MARC2026-MEC-SIM-ICE/mec_sim_ice/datasets/dataset_v2"
+}
