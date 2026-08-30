@@ -472,8 +472,23 @@ class RealVLAGrounding:
 
     @staticmethod
     def _box_center(box):
-        x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
-        return (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        """Ground-contact pixel: bottom-center ((x1+x2)/2, y2), NOT the bbox center.
+
+        ``_pixel_to_world`` intersects the pixel ray with the ground plane, so the
+        pixel handed to it must be the one that actually lies on the ground -- the
+        bottom edge of the box. Back-projecting the bbox CENTER instead makes the
+        ray hit the ground beyond the object, and the overshoot grows as the camera
+        gets lower: roughly ``distance * (H/2) / (h - H/2)`` for an object of height
+        H under a camera h above the ground. For a 1.7 m person 10 m away that is
+        +4.6 m on rig_3_b (2.68 m mount) and +2.0 m on rig_2_b (5.04 m) -- at or past
+        the 5 m scoring radius. DESIGN.md 2.3 measured the same thing directly:
+        1.73 m error from the center pixel, 0 from the floor point.
+
+        Name kept as-is so the call sites read unchanged; it returns the contact
+        point, which is what every caller here actually wants.
+        """
+        x1, _y1, x2, y2 = [float(v) for v in box.xyxy[0]]
+        return (x1 + x2) / 2.0, y2
 
     # -- pixel -> world (ground-plane back-projection) --
 

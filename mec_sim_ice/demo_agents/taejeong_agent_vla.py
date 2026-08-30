@@ -30,8 +30,11 @@ from marc_sdk import GroundingResult
 from taejeong.command_parser import parse_command
 from taejeong.dino_fallback import DinoFallbackDetector
 from taejeong.dino_fallback import is_disabled as dino_disabled
-from taejeong.fallback import dino_augment, vlm_assist, yolo_tile_augment
+from taejeong.fallback import (dino_augment, pose_augment, vlm_assist,
+                                yolo_tile_augment)
 from taejeong.grounding import camera_from_ros, resolve
+from taejeong.pose_keypoints import AnkleKeypointEstimator
+from taejeong.pose_keypoints import is_disabled as pose_disabled
 from taejeong.vlm_fallback import VlmTargetResolver
 from taejeong.vlm_fallback import is_disabled as vlm_disabled
 from taejeong.yolo_adapter import infer_cameras
@@ -85,6 +88,16 @@ class TaejeongVLAGrounding:
                 self._vlm = VlmTargetResolver()
             except Exception as e:  # noqa: BLE001
                 log.warning("[taejeong] VLM fallback unavailable (%s) -- OOV target = no rescue", e)
+        # 사람 target 의 발 위치용 keypoint 모델. 정답이 사람의 '중심' 이 아니라
+        # '발' 이라 bbox 가로 중앙으로는 몸길이의 절반만큼 어긋난다
+        # (pose_keypoints.py docstring). 없으면 기존 동작 그대로다.
+        self._pose = None
+        if not pose_disabled():
+            try:
+                self._pose = AnkleKeypointEstimator()
+            except Exception as e:  # noqa: BLE001
+                log.warning("[taejeong] pose keypoints unavailable (%s) -- "
+                            "person coords fall back to bbox center", e)
 
     def _tf(self):
         if self._tf_buffer is None:
@@ -117,6 +130,8 @@ class TaejeongVLAGrounding:
         # 스킵이 그대로 적용돼 그만큼 DINO 호출이 줄어든다.
         yolo_tile_augment(parsed, images, detections, self._det)
         dino_augment(parsed, images, detections, target_phrases, self._dino, self._vlm)
+        # 마지막 -- 위 두 단계가 추가한 person 탐지까지 발목 보정을 받아야 한다.
+        pose_augment(parsed, images, detections, self._pose)
 
         cameras = {}
         for cam_id in images:

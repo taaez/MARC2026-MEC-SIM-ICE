@@ -19,9 +19,17 @@ situation, anchor_coord, target_coord 전부 포함). voice_command 로 조인�
     중심점 거리만으로는 알 수 없는 정보가 관여함). 아래 target 점수는 **참고용
     근사치**이며, 실제 라이브 채점과 다를 수 있다 — 코드 변화의 방향(개선/악화)을
     가늠하는 용도로만 쓰고, 정확한 target 점수/총점은 라이브 실행으로 확인할 것.
-person 문제의 "object_type" 칸은 target_type 문자열이 아니라 situation 일치 여부로
-채점된다 (이것도 39문항 전수 대조로 확인 — object_type_score == 1.0 은 항상 situation
-일치와 정확히 일치했다).
+사람 문항(sar*/sarH*)의 배점은 분실물과 다르다 — 39문항 전수 대조로 확인했다:
+  * "object_type" 칸은 target_type 이 아니라 **situation 일치 여부**다. 제출
+    target_type 은 규격상 항상 "person" 이라 14문항이 전부 같은 값인데 object_type 은
+    9/5 로 갈렸고, 그 5건이 situation 오답 5건과 정확히 일치했다.
+  * **landmark 와 relation 은 배점 0** 이다 (점수 자체는 플랫폼이 계산해 돌려준다).
+    남은 가중치 합 0.8 을 100점으로 정규화하므로 실효 배점은
+    camera 12.5 / situation 18.75 / anchor 18.75 / target 50 이 된다.
+    landmark 에 배점을 주면 14문항 전부 총점 재현에 실패한다 (sar01 실제 18.75 vs 27.78).
+그래서 리포트는 situation 을 따로 보여준다 — 섹션마다 "[배점]" 줄, "[situation 판정]"
+절(정답/제출/혼동 패턴/landmark 참고), 문항별 표의 ``sit`` 칸(O/X/–), --json 의 라운드별
+``situation`` 항목. 실점 원인 분류도 배점 0 인 항목은 원인에서 제외한다.
 
 target 미탐지(``grounding.resolve`` 가 None)일 때의 fallback 값은 실제 라이브 코드
 (``demo_agents/taejeong_agent_vla.py._ground``)와 동일하게 재현한다: camera_id="",
@@ -75,6 +83,7 @@ import math
 import os
 import sys
 import time
+from collections import defaultdict
 
 _VALIDATION_DIR = os.path.dirname(os.path.abspath(__file__))
 _TAEJEONG_DIR = os.path.dirname(_VALIDATION_DIR)
@@ -85,7 +94,10 @@ sys.path.insert(0, _TAEJEONG_DIR)   # command_parser / grounding / yolo_adapter 
 from command_parser import parse_command          # noqa: E402
 from dino_fallback import DinoFallbackDetector      # noqa: E402
 from dino_fallback import is_disabled as dino_disabled  # noqa: E402
-from fallback import dino_augment, vlm_assist, yolo_tile_augment  # noqa: E402
+from fallback import (dino_augment, pose_augment, vlm_assist,  # noqa: E402
+                      yolo_tile_augment)
+from pose_keypoints import AnkleKeypointEstimator   # noqa: E402
+from pose_keypoints import is_disabled as pose_disabled       # noqa: E402
 from grounding import resolve                      # noqa: E402
 from run_offline import load_round                 # noqa: E402
 from vlm_fallback import VlmTargetResolver          # noqa: E402
@@ -96,6 +108,10 @@ from chungmu_gt import DEFAULT_SCENARIO, load_gt    # noqa: E402  (same dir)
 from score_report import report                     # noqa: E402  (same dir)
 
 COORD_TOLERANCE_M = 5.0
+
+# 폴백(DINO/VLM)이 켜진 채로 프레임 대여 채점을 하면 (대여문항 x 라운드) 만큼
+# 모델이 돌아 아주 느려진다. 그때만 최신 라운드 이 개수로 표본을 줄인다.
+BORROW_SAMPLES_FALLBACK = 8
 
 # 기본 경로는 CWD 가 아니라 **이 스크립트 위치** 기준으로 잡는다 — 어느
 # 디렉토리에서 실행하든 인자 없이 그냥 돌아가게 하려는 것.
@@ -395,6 +411,12 @@ def main() -> int:
                          "기본은 실행 -- stage2_sim.py 로 participant_app 을 그대로 굴린다")
     ap.add_argument("--stage2-occupancy", default=None,
                     help="Stage2 실행 시뮬이 쓸 실제 점유지도 npz (없으면 합성 지도)")
+    ap.add_argument("--no-borrowed-frames", action="store_true",
+                    help="records/ 에 라운드가 없는 문항을 다른 라운드의 프레임을 빌려서 "
+                         "채점하지 않는다. 기본은 대여 채점 -- 레코드 폴더는 6개 카메라 "
+                         "프레임을 전부 담고 있고 물체는 라운드가 달라도 같은 자리에 있어서 "
+                         "정적 물체 문항은 그대로 채점된다. 이 옵션을 주면 그 문항들은 "
+                         "채점되지 않고 목록만 출력된다.")
     ap.add_argument("--fallback", dest="fallback", action="store_true", default=None,
                     help="DINO/VLM 폴백을 강제로 켠다 (GPU 없어도 시도 -- CPU 로 7B VLM 을 "
                          "올리려 들어 아주 느리거나 메모리가 터질 수 있다).")
@@ -520,8 +542,19 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             print(f"[fallback] VLM 로드 실패, behind 중재/OOV 재해석 없이 진행: {e}",
                   file=sys.stderr)
+    # 사람 target 의 발목 keypoint. DINO/VLM 폴백과 달리 --fallback 여부와
+    # 무관하게 켠다 -- 라이브 에이전트가 항상 켜므로 여기서도 항상 켜야 두
+    # 경로의 동작이 갈라지지 않는다 (fallback.py 모듈 docstring 의 원칙).
+    pose = None
+    if not pose_disabled():
+        try:
+            pose = AnkleKeypointEstimator()
+            _vram("pose 로드 후")
+        except Exception as e:  # noqa: BLE001
+            print(f"[pose-kp] 로드 실패, 사람 좌표는 bbox 중앙 기준으로 진행: {e}",
+                  file=sys.stderr)
     print(f"[모델] YOLO=on  DINO={'on' if dino else 'off'}  "
-          f"VLM={'on' if vlm else 'off'}")
+          f"VLM={'on' if vlm else 'off'}  pose={'on' if pose else 'off'}")
     if dino is not None and vlm is not None:
         print("[모델] 주의: 8GB 한 장이면 DINO 타일링 피크(실측 8타일 fp32 = 6.37GiB)와 "
               "Qwen 상주(~3.1GiB)가 겹쳐 OOM 이 난다. MARC_DINO_BATCH=2 를 주거나 "
@@ -533,33 +566,32 @@ def main() -> int:
     # 세션은 39문항을 전부 Stage1 라운드로 출제해서 Stage2 문항(rt*)까지 s1_034~s1_039 에
     # 들어가 있기 때문이다.
     round_dirs = sorted(glob.glob(os.path.join(args.records, "s[12]_*")))
+    round_dirs = [d for d in round_dirs
+                  if os.path.exists(os.path.join(d, "meta.json"))]
     scored_rounds = []
     unmatched = []
-    for i, d in enumerate(round_dirs, 1):
-        # 라운드당 DINO/VLM 폴백까지 겹치면 수 초~수십 초가 걸릴 수 있어, 진행상황이
-        # 하나도 안 찍히면 (특히 --fallback 켰을 때) 멈춘 것처럼 보인다 -- 최소한
-        # "몇 번째 도는 중"인지는 알 수 있게 매 라운드 시작마다 찍는다.
-        print(f"[{i}/{len(round_dirs)}] {os.path.basename(d)}", flush=True)
-        if not os.path.exists(os.path.join(d, "meta.json")):
-            continue
-        meta, cams, images = load_round(d)
-        cmd = meta["command"]
-        hit = answer_key.get(cmd)
-        if hit is None:
-            unmatched.append((os.path.basename(d), cmd))
-            continue
-        problem_id, expected, weights, kind = hit
 
-        # 시나리오의 time_limit 이 문항당 30초라, 폴백이 그 예산을 넘기면 점수가
-        # 올라도 라이브에서는 못 쓴다. 어느 단계가 먹는지 갈라서 재 둔다.
+    def run_round(cmd, hit, cams, images, dets, record_name, borrowed=False):
+        """명령 + (카메라, 프레임, 검출) → 채점된 라운드 dict. 파이프라인은 라이브와 동일.
+
+        ``dets`` 는 프레임에만 의존하므로 (명령과 무관) 한 프레임을 여러 문항에 재사용할
+        수 있다. 다만 augment 들은 명령별 폴백 탐지를 dets 에 **in-place 로 넣기**
+        때문에, 재사용할 때는 카메라별 리스트를 복사해서 넘긴다 -- 안 그러면 앞 문항이
+        구제한 탐지가 뒤 문항에 새어 들어간다.
+
+        단계별 초를 함께 잰다: 시나리오의 time_limit 이 문항당 30초라, 폴백이 그
+        예산을 넘기면 점수가 올라도 라이브에서는 못 쓴다. 어느 단계가 먹는지
+        갈라 둬야 그 판단을 할 수 있다 (리포트의 ``sec`` 항목).
+        """
+        problem_id, expected, weights, kind = hit
+        # augment 들이 dets 를 제자리 수정하므로 항상 복사한다 (위 docstring).
+        dets = {cid: list(v) for cid, v in dets.items()}
+
         t = {}
         t0 = time.perf_counter()
         parsed = parse_command(cmd)
         target_phrases = vlm_assist(cmd, parsed, vlm) if args.fallback else None
         t["vlm"] = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        dets = infer_cameras(model, images, min_conf=args.conf, imgsz=args.imgsz)
-        t["yolo"] = time.perf_counter() - t0
         t0 = time.perf_counter()
         if args.fallback:
             # DINO 보다 먼저 -- YOLO 타일링으로 구제되면 dino_augment 의
@@ -571,35 +603,133 @@ def main() -> int:
             dino_augment(parsed, images, dets, target_phrases, dino, vlm)
         t["dino"] = time.perf_counter() - t0
         t0 = time.perf_counter()
+        pose_augment(parsed, images, dets, pose)
+        t["pose"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
         decision = resolve(parsed, dets, cams)
         t["resolve"] = time.perf_counter() - t0
+        # YOLO 추론(infer_cameras)은 프레임당 1회라 이 함수 밖에서 돈다 -- 대여
+        # 채점이 같은 dets 를 여러 문항에 재사용하기 때문. 호출부가 재 둔 값을
+        # 여기에 합쳐야 total 이 라이브 한 문항의 실제 비용과 같아진다.
+        t["yolo"] = _yolo_sec.get(record_name, 0.0)
         t["total"] = sum(t.values())
+
         submission = (flatten_payload(decision.to_payload()) if decision is not None
                       else fallback_submission(parsed))
-
-        s = score_round(problem_id, weights, expected, submission)
-        scored_rounds.append({"stage": 2 if kind == "retrieval" else 1,
-                              "voice_command": cmd, "sec": t,
-                              "record": os.path.basename(d), "scores": s})
         if t["total"] >= 10.0:      # 30초 예산의 1/3을 넘긴 라운드는 그 자리에서 알린다
-            print(f"      느림: {t['total']:.1f}s "
-                  f"(yolo {t['yolo']:.1f} / dino {t['dino']:.1f} / vlm {t['vlm']:.1f})",
+            print(f"      느림: {t['total']:.1f}s (yolo {t['yolo']:.1f} / "
+                  f"dino {t['dino']:.1f} / vlm {t['vlm']:.1f} / pose {t['pose']:.1f})",
                   flush=True)
+        return {"stage": 2 if kind == "retrieval" else 1,
+                "voice_command": cmd, "record": record_name, "sec": t,
+                "borrowed": borrowed,
+                "scores": score_round(problem_id, weights, expected, submission)}
 
-        # 8GB급 GPU(랩 데스크탑)에서 41라운드를 도는 동안 PyTorch 캐싱
-        # allocator 가 안 쓰는 블록을 계속 쥐고 있다가 결국 OOM 이 났다
-        # (2026-08-29 실측, CUDA, "GPU 0 has a total capacity of 7.53 GiB"
-        # -- 자기 프로세스가 6.62GiB 를 이미 물고 있는 상태에서 타일링
-        # 배치 하나(1.91GiB)를 더 요청해 터짐). dtype 을 bf16 으로 낮추는
-        # 건 이미 다른 GPU에서 grounding-dino 의 dtype 불일치로 크래시한
-        # 이력이 있어(dino_fallback.py 상단 주석) 재시도하지 않는다 --
-        # 대신 라운드마다 안 쓰는 캐시를 돌려준다. 실제 사용 중인 텐서는
-        # 안 건드리므로 정확도에는 영향이 없고, 코퍼스가 끝까지 도는가만
-        # 바뀐다.
+    # -- 정답지엔 있는데 records/ 에 라운드가 없는 문항 --
+    # 예전에는 이 문항들이 리포트에서 **아무 말 없이 사라졌다** (lf02~lf08 7문항).
+    # "Stage1 평균 26문항" 이 문제집 전체인 것처럼 보여서, 채점기가 문제집의 1/5 를
+    # 건너뛰고 있다는 사실조차 드러나지 않았다. 이제 항상 드러내고, 빌릴 수 있으면
+    # 다른 라운드의 프레임을 빌려서라도 채점한다.
+    #
+    # 프레임 대여가 성립하는 이유: 레코드 한 폴더에는 **6개 카메라 프레임이 전부** 들어
+    # 있고(라운드가 달라도 시야는 같다), 대여 대상은 정적 물체 문항이다 -- 물체는
+    # 라운드가 바뀌어도 같은 자리에 있다. 사람은 라운드마다 자세·위치가 바뀌므로
+    # (레코드별 person_* 검출이 실제로 다르다) 사람 문항은 빌리지 않는다.
+    #
+    # 한 라운드만 빌리면 안 된다: 작은 물체(tumbler/umbrella)의 YOLO 검출이 프레임마다
+    # 불안정해서, 그 프레임에서 우연히 안 잡히면 문항이 통째로 0 점이 된다 (실측 대조:
+    # rt02 는 자기 레코드에서 94.50 인데 s2_032 프레임으로는 35.00). 그래서 **가능한 모든
+    # 라운드 프레임으로 채점한 뒤 중앙값 라운드를 채택**하고, 산포를 함께 보고한다 --
+    # 프레임 운에 좌우되는 문항이면 그 사실 자체가 드러나야 한다.
+    recorded_cmds = set()
+    for d in round_dirs:
+        with open(os.path.join(d, "meta.json"), encoding="utf-8") as f:
+            recorded_cmds.add(json.load(f)["command"])
+    missing = [(cmd, hit) for cmd, hit in answer_key.items()
+               if cmd not in recorded_cmds]
+    borrow_targets, skipped_person = [], []
+    for cmd, hit in sorted(missing, key=lambda x: x[1][0]):
+        if (hit[1] or {}).get("target_kind") == "person":
+            skipped_person.append(hit[0])
+        else:
+            borrow_targets.append((cmd, hit))
+    if args.no_borrowed_frames:
+        borrow_targets = []
+
+    # 폴백이 켜져 있으면 대여 채점 한 건마다 DINO/VLM 이 돌아 비용이 (문항 x 라운드)로
+    # 커진다. 그때는 최신 라운드 몇 개로만 표본을 잡는다 -- 중앙값의 취지는 유지된다.
+    borrow_dirs = round_dirs if not args.fallback else round_dirs[-BORROW_SAMPLES_FALLBACK:]
+    borrow_pool = defaultdict(list)
+    # YOLO 추론은 프레임당 1회라 run_round 밖에서 돈다(대여 채점이 같은 dets 를
+    # 여러 문항에 재사용하기 때문). 레코드별로 재 두고 run_round 가 자기 total 에
+    # 합쳐 쓴다 -- 그래야 sec.total 이 라이브 한 문항의 실제 비용과 같아진다.
+    _yolo_sec = {}
+
+    for i, d in enumerate(round_dirs, 1):
+        # 라운드당 DINO/VLM 폴백까지 겹치면 수 초~수십 초가 걸릴 수 있어, 진행상황이
+        # 하나도 안 찍히면 (특히 --fallback 켰을 때) 멈춘 것처럼 보인다 -- 최소한
+        # "몇 번째 도는 중"인지는 알 수 있게 매 라운드 시작마다 찍는다.
+        print(f"[{i}/{len(round_dirs)}] {os.path.basename(d)}", flush=True)
+        meta, cams, images = load_round(d)
+        cmd = meta["command"]
+        name = os.path.basename(d)
+        t0 = time.perf_counter()
+        dets = infer_cameras(model, images, min_conf=args.conf, imgsz=args.imgsz)
+        _yolo_sec[name] = time.perf_counter() - t0
+        hit = answer_key.get(cmd)
+        if hit is None:
+            unmatched.append((name, cmd))
+        else:
+            scored_rounds.append(run_round(cmd, hit, cams, images, dets, name))
+        if d in borrow_dirs:
+            for bcmd, bhit in borrow_targets:
+                borrow_pool[bhit[0]].append(
+                    run_round(bcmd, bhit, cams, images, dets, name, borrowed=True))
+
+        # 8GB급 GPU(랩 데스크탑)에서 41라운드를 도는 동안 PyTorch 캐싱 allocator 가
+        # 안 쓰는 블록을 계속 쥐고 있다가 결국 OOM 이 났다 (2026-08-29 실측, CUDA,
+        # "GPU 0 has a total capacity of 7.53 GiB" -- 자기 프로세스가 6.62GiB 를 이미
+        # 물고 있는 상태에서 타일링 배치 하나(1.91GiB)를 더 요청해 터짐). dtype 을
+        # bf16 으로 낮추는 건 이미 grounding-dino 의 dtype 불일치로 크래시한 이력이
+        # 있어(dino_fallback.py 상단 주석) 재시도하지 않는다 -- 대신 라운드마다 안 쓰는
+        # 캐시를 돌려준다. 실제 사용 중인 텐서는 안 건드리므로 정확도에는 영향이 없고,
+        # 코퍼스가 끝까지 도는가만 바뀐다. 대여 채점이 붙으면 라운드당 모델 호출이
+        # (문항 x 프레임)으로 늘어 이 반납이 더 중요해진다.
         if args.fallback:
             import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+    if borrow_pool:
+        spread = []
+        for pid in sorted(borrow_pool):
+            cand = sorted(borrow_pool[pid], key=lambda r: r["scores"]["total"])
+            chosen = cand[len(cand) // 2]           # 중앙값 라운드
+            scored_rounds.append(chosen)
+            spread.append((pid, cand[0]["scores"]["total"],
+                           chosen["scores"]["total"], cand[-1]["scores"]["total"],
+                           chosen["record"]))
+        n_frames = len(borrow_dirs)
+        print(f"[프레임 대여 채점] {len(spread)}문항 -- records/ 에 그 라운드가 없어 "
+              f"다른 라운드 {n_frames}개의 프레임으로 채점했다.")
+        print("  레코드 폴더는 6개 카메라 프레임을 전부 담고 있고 대여 문항은 전부 정적")
+        print("  물체 문항이라(사람 자세 무관) 씬은 같다. 프레임마다 작은 물체 검출이")
+        print("  흔들리므로 **중앙값 라운드**를 채택하고 산포를 함께 적는다 -- 최소와")
+        print("  최대가 벌어진 문항은 점수가 프레임 운에 좌우된다는 뜻이다.")
+        print(f"  {'문항':26} {'최소':>7} {'중앙값':>7} {'최대':>7}  채택 레코드")
+        for pid, lo, mid, hi, rec in spread:
+            flag = "  <- 프레임에 따라 요동" if hi - lo > 10 else ""
+            print(f"  {pid:26} {lo:7.2f} {mid:7.2f} {hi:7.2f}  {rec}{flag}")
+        if skipped_person:
+            print(f"  [대여 제외] 사람 문항 {len(skipped_person)}건은 라운드마다 자세가 "
+                  f"달라 빌리지 않았다: {', '.join(skipped_person)}")
+        print()
+    elif missing:
+        print(f"[레코드 없음] {len(missing)}문항이 채점에서 빠졌다 "
+              f"(정답지엔 있으나 records/ 에 그 라운드가 없음):")
+        for cmd, hit in sorted(missing, key=lambda x: x[1][0]):
+            print(f"  - {hit[0]:26s} {cmd!r}")
+        print()
 
     if unmatched:
         print(f"[정답 없음, 건너뜀] {len(unmatched)}건 (records 에는 있지만 정답지/시나리오에 없는 voice_command)")
@@ -620,7 +750,10 @@ def main() -> int:
         name = r["record"]
         tail = name.rsplit("_", 1)[-1]
         ts = int(tail) if tail.isdigit() else 0
-        return (-ts, 0 if name.startswith("s2_") else 1, name)
+        # 대여 라운드(borrowed)는 그 문항의 실측 레코드가 없을 때만 생기지만, 혹시
+        # 둘 다 있으면 실측을 항상 앞세운다 -- 대여는 어디까지나 보조 수단이다.
+        return (1 if r.get("borrowed") else 0, -ts,
+                0 if name.startswith("s2_") else 1, name)
 
     scored_rounds.sort(key=lambda r: (r["scores"]["problem_id"], _rank(r)))
     primary, dupes, seen = [], [], set()
@@ -648,16 +781,29 @@ def main() -> int:
         "used": bool(use_fallback), "why": why,
         "dino": dino is not None, "vlm": vlm is not None,
     }
+    def _avg(rs):
+        return sum(r["scores"]["total"] for r in rs) / len(rs) if rs else None
+
     if s1:
-        final["stage1_average"] = sum(r["scores"]["total"] for r in s1) / len(s1)
+        final["stage1_average"] = _avg(s1)
         final["stage1_rounds"] = len(s1)
+        measured = [r for r in s1 if not r.get("borrowed")]
+        if len(measured) != len(s1):
+            final["stage1_average_measured_only"] = _avg(measured)
+            final["stage1_rounds_measured_only"] = len(measured)
+            final["stage1_borrowed_rounds"] = len(s1) - len(measured)
     if s2:
-        final["stage2_grounding_average"] = sum(r["scores"]["total"] for r in s2) / len(s2)
+        final["stage2_grounding_average"] = _avg(s2)
         final["stage2_rounds"] = len(s2)
+        measured2 = [r for r in s2 if not r.get("borrowed")]
+        if len(measured2) != len(s2):
+            final["stage2_grounding_average_measured_only"] = _avg(measured2)
+            final["stage2_borrowed_rounds"] = len(s2) - len(measured2)
     scored_rounds = primary
     print("!" * 78)
-    print("주의: camera/object_type/landmark/relation/anchor 는 과거 39건 전수 대조로")
-    print("검증된 정확한 채점식이지만, target(좌표) 점수는 근사치다 -- 실제 라이브 채점은")
+    print("주의: camera/object_type(사람은 situation)/landmark/relation/anchor 와 유형별")
+    print("배점(사람 문항은 landmark·relation 이 0)은 과거 39건 전수 대조로 검증된")
+    print("채점식이지만, target(좌표) 점수는 근사치다 -- 실제 라이브 채점은")
     print("물체 크기/영역까지 보는 것으로 보여 중심점 거리(1-오차/5)만으로는 벗어나는")
     print("사례가 있었다. 총점도 그 영향을 받으니 참고용으로만 볼 것 (정확한 총점은")
     print("Isaac Sim 라이브 실행에서만 확인 가능).")
