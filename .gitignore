@@ -24,8 +24,36 @@ demo/weights/
 
 # 2026-08-29 폴더 정리: mec_sim_ice/test/ 를 코드/데이터셋/결과물로 분리하면서
 # 데이터셋·학습 결과물(용량 큼, trainer_output/results 와 같은 성격)은 기존 컨벤션대로 git 밖에 둔다.
-/mec_sim_ice/datasets/
+/mec_sim_ice/datasets/*
 /mec_sim_ice/training_results/
 # launch.sh 로컬 실행 산출물 (점수 로그, 팀 토큰) -- 비밀값 포함, git 밖.
 /demo/results/
 /demo/tokens.env
+
+# 2026-08-31: 라이브가 실제 로드하는 가중치 3종(YOLO 일반 B, YOLO 소형객체
+# 서브모델, YOLO11 pose) + 서브모델 타일링 설정만 예외로 커밋한다. VLM(Qwen)과
+# DINO(grounding-dino)는 여기 해당 없다 -- 로컬 .pt 파일이 아니라 실행 시
+# HuggingFace 캐시(~/.cache/huggingface)로 받는 모델이라, git으로 옮길 대상
+# 자체가 없다.
+#
+# 각 디렉토리를 통째로 막고(*) 필요한 파일 하나만 되살리는 방식이라, 데이터셋/
+# 학습 결과물 전체를 가진 PC에서 git add -A 를 해도 그 디렉토리 안의 다른
+# 파일(학습 그래프·로그·last.pt·타일 이미지 수천 장 등)이 딸려 올라가지 않는다.
+!/mec_sim_ice/demo_agents/weights/
+/mec_sim_ice/demo_agents/weights/*
+!/mec_sim_ice/demo_agents/weights/best.pt
+!/mec_sim_ice/demo_agents/weights/yolo11m-pose.pt
+
+!/mec_sim_ice/training/small_object_detection/runs/
+/mec_sim_ice/training/small_object_detection/runs/*
+!/mec_sim_ice/training/small_object_detection/runs/detect/
+/mec_sim_ice/training/small_object_detection/runs/detect/*
+!/mec_sim_ice/training/small_object_detection/runs/detect/small_t640_r2/
+/mec_sim_ice/training/small_object_detection/runs/detect/small_t640_r2/*
+!/mec_sim_ice/training/small_object_detection/runs/detect/small_t640_r2/weights/
+/mec_sim_ice/training/small_object_detection/runs/detect/small_t640_r2/weights/*
+!/mec_sim_ice/training/small_object_detection/runs/detect/small_t640_r2/weights/best.pt
+
+!/mec_sim_ice/datasets/dataset_small_t640/
+/mec_sim_ice/datasets/dataset_small_t640/*
+!/mec_sim_ice/datasets/dataset_small_t640/tiling.json
