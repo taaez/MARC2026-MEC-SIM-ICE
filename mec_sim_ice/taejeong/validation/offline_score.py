@@ -349,7 +349,8 @@ def resolve_fallback_mode(flag) -> tuple:
         # "DINO 도 꺼졌으면"이다 -- 그러면 폴백 전체가 할 일이 없으니
         # transformers import 조차 시도하지 않고 여기서 바로 끝낸다.
         if not forced:
-            return False, "MARC_DISABLE_DINO_FALLBACK 켜짐 (VLM 도 기본값대로 꺼진 상태)"
+            return False, ("DINO 도 VLM 도 꺼짐 (--no-dino / VLM 기본 OFF 또는 "
+                           "MARC_DISABLE_DINO_FALLBACK) -- 폴백 계층이 할 일이 없다")
     try:
         import transformers  # noqa: F401
     except ImportError:
@@ -404,6 +405,27 @@ def main() -> int:
     # 오프라인도 켜는 게 맞다. 다만 노트북에는 보통 GPU 가 없고 Qwen2.5-VL / Grounding DINO
     # 는 GPU 전제라, CUDA 가 안 보이면 자동으로 건너뛰고 그 사실을 리포트에 명시한다
     # (조용히 빠지면 '폴백 없는 점수'를 라이브 점수로 착각하게 된다).
+    # 모델별 on/off. --fallback/--no-fallback 은 "폴백 계층 전체"를 켜고 끄는
+    # 마스터 스위치이고, 아래 둘은 그 안에서 어느 모델을 올릴지 고른다 --
+    # 8GB 한 장으로 검증할 때 "DINO 만", "VLM 만" 을 나눠 돌려야 하기 때문이다
+    # (둘을 같이 올리면 DINO fp32 타일링 피크 + Qwen bf16 상주가 겹쳐 터진다;
+    #  근거는 dino_fallback.py._detect_batch 주석의 6.37GiB 실측).
+    #
+    # 플래그는 **환경변수로 번역해서** 적용한다. 판정의 단일 출처는 여전히
+    # dino_fallback.is_disabled() / vlm_fallback.is_disabled() 이고 라이브
+    # 에이전트도 같은 함수를 보므로, 여기서 별도 분기를 만들면 두 경로가
+    # 갈라진다 -- 그래서 스위치만 바꾸고 판정 로직은 건드리지 않는다.
+    ap.add_argument("--dino", dest="dino", action="store_true", default=None,
+                    help="Grounding DINO 폴백을 켠다 (기본: 켜짐).")
+    ap.add_argument("--no-dino", dest="dino", action="store_false",
+                    help="Grounding DINO 폴백만 끈다 -- VLM 만 단독으로 재볼 때. "
+                         "MARC_DISABLE_DINO_FALLBACK=1 과 같다.")
+    ap.add_argument("--vlm", dest="vlm", action="store_true", default=None,
+                    help="소형 LM(Qwen) 폴백을 켠다 (기본: 꺼짐 -- chungmu 39/39 "
+                         "에서 호출 0회라 상주 비용만 든다. 본선 OOV 대비 검증용). "
+                         "MARC_ENABLE_VLM=1 과 같다.")
+    ap.add_argument("--no-vlm", dest="vlm", action="store_false",
+                    help="소형 LM 폴백을 확실히 끈다 (MARC_DISABLE_VLM=1 과 같다).")
     ap.add_argument("--dino-box-thr", type=float, default=None,
                     help="DINO box confidence 임계값 (기본 DinoFallbackDetector 기본값 0.3). "
                          "실측(2026-08-28)상 소형물체(pencilcase) score가 0.11까지 나와 "
@@ -421,6 +443,18 @@ def main() -> int:
             return 2
 
     args = ap.parse_args()
+
+    # 모델별 플래그 -> 환경변수 (라이브와 같은 스위치를 그대로 쓴다, 위 주석 참고).
+    # 플래그를 안 주면 아무것도 안 건드린다 -- 셸에서 미리 export 한 값이 그대로 산다.
+    if args.dino is True:
+        os.environ.pop("MARC_DISABLE_DINO_FALLBACK", None)
+    elif args.dino is False:
+        os.environ["MARC_DISABLE_DINO_FALLBACK"] = "1"
+    if args.vlm is True:
+        os.environ["MARC_ENABLE_VLM"] = "1"
+        os.environ.pop("MARC_DISABLE_VLM", None)
+    elif args.vlm is False:
+        os.environ["MARC_DISABLE_VLM"] = "1"
 
     # 기본 root logger 레벨은 WARNING이라 fallback.py/grounding.py 의 log.info(...)
     # (DINO 구제, pair 후보 경쟁 등 진행상황 로그)가 조용히 버려진다 -- 39문항처럼
@@ -450,6 +484,22 @@ def main() -> int:
         print("[fallback] 주의: 라이브 에이전트는 폴백을 항상 켠다. 아래 점수는 폴백이 "
               "구제했을 문항을 실패로 계산하므로 데스크탑 실측보다 낮게 나올 수 있다.")
 
+    # 8GB 한 장으로 검증할 때 "지금 뭐가 올라가 있고 얼마나 남았는지"를 모르면
+    # OOM 이 나야 알게 된다 -- 모델을 하나 올릴 때마다 찍는다 (CUDA 일 때만;
+    # MPS/CPU 는 통합 메모리라 같은 의미의 숫자가 안 나온다).
+    def _vram(tag):
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                return
+            free, total = torch.cuda.mem_get_info()
+            print(f"[vram] {tag}: 프로세스 할당 "
+                  f"{torch.cuda.memory_allocated() / 2**30:.2f} GiB / 카드 여유 "
+                  f"{free / 2**30:.2f} GiB (총 {total / 2**30:.2f} GiB)", flush=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    _vram("YOLO 로드 후")
     dino = vlm = None
     if use_fallback and not dino_disabled():
         try:
@@ -459,15 +509,23 @@ def main() -> int:
             if args.dino_text_thr is not None:
                 dino_kw["text_thr"] = args.dino_text_thr
             dino = DinoFallbackDetector(**dino_kw)
+            _vram("DINO 로드 후")
         except Exception as e:  # noqa: BLE001
             print(f"[fallback] DINO 로드 실패, target/landmark 재탐색 없이 진행: {e}",
                   file=sys.stderr)
     if use_fallback and not vlm_disabled():
         try:
             vlm = VlmTargetResolver()
+            _vram("VLM 로드 후")
         except Exception as e:  # noqa: BLE001
             print(f"[fallback] VLM 로드 실패, behind 중재/OOV 재해석 없이 진행: {e}",
                   file=sys.stderr)
+    print(f"[모델] YOLO=on  DINO={'on' if dino else 'off'}  "
+          f"VLM={'on' if vlm else 'off'}")
+    if dino is not None and vlm is not None:
+        print("[모델] 주의: 8GB 한 장이면 DINO 타일링 피크(실측 8타일 fp32 = 6.37GiB)와 "
+              "Qwen 상주(~3.1GiB)가 겹쳐 OOM 이 난다. MARC_DINO_BATCH=2 를 주거나 "
+              "--no-vlm / --no-dino 로 나눠 돌릴 것.")
     args.fallback = use_fallback
 
     # s1_* 는 Stage1 단계에서, s2_* 는 Stage2 단계에서 뜬 기록이다. 어느 단계에서 떴는지와

@@ -6,6 +6,13 @@
 
     python3 mec_sim_ice/score.py
     python3 mec_sim_ice/score.py --conf 0.35 --json report.json
+
+VRAM 8GB 한 장에서 나눠 돌리기 (모델별 스위치 -- offline_score.py 참고):
+
+    python3 mec_sim_ice/score.py --no-dino --no-vlm      # YOLO+기하만 (기준선)
+    python3 mec_sim_ice/score.py --dino --no-vlm         # +DINO (제출 기본 구성)
+    MARC_DINO_BATCH=2 python3 mec_sim_ice/score.py --dino --no-vlm   # 8GB 안전
+    python3 mec_sim_ice/score.py --no-dino --vlm         # +소형 LM 만 단독
 """
 
 import os
