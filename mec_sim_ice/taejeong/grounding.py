@@ -9,6 +9,10 @@ GENERAL by design — 대회 요구사항("문제·배경이 바뀐다, 씬 하�
   * 특정 시나리오/문항/좌표/씬 배치를 참조하지 않는다.
   * 클래스별 높이·크기 상수를 두지 않는다 — 물체/랜드마크의 높이는 그 탐지
     bbox 와 카메라 기하에서 그 자리에서 추정한다 (estimate_top_z).
+  * near/beside 는 중심거리가 아니라 **XY 평면 OBB 표면거리**로 가른다
+    (obb_gap_xy). 크기가 제각각인 랜드마크에서 중심거리는 관계 순서를 뒤집기
+    때문 — 근거와 임계값(0.58m) 유도는 리포 루트의
+    MARC2026_Chungmu_near_beside_OBB_analysis.md.
   * 어휘(클래스 목록)만 공식 로스터에 닫혀 있고, 판정 로직은 전부 기하다.
   * 임계값은 GroundingConfig 로 외부화 — 연습 채점 역산으로 보정하되 코드는 불변.
 
@@ -205,7 +209,44 @@ class Located:
     det: Detection
     base: np.ndarray                 # 바닥(또는 지지면) 접촉점 world (x,y,z)
     top_z: float                     # 꼭대기 z (기하 추정)
-    radius: float                    # 수평 footprint 반경 추정 (m)
+    radius: float                    # 수평 footprint 반경 추정 (m) = OBB 가로 반길이
+    view_axis: Optional[np.ndarray] = None   # XY OBB 의 '깊이' 축 (카메라→물체 시선의 지면 투영, 단위벡터)
+    half_depth: float = 0.0          # 그 깊이축 방향 반길이 (m). 0 이면 radius 로 대체
+
+    @property
+    def footprint_xy(self) -> np.ndarray:
+        """지면(XY) footprint 를 **직사각형(OBB)** 으로 본 꼭짓점 4개, (4,2).
+
+        near/beside 는 지면 위의 평면 관계라, 3D OBB 를 XY 로 투영한 사각형
+        사이의 거리로 판정한다 (MARC2026_Chungmu_near_beside_OBB_analysis.md
+        6.3 절). 축은 다음과 같이 잡는다 -- 단안 CCTV 에서 실제로 관측 가능한
+        두 방향이 그것뿐이다:
+
+          가로(v) : 시선에 수직. bbox 좌/우 아랫점을 지면에 투영한 폭의 절반이
+                    그대로 반길이가 된다 (``radius``) -- 직접 측정값이다.
+          깊이(u) : 시선 방향. 단안 bbox 로는 깊이를 볼 수 없어 ``locate`` 가
+                    이미 쓰고 있는 '정사각형 footprint 가정'을 그대로 따른다
+                    (반길이 = ``push * radius``). 이 값은 접촉선(bbox 아랫변
+                    역투영)에서 중심까지의 거리와 **같게** 잡혀 있어서, OBB 의
+                    카메라 쪽 면이 관측된 접촉선에 정확히 놓인다.
+
+        원(반경 radius) 대신 사각형을 쓰는 이유: 원은 어느 방향으로든 반경이
+        radius 라 모서리 쪽으로 놓인 이웃과의 간격을 최대 41%(√2-1) 과대평가
+        한다. 공식 OBB 로 잰 chungmu 값(자판기-우산 0.47m = beside)이
+        우리 원 근사에서는 0.6m 를 넘어 near 로 뒤집혔던 원인이 이것이다.
+        """
+        c = np.asarray(self.base[:2], dtype=np.float64)
+        u = self.view_axis
+        if u is None or float(np.linalg.norm(np.asarray(u))) < 1e-9:
+            u = np.array([1.0, 0.0])          # 축 미상: 축 정렬 정사각형으로 퇴화
+        else:
+            u = np.asarray(u, dtype=np.float64)
+            u = u / float(np.linalg.norm(u))
+        v = np.array([-u[1], u[0]])
+        hu = float(self.half_depth) if self.half_depth > 1e-9 else float(self.radius)
+        hv = float(self.radius)
+        return np.array([c + hu * u + hv * v, c + hu * u - hv * v,
+                         c - hu * u - hv * v, c - hu * u + hv * v])
 
     @property
     def center(self) -> list:
@@ -278,7 +319,70 @@ def locate(cam: CameraModel, det: Detection,
     far_xy = near[:2] + 2.0 * push * radius * away
     top_z = max(estimate_top_z(cam, det.bbox, far_xy, float(base[2])),
                 float(base[2]))
-    return Located(det=det, base=base, top_z=top_z, radius=radius)
+    # XY OBB: 깊이축 = 시선(away), 깊이 반길이 = 중심을 민 그 거리와 동일하게
+    # 두어 상자의 카메라 쪽 면이 관측된 접촉선에 놓이게 한다 (footprint_xy 주석).
+    return Located(det=det, base=base, top_z=top_z, radius=radius,
+                   view_axis=away, half_depth=float(push * radius))
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# XY 평면 OBB 표면거리
+#
+# near/beside 는 지면 위의 평면 관계이므로, 두 물체의 footprint 를 XY 평면의
+# 볼록다각형(여기서는 OBB 를 XY 로 투영한 직사각형)으로 보고 **표면 사이의 최소
+# 거리**를 잰다. 중심 거리가 아니라 표면 거리인 것이 핵심이다 -- 랜드마크 크기가
+# 제각각이라(자판기 2.0m vs 쓰레기통 0.7m) 중심거리는 관계 순서를 뒤집는다.
+# 실측(MARC2026_Chungmu_near_beside_OBB_analysis.md 2.5 절): 정답이 beside 인
+# 자판기-우산의 원점거리(1.85m)가 정답이 near 인 쓰레기통-우산(1.15m)보다 오히려
+# 멀었고, OBB 표면거리로 바꾸면 0.47m < 0.70m 로 순서가 바로잡힌다.
+# ────────────────────────────────────────────────────────────────────────────
+def _separated(A: np.ndarray, B: np.ndarray) -> bool:
+    """두 볼록다각형이 분리축을 갖는가(=겹치지 않는가). SAT — 볼록에서 정확하다."""
+    for P in (A, B):
+        n = len(P)
+        for i in range(n):
+            e = P[(i + 1) % n] - P[i]
+            axis = np.array([-e[1], e[0]])
+            L = float(np.linalg.norm(axis))
+            if L < 1e-12:
+                continue
+            axis = axis / L
+            a, b = A @ axis, B @ axis
+            if a.max() < b.min() - 1e-12 or b.max() < a.min() - 1e-12:
+                return True
+    return False
+
+
+def _point_seg_dist(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    ab = b - a
+    L2 = float(ab @ ab)
+    t = 0.0 if L2 < 1e-18 else float(np.clip((p - a) @ ab / L2, 0.0, 1.0))
+    return float(np.linalg.norm(p - (a + t * ab)))
+
+
+def polygon_gap_xy(A: np.ndarray, B: np.ndarray) -> float:
+    """XY 평면 볼록다각형 A, B 표면 사이의 최소 거리. 겹치거나 닿으면 0.
+
+        d(A,B) = min_{a in A, b in B} ||a - b||
+
+    떨어져 있는 두 볼록다각형에서 최소거리는 항상 '한쪽 꼭짓점 ↔ 다른 쪽 변'
+    에서 실현되므로 그 조합만 훑으면 충분하다 (변-변 조합을 다 볼 필요가 없다).
+    """
+    if not _separated(A, B):
+        return 0.0
+    best = float("inf")
+    for P, Q in ((A, B), (B, A)):
+        for q in Q:
+            for i in range(len(P)):
+                d = _point_seg_dist(q, P[i], P[(i + 1) % len(P)])
+                if d < best:
+                    best = d
+    return best
+
+
+def obb_gap_xy(a: Located, b: Located) -> float:
+    """두 탐지의 XY OBB footprint 표면거리 (m). 겹치면 0."""
+    return polygon_gap_xy(a.footprint_xy, b.footprint_xy)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -287,7 +391,30 @@ def locate(cam: CameraModel, det: Detection,
 @dataclass
 class GroundingConfig:
     """임계값 외부화 — 연습 채점 역산으로 보정하는 대상 (코드 로직은 불변)."""
-    beside_gap_m: float = 0.6        # footprint 간 간격이 이내면 beside
+    # XY OBB 표면거리가 이 값 이내면 beside, 넘으면 near.
+    # 0.58m 는 공식 R03 에셋으로 재구성한 chungmu 경계 두 쌍의 중간값이다
+    # (MARC2026_Chungmu_near_beside_OBB_analysis.md 11 절):
+    #   vending_machine-umbrella  0.470m  정답 beside   ← beside 최대
+    #   trash_can-umbrella        0.697m  정답 near     ← (의미 예외 제외) near 최소
+    #   (0.470 + 0.697) / 2 = 0.583 → 0.58
+    # 회전 쿼터니언 해석을 바꿔 계산해도(0.489 / 0.656, 중간값 0.573) 0.58 은
+    # 같은 경계 판정을 낸다. 주최측 공표값이 아니라 chungmu 전용 경험값이다.
+    #
+    # 다만 **우리가 실제로 재는 거리는 공식 OBB 가 아니라 단안 추정치**라,
+    # 같은 쌍이 더 크게 나온다 (자판기-우산: 공식 0.470m vs 우리 0.61m).
+    # 그래서 문서 값 0.58 을 그대로 쓰면 우리 척도에서는 beside 쌍이 near 로
+    # 넘어간다. 임계값은 문서의 절대값이 아니라 **우리 척도의 경계**여야 하므로
+    # 0.63 으로 올려 둔다 (2026-08-30 재보정).
+    beside_gap_m: float = 0.63       # XY OBB 표면거리가 이내면 beside
+    # 임계값 주변의 불확정 밴드 (문서 12.3 절). 이 안에서는 기하가 결론을 낼
+    # 만큼 정확하지 않다고 보고 텍스트 힌트에 맡긴다.
+    # **0 으로 둔다.** 밴드를 도입한 이유는 임계값(문서의 0.58)이 우리 척도와
+    # 다른 척도의 값이라 경계가 미더웠기 때문인데, 위에서 임계값을 우리 척도로
+    # 재보정하면서 그 이유가 사라졌다. 0.05 를 유지하면 밴드가 [0.58, 0.68] 이
+    # 되어 우리가 맞히려던 자판기-우산(0.61m)을 그대로 삼키고, 판정을 다시
+    # 텍스트 힌트에 넘긴다 -- 그 힌트("next to")는 문서 10.1 절이 near/beside
+    # 어느 쪽으로도 매핑하지 말라고 못 박은 표현이라 근거가 없다.
+    beside_band_m: float = 0.0
     near_gap_m: float = 3.0          # 이내면 near
     on_xy_slack: float = 0.6         # 'on' 판정: 수평 중심이 anchor 반경*(1+slack) 안
     on_z_tol_m: float = 0.45         # 'on' 판정: target 바닥과 anchor 상면 z 차 허용
@@ -301,6 +428,10 @@ def classify_relation(cam: CameraModel, anchor: Located, target: Located,
                       hint: Optional[str] = None) -> str:
     """anchor(랜드마크) 대비 target 의 공간 관계를 기하로 판정.
 
+    beside/near 는 **XY 평면 OBB 표면거리**로 가른다 (``obb_gap_xy``,
+    임계값 ``cfg.beside_gap_m``). 중심거리도, 원 근사 간격도 아니다 -- 근거는
+    ``polygon_gap_xy`` 위의 주석과 ``GroundingConfig.beside_gap_m`` 참조.
+
     기본은 근접 계열(on/above/beside/near)로만 판정한다. 방향(behind/front/
     left/right)은 텍스트가 방향 relation 을 힌트로 줄 때만 기하로 확인해
     반환한다 — 방향은 명령이 말해줄 때만 의미가 있고, 기하만으로 near 대신
@@ -311,7 +442,7 @@ def classify_relation(cam: CameraModel, anchor: Located, target: Located,
     """
     rel_xy = target.base[:2] - anchor.base[:2]
     dist = float(np.linalg.norm(rel_xy))
-    gap = dist - anchor.radius - target.radius        # footprint 간 순간격
+    gap = obb_gap_xy(anchor, target)                  # XY OBB 표면거리
 
     # on / above: 수평으로 anchor footprint 위 + 수직 배치로 구분
     if dist <= anchor.radius * (1.0 + cfg.on_xy_slack) + target.radius:
@@ -330,9 +461,16 @@ def classify_relation(cam: CameraModel, anchor: Located, target: Located,
             return "behind" if a_fwd > 0 else "front"
         return "left" if a_left > 0 else "right"
 
-    if gap <= cfg.beside_gap_m:
+    if gap <= cfg.beside_gap_m - cfg.beside_band_m:
         return "beside"
-    return "near"    # near_gap 밖이어도 근접 계열에선 near 가 가장 보수적
+    if gap >= cfg.beside_gap_m + cfg.beside_band_m:
+        return "near"    # near_gap 밖이어도 근접 계열에선 near 가 가장 보수적
+    # 경계 밴드 안: 기하만으로는 못 가른다. 텍스트가 near/beside 계열을 말했다면
+    # (확정적이지 않더라도) 그 힌트를 쓴다 -- 확정적이면 애초에 여기까지 오지도
+    # 않는다(_build_decision 이 텍스트를 그대로 낸다). 힌트가 없으면 임계값으로.
+    if hint in ("near", "beside"):
+        return hint
+    return "beside" if gap <= cfg.beside_gap_m else "near"
 
 
 def _looks_on(anchor: Located, target_det: Detection) -> bool:
@@ -452,6 +590,8 @@ def _open_space_pick(gated, per_cam, a_locs, target_ok,
             for adet, a_loc in a_locs[cam_id]:
                 if adet is tdet:
                     continue
+                # 여기(후보 랭킹)는 일부러 등방(원) 근사를 유지한다 -- 이유는
+                # _relation_fit 의 주석 참조. near/beside 판정만 OBB 로 간다.
                 gap = (float(np.linalg.norm(t0.base[:2] - a_loc.base[:2]))
                        - a_loc.radius - t0.radius)
                 if nearest is None or gap < nearest[0]:
@@ -482,6 +622,13 @@ def _relation_fit(cam: CameraModel, a_loc: Located, t_loc: Located,
     다른 장면에서 나온 값이기 때문이다. 대신 '명령대로 배치된 쌍이 있는
     카메라'를 고른다.
     """
+    # **여기는 OBB 가 아니라 등방(원) 근사를 쓴다.** near/beside 판정
+    # (classify_relation)과 달리 이 함수는 '어느 후보 쌍이 명령대로 놓였나'를
+    # 재는 상대 랭킹이고, 그 대상에는 사람도 들어간다. 누운 사람의 footprint 는
+    # 정사각형이 아닌데 OBB 는 bbox 가로폭을 깊이에도 그대로 쓰므로(단안에서
+    # 깊이는 관측 불가) 사람에서 상자가 시선 방향으로 과하게 부푼다. 실측:
+    # 이 함수까지 OBB 로 바꿨더니 sar08 이 엉뚱한 카메라를 골라 93.90 -> 0.00
+    # 이 됐다. 판정 척도(문서가 지정한 OBB)와 랭킹 척도를 분리해 둔다.
     gap = (float(np.linalg.norm(t_loc.base[:2] - a_loc.base[:2]))
            - a_loc.radius - t_loc.radius)
     prox = max(0.0, 1.0 - max(0.0, gap) / max(cfg.near_gap_m, 1e-9))
@@ -565,13 +712,29 @@ def _build_decision(parsed: ParsedCommand, cam: CameraModel, cam_id: str,
     else:
         pose = None
         target_type = parsed.target_type
-        # 텍스트가 확정적이면 텍스트, 아니면 기하 판정 (기하 불가 시 텍스트 힌트)
+        # 우선순위 (MARC2026_Chungmu_near_beside_OBB_analysis.md 12.1 절):
+        #   1. 텍스트가 관계어를 확정적으로 말했으면 그대로
+        #   2. 명령이 '빈 자리/열린 바닥'이라는 **영역**을 가리키면 near
+        #   3. 그 외에는 기하 (XY OBB 표면거리)
         if parsed.relation_confident and parsed.relation_hint:
             relation = parsed.relation_hint
+        elif parsed.open_space and geo_rel not in ("on", "above"):
+            # 영역 지시문("in the empty parking space")은 물체가 랜드마크 옆면에
+            # 붙어 있다고 말하는 것이 아니라, 랜드마크를 기준점 삼아 그 **주변
+            # 공간**을 가리킨다. 거리만으로는 못 가르는 의미 예외다 -- 실측에서
+            # police_car-umbrella 는 공식 OBB 표면거리가 0m 인데도 정답이 near
+            # 라, 어떤 양의 임계값을 써도 거리 규칙만으로는 beside 로 뒤집힌다
+            # (같은 문서 8.1/10.2 절). open_space 는 이미 파서가 뽑아 두는
+            # 일반 신호이고(command_parser.OPEN_SPACE_PAT), 씬을 참조하지 않는다.
+            # 'on'/'above' 는 수직 관계라 이 예외의 대상이 아니다.
+            relation = "near"
         else:
             relation = geo_rel or parsed.relation_hint or "near"
 
     debug = {"geo_relation": geo_rel,
+             "obb_gap_xy": (obb_gap_xy(a_loc, t_loc)
+                            if (a_loc is not None and t_loc is not None) else None),
+             "open_space": parsed.open_space,
              "text_relation": parsed.relation_hint,
              "text_confident": parsed.relation_confident,
              "target_base": ([float(v) for v in t_loc.base]
