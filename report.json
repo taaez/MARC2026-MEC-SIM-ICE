@@ -1,0 +1,691 @@
+{
+  "final": {
+    "source": "offline",
+    "stage1_average": 62.75182259932497,
+    "stage1_rounds": 33,
+    "stage2_grounding_average": 74.03555366100163,
+    "stage2_rounds": 6
+  },
+  "stage1": {
+    "rounds": 33,
+    "average": 62.75182259932497,
+    "field_averages": {
+      "camera": 0.7272727272727273,
+      "object_type": 0.8484848484848485,
+      "landmark": 0.9393939393939394,
+      "relation": 0.8787878787878788,
+      "anchor": 0.4941451232660144,
+      "target": 0.49270932843790544
+    },
+    "causes": {
+      "relation_오답": [
+        "hf01_vending_umbrella",
+        "hf04_park_sunblock",
+        "hf05_bikerack_umbrella"
+      ],
+      "카메라_오선택": [
+        "hf02_table_pencilcase",
+        "hf06_fallenbike_umbrella",
+        "lf06_umbrella_fallenbike",
+        "lf07_pencilcase_table",
+        "sar08_fallenbike_down"
+      ],
+      "좌표_오차": [
+        "hf03_table_mug",
+        "hf08_parking_umbrella",
+        "lf09_tumbler_parking",
+        "lf10_tumbler_taxi",
+        "lf11_umbrella_taxi",
+        "sar02_vending_sit",
+        "sar03_bench_lie",
+        "sar04_table_lie",
+        "sar07_parking_prone",
+        "sar09_park_bending",
+        "sarH1_park_needhelp",
+        "sarH3_climbed_machine",
+        "sarH5_taxi_benchlie",
+        "sarH6_most_critical"
+      ],
+      "랜드마크_오답": [
+        "hf07_parking_tumbler",
+        "lf08_umbrella_parking"
+      ],
+      "대상_미탐지(빈제출)": [
+        "lf01_mug_table",
+        "lf02_tumbler_bench",
+        "lf03_tumbler_hydrant",
+        "lf04_sunblock_table"
+      ],
+      "정상": [
+        "lf05_umbrella_vending"
+      ],
+      "대상종류/상황_오답": [
+        "sar01_trash_sit",
+        "sar06_parking_collapsed",
+        "sarH2_parking_bikeacc",
+        "sarH4_parking_trashsit"
+      ]
+    }
+  },
+  "stage2_grounding": {
+    "rounds": 6,
+    "average": 74.03555366100163,
+    "field_averages": {
+      "camera": 0.8333333333333334,
+      "object_type": 1.0,
+      "landmark": 1.0,
+      "relation": 1.0,
+      "anchor": 0.5662350391597469,
+      "target": 0.5552173685068026
+    },
+    "causes": {
+      "좌표_오차": [
+        "rt01_parking_tumbler",
+        "rt02_parking_umbrella",
+        "rt04_taxi_tumbler",
+        "rt04b_taxi_umbrella"
+      ],
+      "정상": [
+        "rt03_vending_umbrella"
+      ],
+      "카메라_오선택": [
+        "rtC2_fallenbike_pencil"
+      ]
+    }
+  },
+  "field_averages": {
+    "camera": 0.7435897435897436,
+    "object_type": 0.8717948717948718,
+    "landmark": 0.9487179487179487,
+    "relation": 0.8974358974358975,
+    "anchor": 0.5052358795573578,
+    "target": 0.5023259499869664
+  },
+  "rounds": [
+    {
+      "problem_id": "hf01_vending_umbrella",
+      "stage": 1,
+      "record": "s1_012_1787669035",
+      "total": 86.9890700013517,
+      "cause": "relation_오답",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 0.0,
+        "anchor": 0.9411135996253313,
+        "target": 0.9468091501742937
+      }
+    },
+    {
+      "problem_id": "hf02_table_pencilcase",
+      "stage": 1,
+      "record": "s1_013_1787669039",
+      "total": 25.0,
+      "cause": "카메라_오선택",
+      "fields": {
+        "camera": 0.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 0.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "hf03_table_mug",
+      "stage": 1,
+      "record": "s1_014_1787669043",
+      "total": 89.88455746850389,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.8769267168582663,
+        "target": 0.7932664178907474
+      }
+    },
+    {
+      "problem_id": "hf04_park_sunblock",
+      "stage": 1,
+      "record": "s1_015_1787669046",
+      "total": 78.73337192086728,
+      "cause": "relation_오답",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 0.0,
+        "anchor": 0.876854254826055,
+        "target": 0.7645139524619116
+      }
+    },
+    {
+      "problem_id": "hf05_bikerack_umbrella",
+      "stage": 1,
+      "record": "s1_016_1787669050",
+      "total": 86.95366939194666,
+      "cause": "relation_오답",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 0.0,
+        "anchor": 0.940912140656787,
+        "target": 0.9459996820523715
+      }
+    },
+    {
+      "problem_id": "hf06_fallenbike_umbrella",
+      "stage": 1,
+      "record": "s1_017_1787669054",
+      "total": 35.0,
+      "cause": "카메라_오선택",
+      "fields": {
+        "camera": 0.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "hf07_parking_tumbler",
+      "stage": 1,
+      "record": "s1_018_1787669058",
+      "total": 35.0,
+      "cause": "랜드마크_오답",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 0.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "hf08_parking_umbrella",
+      "stage": 1,
+      "record": "s1_019_1787669062",
+      "total": 94.45228077298103,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.8769761860016149,
+        "target": 0.9074409495739201
+      }
+    },
+    {
+      "problem_id": "lf01_mug_table",
+      "stage": 1,
+      "record": "s1_001_1787669000",
+      "total": 35.0,
+      "cause": "대상_미탐지(빈제출)",
+      "fields": {
+        "camera": 0.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "lf02_tumbler_bench",
+      "stage": 1,
+      "record": "s1_002_1787669002",
+      "total": 35.0,
+      "cause": "대상_미탐지(빈제출)",
+      "fields": {
+        "camera": 0.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "lf03_tumbler_hydrant",
+      "stage": 1,
+      "record": "s1_003_1787669004",
+      "total": 35.0,
+      "cause": "대상_미탐지(빈제출)",
+      "fields": {
+        "camera": 0.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "lf04_sunblock_table",
+      "stage": 1,
+      "record": "s1_004_1787669006",
+      "total": 35.0,
+      "cause": "대상_미탐지(빈제출)",
+      "fields": {
+        "camera": 0.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "lf05_umbrella_vending",
+      "stage": 1,
+      "record": "s1_005_1787669008",
+      "total": 96.98087205876539,
+      "cause": "정상",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.9409699195771486,
+        "target": 0.9466580816277039
+      }
+    },
+    {
+      "problem_id": "lf06_umbrella_fallenbike",
+      "stage": 1,
+      "record": "s1_006_1787669012",
+      "total": 35.0,
+      "cause": "카메라_오선택",
+      "fields": {
+        "camera": 0.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "lf07_pencilcase_table",
+      "stage": 1,
+      "record": "s1_007_1787669016",
+      "total": 35.0,
+      "cause": "카메라_오선택",
+      "fields": {
+        "camera": 0.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "lf08_umbrella_parking",
+      "stage": 1,
+      "record": "s1_008_1787669020",
+      "total": 35.0,
+      "cause": "랜드마크_오답",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 0.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "lf09_tumbler_parking",
+      "stage": 1,
+      "record": "s1_009_1787669024",
+      "total": 79.27243141553406,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.8568107853883515
+      }
+    },
+    {
+      "problem_id": "lf10_tumbler_taxi",
+      "stage": 1,
+      "record": "s1_010_1787669028",
+      "total": 81.58427693460197,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.7865267236243638,
+        "target": 0.6196594020059133
+      }
+    },
+    {
+      "problem_id": "lf11_umbrella_taxi",
+      "stage": 1,
+      "record": "s1_011_1787669031",
+      "total": 56.79963469811384,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.7866423132075903,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "rt01_parking_tumbler",
+      "stage": 2,
+      "record": "s2_040_1787669145",
+      "total": 79.31791799311681,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.8579479498279201
+      }
+    },
+    {
+      "problem_id": "rt02_parking_umbrella",
+      "stage": 2,
+      "record": "s1_035_1787669125",
+      "total": 94.51150499833325,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.8811504134340501,
+        "target": 0.9073562199205626
+      }
+    },
+    {
+      "problem_id": "rt03_vending_umbrella",
+      "stage": 2,
+      "record": "s1_036_1787669129",
+      "total": 96.96599157326436,
+      "cause": "정상",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.9415411534896779,
+        "target": 0.94607185677298
+      }
+    },
+    {
+      "problem_id": "rt04_taxi_tumbler",
+      "stage": 2,
+      "record": "s1_037_1787669133",
+      "total": 81.60605306597213,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.7872617123465356,
+        "target": 0.6199281845193527
+      }
+    },
+    {
+      "problem_id": "rt04b_taxi_umbrella",
+      "stage": 2,
+      "record": "s1_038_1787669137",
+      "total": 56.81185433532326,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.787456955688218,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "rtC2_fallenbike_pencil",
+      "stage": 2,
+      "record": "s1_039_1787669141",
+      "total": 35.0,
+      "cause": "카메라_오선택",
+      "fields": {
+        "camera": 0.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "sar01_trash_sit",
+      "stage": 1,
+      "record": "s1_020_1787669066",
+      "total": 43.451661747075185,
+      "cause": "대상종류/상황_오답",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 0.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.6190332349415038
+      }
+    },
+    {
+      "problem_id": "sar02_vending_sit",
+      "stage": 1,
+      "record": "s1_021_1787669071",
+      "total": 88.52428969560935,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.9412142534257796,
+        "target": 0.7925304488775198
+      }
+    },
+    {
+      "problem_id": "sar03_bench_lie",
+      "stage": 1,
+      "record": "s1_022_1787669075",
+      "total": 66.16793317340019,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.49475691204581995,
+        "target": 0.5128248214508215
+      }
+    },
+    {
+      "problem_id": "sar04_table_lie",
+      "stage": 1,
+      "record": "s1_023_1787669079",
+      "total": 87.41740981357616,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.8918136095248373,
+        "target": 0.7889180926997089
+      }
+    },
+    {
+      "problem_id": "sar06_parking_collapsed",
+      "stage": 1,
+      "record": "s1_024_1787669083",
+      "total": 73.91704818482498,
+      "cause": "대상종류/상황_오답",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 0.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.9340064277688951,
+        "target": 0.878088553283164
+      }
+    },
+    {
+      "problem_id": "sar07_parking_prone",
+      "stage": 1,
+      "record": "s1_025_1787669086",
+      "total": 88.10815149356908,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.9548197007514204,
+        "target": 0.7791056420895992
+      }
+    },
+    {
+      "problem_id": "sar08_fallenbike_down",
+      "stage": 1,
+      "record": "s1_026_1787669090",
+      "total": 0.0,
+      "cause": "카메라_오선택",
+      "fields": {
+        "camera": 0.0,
+        "object_type": 0.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.0
+      }
+    },
+    {
+      "problem_id": "sar09_park_bending",
+      "stage": 1,
+      "record": "s1_027_1787669094",
+      "total": 88.1193113257107,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.85944016977067,
+        "target": 0.8150961628502127
+      }
+    },
+    {
+      "problem_id": "sarH1_park_needhelp",
+      "stage": 1,
+      "record": "s1_028_1787669097",
+      "total": 88.11894049037885,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.8590213234018083,
+        "target": 0.815245813531899
+      }
+    },
+    {
+      "problem_id": "sarH2_parking_bikeacc",
+      "stage": 1,
+      "record": "s1_029_1787669101",
+      "total": 69.2618586833555,
+      "cause": "대상종류/상황_오답",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 0.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.9548180886875017,
+        "target": 0.7771803904092969
+      }
+    },
+    {
+      "problem_id": "sarH3_climbed_machine",
+      "stage": 1,
+      "record": "s1_030_1787669105",
+      "total": 88.5134309986751,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.9413006667720445,
+        "target": 0.7922808699339856
+      }
+    },
+    {
+      "problem_id": "sarH4_parking_trashsit",
+      "stage": 1,
+      "record": "s1_031_1787669109",
+      "total": 43.480691810196504,
+      "cause": "대상종류/상황_오답",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 0.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.0,
+        "target": 0.6196138362039302
+      }
+    },
+    {
+      "problem_id": "sarH5_taxi_benchlie",
+      "stage": 1,
+      "record": "s1_032_1787669113",
+      "total": 65.99751467017192,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.4938739542042023,
+        "target": 0.5097475605768627
+      }
+    },
+    {
+      "problem_id": "sarH6_most_critical",
+      "stage": 1,
+      "record": "s1_033_1787669117",
+      "total": 88.08173902851462,
+      "cause": "좌표_오차",
+      "fields": {
+        "camera": 1.0,
+        "object_type": 1.0,
+        "landmark": 1.0,
+        "relation": 1.0,
+        "anchor": 0.9548021070483397,
+        "target": 0.7785839904271652
+      }
+    }
+  ]
+}

@@ -30,13 +30,15 @@ demo/weights/
 /demo/results/
 /demo/tokens.env
 
-# 2026-08-30: 라이브 파이프라인이 실제로 로드하는 가중치 3종 + 서브모델 타일 설정만
-# 예외로 커밋한다. 각 디렉토리를 통째로 막고(*) 필요한 파일 하나만 되살리는 방식이라,
-# 데이터셋/학습 결과물 전체를 가진 PC에서 git add -A 를 해도 그 디렉토리 안의 다른
+# 2026-08-31: 라이브가 실제 로드하는 가중치 3종(YOLO 일반 B, YOLO 소형객체
+# 서브모델, YOLO11 pose) + 서브모델 타일링 설정만 예외로 커밋한다. VLM(Qwen)과
+# DINO(grounding-dino)는 여기 해당 없다 -- 로컬 .pt 파일이 아니라 실행 시
+# HuggingFace 캐시(~/.cache/huggingface)로 받는 모델이라, git으로 옮길 대상
+# 자체가 없다.
+#
+# 각 디렉토리를 통째로 막고(*) 필요한 파일 하나만 되살리는 방식이라, 데이터셋/
+# 학습 결과물 전체를 가진 PC에서 git add -A 를 해도 그 디렉토리 안의 다른
 # 파일(학습 그래프·로그·last.pt·타일 이미지 수천 장 등)이 딸려 올라가지 않는다.
-# (실제로 처음엔 *.pt 만 걸러질 뿐 results.png/args.yaml/last.pt 등은 안 막혀있던
-# 구멍이 있었음 -- 아래는 그걸 고친 버전)
-
 !/mec_sim_ice/demo_agents/weights/
 /mec_sim_ice/demo_agents/weights/*
 !/mec_sim_ice/demo_agents/weights/best.pt

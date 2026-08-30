@@ -188,6 +188,102 @@ def detection_to_world(
 
 
 # ----------------------------------------------------------------------------
+# XY 평면 OBB 표면거리 (near/beside 판정 척도)
+#
+# near/beside 는 지면 위의 평면 관계이고, 랜드마크 크기가 제각각이라(자판기 2.0m
+# vs 쓰레기통 0.7m) **중심거리로는 관계 순서가 뒤집힌다**. 실측 근거와 임계값
+# 유도는 리포 루트 MARC2026_Chungmu_near_beside_OBB_analysis.md (2.5/8/11 절):
+#   vending_machine-umbrella  원점거리 1.85m / OBB 표면거리 0.470m  정답 beside
+#   trash_can-umbrella        원점거리 1.15m / OBB 표면거리 0.697m  정답 near
+# 원점거리는 순서가 반대인데 OBB 표면거리는 바로 선다.
+#
+# (같은 판정을 taejeong/grounding.py 도 한다 — 그쪽이 대회 제출 경로다. 두 모듈은
+#  의도적으로 서로 독립이라 헬퍼를 공유하지 않고 같은 규칙을 각자 구현한다.)
+# ----------------------------------------------------------------------------
+# XY OBB 표면거리 임계값. 문서 11 절의 유도값은 0.58m 지만 그건 **공식 OBB 척도**의
+# 값이고, 여기서 재는 것은 bbox 로부터의 단안 추정치라 같은 쌍이 더 크게 나온다
+# (자판기-우산: 공식 0.470m vs 단안 0.61m). 우리 척도의 경계로 재보정한 값이다
+# (taejeong/grounding.py 의 GroundingConfig.beside_gap_m 과 같은 근거·같은 값 --
+#  근거 실측표는 그쪽 주석에 있다. 값을 바꿀 때는 반드시 두 곳을 같이 고칠 것).
+#
+# 2026-08-30 2차 재보정: 0.63 -> 0.80. 현재 검출기 조합(소형모델 라우팅 + 새 B
+# 가중치)의 실측 gap 은 beside 최대 0.606 / near 최소 0.987 로 분리되는데,
+# 0.63 은 beside 쪽 여유가 0.024m 뿐이라 라이브에서 뒤집혔다. 구간 중앙으로 옮겨
+# 양쪽 여유를 0.19m 로 맞춘다.
+BESIDE_GAP_M = 0.80
+
+
+def _point_seg_dist(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    ab = b - a
+    L2 = float(ab @ ab)
+    t = 0.0 if L2 < 1e-18 else float(np.clip((p - a) @ ab / L2, 0.0, 1.0))
+    return float(np.linalg.norm(p - (a + t * ab)))
+
+
+def _separated(A: np.ndarray, B: np.ndarray) -> bool:
+    """두 볼록다각형이 분리축을 갖는가(=겹치지 않는가). SAT — 볼록에서 정확."""
+    for P in (A, B):
+        n = len(P)
+        for i in range(n):
+            e = P[(i + 1) % n] - P[i]
+            axis = np.array([-e[1], e[0]])
+            L = float(np.linalg.norm(axis))
+            if L < 1e-12:
+                continue
+            axis = axis / L
+            a, b = A @ axis, B @ axis
+            if a.max() < b.min() - 1e-12 or b.max() < a.min() - 1e-12:
+                return True
+    return False
+
+
+def polygon_gap_xy(A: np.ndarray, B: np.ndarray) -> float:
+    """XY 볼록다각형 표면 사이 최소거리. 겹치거나 닿으면 0.
+
+    떨어진 두 볼록다각형의 최소거리는 항상 '한쪽 꼭짓점 ↔ 다른 쪽 변'에서
+    실현되므로 그 조합만 훑으면 된다. 점(1x2)도 다각형으로 받아들인다.
+    """
+    A = np.atleast_2d(np.asarray(A, dtype=np.float64))
+    B = np.atleast_2d(np.asarray(B, dtype=np.float64))
+    if len(A) > 2 and len(B) > 2 and not _separated(A, B):
+        return 0.0
+    best = float("inf")
+    for P, Q in ((A, B), (B, A)):
+        for q in Q:
+            for i in range(len(P)):
+                d = _point_seg_dist(q, P[i], P[(i + 1) % len(P)])
+                if d < best:
+                    best = d
+    return best
+
+
+def footprint_obb_xy(cam: CameraModel, bbox_xyxy: Sequence[float],
+                     plane_z: Optional[float] = None) -> Optional[np.ndarray]:
+    """탐지 bbox → 지면(XY) footprint 를 직사각형(OBB)으로 본 꼭짓점 (4,2).
+
+    단안 CCTV 에서 관측 가능한 축은 둘뿐이다:
+      가로 : 시선에 수직. bbox 좌/우 아랫점을 지면에 투영한 폭의 절반이 반길이.
+      깊이 : 시선 방향. bbox 로는 볼 수 없어 **정사각형 footprint 로 가정**하고
+             같은 반길이를 쓴다. 상자의 카메라 쪽 면이 관측된 접촉선에 놓이도록
+             중심을 그 반길이만큼 카메라 반대쪽으로 민다.
+    """
+    x1, _y1, x2, y2 = bbox_xyxy
+    near = pixel_to_world(cam, (x1 + x2) / 2.0, y2, plane_z=plane_z)
+    left = pixel_to_world(cam, x1, y2, plane_z=plane_z)
+    right = pixel_to_world(cam, x2, y2, plane_z=plane_z)
+    if near is None or left is None or right is None:
+        return None
+    h = float(np.linalg.norm((right - left)[:2]) / 2.0)
+    away = near[:2] - cam.C_w[:2]
+    n = float(np.linalg.norm(away))
+    away = away / n if n > 1e-9 else np.array([1.0, 0.0])
+    c = near[:2] + h * away
+    perp = np.array([-away[1], away[0]])
+    return np.array([c + h * away + h * perp, c + h * away - h * perp,
+                     c - h * away - h * perp, c - h * away + h * perp])
+
+
+# ----------------------------------------------------------------------------
 # 공간 관계 (world 좌표 기반)
 # ----------------------------------------------------------------------------
 RELATIONS = ("near", "beside", "behind", "front", "left", "right", "on", "above")
@@ -199,6 +295,8 @@ def relation_scores(
     target_w: np.ndarray,
     near_radius: float = 2.0,
     beside_radius: float = 1.2,
+    anchor_fp: Optional[np.ndarray] = None,
+    target_fp: Optional[np.ndarray] = None,
 ) -> dict:
     """
     anchor→target 상대 벡터를 '카메라 시점' 기준축으로 분해해 각 relation 의 점수를 낸다.
@@ -209,6 +307,12 @@ def relation_scores(
       'front' = target 이 anchor 보다 카메라에 가까움 (forward 성분 < 0)
       'behind'= target 이 anchor 보다 카메라에서 멂  (forward 성분 > 0)
 
+    near/beside 는 **XY 평면 OBB 표면거리**로 가른다 (BESIDE_GAP_M 주석 참조).
+    ``anchor_fp``/``target_fp`` 는 ``footprint_obb_xy`` 가 만든 (4,2) 꼭짓점이며,
+    둘 중 하나라도 없으면 점끼리의 거리로 퇴화한다(=물체 크기를 못 쓰는 옛 동작).
+    두 점수의 크기가 뒤집히는 지점이 정확히 ``BESIDE_GAP_M`` 이 되도록 램프
+    파라미터를 2*임계값으로 두었다.
+
     반환: {relation: score(0~1)}. 최댓값을 택하거나, VLM 이 준 relation 과 일치 여부 검증에 쓴다.
     """
     rel = np.asarray(target_w) - np.asarray(anchor_w)
@@ -218,16 +322,23 @@ def relation_scores(
     dist_xy = np.linalg.norm(dxy)
     dz = rel[2]
 
+    # near/beside 판정거리: 가능하면 XY OBB 표면거리, 없으면 중심 XY 거리
+    if anchor_fp is not None and target_fp is not None:
+        gap = polygon_gap_xy(anchor_fp, target_fp)
+    else:
+        gap = dist_xy
+    ramp = 2.0 * BESIDE_GAP_M          # 두 점수의 교차점이 곧 BESIDE_GAP_M
+
     s = {r: 0.0 for r in RELATIONS}
     if dist_xy < 1e-6 and abs(dz) < 1e-6:
         return s
-    # beside: 접촉 수준의 근접 (0 에서 1, beside_radius 에서 0)
-    s["beside"] = float(np.clip(1.0 - dist_xy / beside_radius, 0, 1))
+    # beside: 표면이 붙어 있는 수준 (gap 0 에서 1, ramp 에서 0)
+    s["beside"] = float(np.clip(1.0 - gap / ramp, 0, 1))
     # near: beside 보다 멀지만 near_radius 안 (띠 구간에서 1, 밖/안에서 선형 감쇠)
-    if dist_xy < beside_radius:
-        s["near"] = float(dist_xy / beside_radius)
+    if gap < ramp:
+        s["near"] = float(gap / ramp)
     else:
-        s["near"] = float(np.clip(1.0 - (dist_xy - beside_radius) / (near_radius - beside_radius), 0, 1))
+        s["near"] = float(np.clip(1.0 - (gap - ramp) / max(near_radius - ramp, 1e-9), 0, 1))
     if dist_xy > 1e-6:
         ang = np.arctan2(dxy[1], dxy[0])          # 0 = 앞(behind), ±pi = 뒤(front), +pi/2 = 왼쪽
         # 아주 가까우면 방향보다 'beside' 가 우선 → 방향 점수에 거리 가중

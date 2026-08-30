@@ -34,6 +34,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 
 from marc_sdk import MARCClient
@@ -125,6 +126,12 @@ class DemoParticipant:
         # If not included (older runtime), fall back to delivery_coord (DELIVERY_XY).
         self._pickup_xy = None
         self._occ_logged = False
+        # CCTV warm-up gate (see _ensure_cctv_warm). The platform starts Stage 1 the
+        # instant registration is ACKed, but the SDK discovers CCTV topics on a 2s timer
+        # and the image QoS is BEST_EFFORT/VOLATILE/depth=1 (no retained frames), so the
+        # first ~2-4 rounds used to run with an empty image set. Block once, on the first
+        # mission, until frames are actually flowing.
+        self._cctv_warm = False
         # Obstructions from the scenario yaml (landmarks such as vehicles) -- inject static
         # obstacles not in the occupancy map into the planner to route around them (demo only).
         self._obstacles = load_obstacles()
@@ -144,10 +151,68 @@ class DemoParticipant:
 
     # -- Stage 1 --
 
+    def _ensure_cctv_warm(self, settle: float = 1.0, timeout: float = 20.0,
+                          poll: float = 0.2) -> bool:
+        """Wait until every discovered CCTV camera has delivered at least one frame.
+
+        MUST run on a worker thread, never inside an SDK callback: the SDK's
+        ``_discover_cctv`` runs on a 2s timer in the node's default (MutuallyExclusive)
+        callback group, so blocking a callback would also freeze discovery and this
+        would spin to the timeout with an empty list. From a worker thread the executor
+        keeps discovering while we poll.
+
+        Why the wait is needed: the platform poses round 1 the instant registration is
+        ACKed, but CCTV topics take a few seconds to discover and the image QoS is
+        BEST_EFFORT / VOLATILE / depth=1 (no retained frames), so the first rounds ran
+        with an empty image set ("no camera matched", ~35 pts). Each round has a 30s
+        sim-time budget and the platform does not advance until we submit, so spending
+        a few seconds here only paces the platform.
+
+        Readiness = camera count stable for ``settle`` s (discovery settled) AND every
+        discovered camera has a cached frame. Returns False on timeout (caller proceeds
+        with whatever is available -- the prior behaviour; a dead feed cannot hang us).
+        """
+        deadline = time.time() + timeout
+        stable_since = None
+        last_n = -1
+        while time.time() < deadline:
+            cams = self.client.list_cctv()
+            n = len(cams)
+            if n > 0 and n == last_n:
+                if stable_since is None:
+                    stable_since = time.time()
+                elif (time.time() - stable_since >= settle
+                      and all(self.client.get_cctv_image(c) is not None for c in cams)):
+                    log.info("[warmup] CCTV ready: %d cameras in %.1fs", n,
+                             timeout - (deadline - time.time()))
+                    return True
+            else:
+                stable_since = None
+            last_n = n
+            time.sleep(poll)
+        log.warning("[warmup] CCTV not fully ready after %.0fs -- proceeding with %s",
+                    timeout, self.client.list_cctv())
+        return False
+
     def _on_mission(self, mission):
+        self._round_commands[mission.round] = mission.voice_command
+        # Until CCTV is confirmed flowing, handle the round on a worker thread so this
+        # callback returns immediately and the SDK's discovery timer can run (see
+        # _ensure_cctv_warm). The platform waits for our submission (30s budget) and does
+        # not send the next round until this one is scored, so there is no round overlap.
+        if not self._cctv_warm:
+            threading.Thread(target=self._handle_mission_deferred, args=(mission,),
+                             daemon=True).start()
+            return
+        self._handle_mission(mission)
+
+    def _handle_mission_deferred(self, mission):
+        self._cctv_warm = self._ensure_cctv_warm()
+        self._handle_mission(mission)
+
+    def _handle_mission(self, mission):
         log.info("[Stage1] round %s/%s: \"%s\"",
                  mission.round, mission.total_rounds, mission.voice_command)
-        self._round_commands[mission.round] = mission.voice_command
         result = self.vla.process(mission.voice_command, self.client.list_cctv())
         # result is a GroundingResult -- submit it directly.
         self.client.submit_grounding(result)

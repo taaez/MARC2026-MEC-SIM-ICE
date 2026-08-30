@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import numpy as np
 from stage1.geometry import (
     CameraModel, quat_to_rotmat, pixel_to_world, world_to_pixel,
-    detection_to_world, best_relation,
+    detection_to_world, best_relation, relation_scores,
 )
 
 
@@ -89,6 +89,46 @@ def test_relations():
     print("[relations] ok")
 
 
+def test_obb_gap_decides_beside():
+    """near/beside 는 중심거리가 아니라 XY OBB 표면거리로 갈린다.
+
+    크기가 다른 두 랜드마크를 같은 중심거리(1.5m)에 두면, 점 기준으로는 둘 다
+    같은 판정이 나오지만 실제로는 큰 물체 쪽이 표면이 훨씬 가깝다 — chungmu
+    실측에서 자판기(beside)와 쓰레기통(near)의 순서가 뒤집혔던 바로 그 상황이다
+    (MARC2026_Chungmu_near_beside_OBB_analysis.md 2.5 절).
+    """
+    cam = make_cam()
+    A = cam.C_w.copy(); A[2] = cam.ground_z; A += cam.forward_ground * 12
+    left = np.cross([0, 0, 1], cam.forward_ground)
+
+    def fp(center_xy, half):
+        """중심 center_xy, 반길이 half 인 축정렬 사각형 footprint."""
+        cx, cy = center_xy
+        return np.array([[cx + half, cy + half], [cx + half, cy - half],
+                         [cx - half, cy - half], [cx - half, cy + half]])
+
+    T = A + left * 1.5                      # 중심거리는 두 경우 모두 1.5m
+    small = fp(A[:2], 0.35)                 # 쓰레기통 크기
+    big = fp(A[:2], 1.0)                    # 자판기 크기
+    tiny = fp(T[:2], 0.05)                  # 우산
+
+    # 방향(left/right/...) 점수와는 무관한 비교라 near vs beside 만 본다.
+    def nb(**kw):
+        sc = relation_scores(cam, A, T, **kw)
+        return "beside" if sc["beside"] > sc["near"] else "near"
+
+    assert nb(anchor_fp=small, target_fp=tiny) == "near"      # 표면거리 1.10m
+    assert nb(anchor_fp=big, target_fp=tiny) == "beside"      # 표면거리 0.45m
+    assert nb() == "near"        # footprint 없으면 점 거리(1.5m)로 퇴화 = 옛 동작
+
+    # 겹치는 footprint 는 표면거리 0 → beside.
+    T2 = A + left * 0.2
+    sc = relation_scores(cam, A, T2, anchor_fp=big, target_fp=fp(T2[:2], 0.05))
+    assert sc["beside"] == 1.0 and sc["near"] == 0.0, sc
+    print("[obb-gap] ok")
+
+
 if __name__ == "__main__":
     test_quat_identity(); test_roundtrip(); test_bbox_bottom_vs_center(); test_relations()
+    test_obb_gap_decides_beside()
     print("ALL OK")
