@@ -593,9 +593,12 @@ def pose_augment(parsed: ParsedCommand, images: dict, detections: dict, pose) ->
         if not idx:
             continue
         found = pose.foot_u(img, [dets[i].bbox for i in idx])
-        for k, u in found.items():
+        for k, uv in found.items():
             i = idx[k]
-            dets[i] = replace(dets[i], foot_u=u)
+            if isinstance(uv, (tuple, list)):        # (u, v) — 현재 pose_keypoints
+                dets[i] = replace(dets[i], foot_u=float(uv[0]), foot_v=float(uv[1]))
+            else:                                    # 하위호환: u 만
+                dets[i] = replace(dets[i], foot_u=float(uv))
         if found:
             log.info("[pose-kp] %s: %d/%d person detections got an ankle column",
                      cam_id, len(found), len(idx))
