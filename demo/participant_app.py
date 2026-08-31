@@ -930,10 +930,24 @@ class DemoParticipant:
             occ = c.get_occupancy_map()
             if occ is not None:
                 planner.update_from_msg(occ)
-                # Match the layer's cell size to the map's, so the discs it emits tile the
-                # planner grid instead of straddling it.
-                if self._lidar_layer is not None:
-                    self._lidar_layer.set_resolution(occ.info.resolution)
+                # NOTE: the lidar layer deliberately keeps its OWN (coarser) cell size and is
+                # no longer synced to the map's. This used to call set_resolution(occ.info.
+                # resolution) so its discs would tile the planner grid exactly, but that is
+                # cosmetic -- _block_obstacles paints world-coordinate circles, which need no
+                # alignment with the layer's own grid -- and on the live map (0.05 m/cell) it
+                # broke the layer three ways at once:
+                #   1. MAX_BLOCKED_CELLS is a cell *count*, so the same 8000 cells fell from a
+                #      500 m2 budget at 0.25 m to 20 m2 at 0.05 m. Measured live: saturated in
+                #      ~8 s, after which update() drops every new cell -- the obstacle ahead
+                #      never enters the layer, and new_blocked stays 0, which also permanently
+                #      kills the `if new_cells` replan trigger in this loop.
+                #   2. MIN_POINTS_PER_CELL=2 stops being reachable for most cells: at 5 cm the
+                #      returns spread thin, so real obstacle surface goes unmarked. Measured on
+                #      identical live sweeps: 0.05 m marked 777 cells / 1.9 m2, while 0.25 m
+                #      marked 89 cells / 5.6 m2 -- fewer cells covering ~3x more real surface.
+                #   3. discs() emits radius == cell size, so 0.05 m gave the planner a sparse
+                #      dot pattern A* can thread between, instead of overlapping 0.25 m discs
+                #      that form a continuous barrier around a car.
                 if not self._occ_logged:
                     self._occ_logged = True
                     log.info("[Stage2] occupancy received: %dx%d res=%.3f origin=(%.1f, %.1f)",
