@@ -268,8 +268,19 @@ def grip_holding(client, p, log, samples=6):
         return None
     g = sum(vals) / len(vals)
     holding = bool(g < thresh)
+    # Some object shapes push the passive knuckle WIDER than the empty close instead of
+    # blocking it short -- sunblock read 37.7-39.4deg and an umbrella shaft read 44-45deg
+    # against the empty~35 baseline (measured live rt02 2026-09-01), so the below-threshold
+    # rule alone misreads those real grasps as an empty hand (and the abort then OPENS the
+    # gripper and drops the object it was holding). A per-object inner_fk_hold_above_deg
+    # accepts the high side; a false "holding" is still backstopped downstream by the
+    # basket-occupancy check in the retry loop, so this errs toward not dropping.
+    hold_above = p.get("inner_fk_hold_above_deg")
+    if not holding and hold_above is not None and g > np.deg2rad(float(hold_above)):
+        holding = True
+    above_txt = (f", hold>{float(hold_above):.0f}" if hold_above is not None else "")
     _log(f"  [grip] inner_fk={np.rad2deg(g):.1f}deg "
-         f"(empty~{closed_deg:.0f}, thresh<{closed_deg-margin_deg:.0f}) "
+         f"(empty~{closed_deg:.0f}, thresh<{closed_deg-margin_deg:.0f}{above_txt}) "
          f"-> holding={holding}")
     return holding
 
@@ -444,6 +455,13 @@ def pick_and_place(client, log, grasp_xy=None, object_type=None):
     if grasp_xy is not None:
         p["grasp_fwd"] = float(grasp_xy[0])
         p["grasp_lat"] = float(grasp_xy[1])
+        # Optional 3rd element: depth-measured grasp HEIGHT (arm_base z). The per-object
+        # grasp_down default is tuned for a standing tumbler; a lying umbrella's shaft is
+        # at floor level, ~5cm below it (measured live rt02 2026-09-01: the fixed height
+        # closed the fingers on the shaft's top edge). When perception supplies a real
+        # height, prefer it -- same reasoning as grasp_xy overriding grasp_fwd/lat.
+        if len(grasp_xy) > 2:
+            p["grasp_down"] = float(grasp_xy[2])
     return run_motion(client, log, p, "full")
 
 
