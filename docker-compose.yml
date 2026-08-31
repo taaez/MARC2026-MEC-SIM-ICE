@@ -23,7 +23,7 @@ services:
       ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
       RMW_IMPLEMENTATION: "rmw_fastrtps_cpp"
       # YOLO 가중치 override -- vla_grounding_agent.py 가 읽는 변수는
-      # VLA_GROUNDING_DET_WEIGHTS 다. 기본값을 여기 지정하지 않는다: 그 코드
+      # VLA_DET_WEIGHTS 다. 기본값을 여기 지정하지 않는다: 그 코드
       # 자체의 기본값이 이미 dirname(__file__)/weights/best.pt 로 자기 위치
       # 기준 상대경로라 컨테이너 안에서도 올바르게 풀린다 -- 여기서 절대경로를
       # 박아두면 mec_sim_ice/ 의 COPY 위치가 바뀔 때마다 다시 어긋나는 종류의

@@ -80,6 +80,25 @@ COPY mec_sim_ice  /agent/mec_sim_ice
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 ENV PYTHONPATH=/agent:/agent/demo:/agent/mec_sim_ice:/agent/mec_sim_ice/demo_agents
 
+# 런타임 가중치/설정 자가 검증 -- **코드가 실제로 계산하는 경로 상수를 그대로 import 해서**
+# 파일 존재를 확인한다. 단순히 파일을 ls 하는 게 아니라 경로 계산까지 검증하는 게 핵심이다:
+# 이전 버그가 정확히 "파일은 이미지 안에 있는데 코드가 계산한 경로가 딴 데를 가리켜서"
+# pose 보정과 소형객체 라우팅이 매 라운드 조용히 꺼지던 문제였다 (둘 다 예외를 삼키고
+# 경고만 남기므로 런타임 로그를 안 보면 알 수 없다). .dockerignore 의 '!' 되살리기가
+# 깨져도 여기서 빌드가 실패하므로 조용한 성능 저하로 제출되는 일이 없다.
+# (vla_grounding_agent.py 의 DET_WEIGHTS 는 여기서 import 하지 않는다 -- 그 모듈은
+#  marc_sdk -> rclpy 를 끌어오는데 RUN 단계에서는 ROS 가 source 되지 않아서
+#  가드가 엉뚱한 이유로 빌드를 깨뜨린다. best.pt 는 경로로만 확인한다.)
+RUN python3 -c "\
+import os, sys; \
+from vla_grounding.pose_keypoints import _DEFAULT_WEIGHTS as POSE; \
+from vla_grounding.yolo_adapter import DEFAULT_SMALL_WEIGHTS as SMALL, DEFAULT_TILING as TIL; \
+paths = {'pose': POSE, 'small-det': SMALL, 'tiling': os.path.join(TIL, 'tiling.json'), \
+         'detector': '/agent/mec_sim_ice/demo_agents/weights/best.pt'}; \
+missing = {k: v for k, v in paths.items() if not os.path.exists(v)}; \
+[print('  ok', k, '->', v) for k, v in paths.items()]; \
+sys.exit('BUILD FAIL -- 런타임 산출물 누락(경로 계산 또는 .dockerignore 확인): %s' % missing) if missing else print('runtime artifacts ok')"
+
 # 빌드 단계에서 모델이 오프라인으로 로드되는지 자가 검증 (실패하면 빌드 실패 → 제출 전 발견)
 RUN python3 -c "from transformers import AutoProcessor; AutoProcessor.from_pretrained('${DET_MODEL}'); print('det ok')"
 # VLM 은 이제 텍스트 전용(SmallLmBackend, vla_grounding/vlm_fallback.py) -- VL

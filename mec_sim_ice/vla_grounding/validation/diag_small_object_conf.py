@@ -21,10 +21,10 @@ from run_offline import load_round
 from ultralytics import YOLO
 
 _ROOT = os.path.join(_HERE, "..", "..", "..")
-WEIGHTS = os.environ.get("VLA_GROUNDING_DET_WEIGHTS",
+WEIGHTS = os.environ.get("VLA_DET_WEIGHTS",
                          os.path.join(_ROOT, "mec_sim_ice", "demo_agents",
                                       "weights", "best.pt"))
-RECORDS = os.environ.get("VLA_GROUNDING_RECORDS",
+RECORDS = os.environ.get("VLA_RECORDS",
                          os.path.join(_ROOT, "mec_sim_ice", "records"))
 
 SMALL_CLASSES = ("tumbler", "pencilcase", "umbrella")

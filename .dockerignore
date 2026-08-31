@@ -13,3 +13,21 @@ dist/
 # 대용량/개발용 서브디렉토리는 여기서 명시적으로 제외한다.
 mec_sim_ice/records/
 mec_sim_ice/docs/
+
+# 학습 산출물. .gitignore 로 git 밖에 두지만 **학습을 돌린 PC 의 디스크에는 그대로
+# 남아 있고**, COPY mec_sim_ice 가 통째로 가져가므로 여기서 막지 않으면 그 수 GB 가
+# 이미지에 구워진다. (주최측은 fresh clone 이라 영향 없다 -- 팀이 로컬에서 빌드할 때만
+# 생기는 문제다.)
+mec_sim_ice/datasets
+mec_sim_ice/training_results
+mec_sim_ice/training/small_object_detection/runs
+trainer_output
+
+# 단, 위 디렉토리 안에서 **런타임이 실제로 읽는** 산출물 2개는 되살린다
+# (vla_grounding/yolo_adapter.py 의 DEFAULT_TILING / DEFAULT_SMALL_WEIGHTS).
+# .gitignore 와 달리 .dockerignore 는 제외된 디렉토리 안의 파일을 '!' 로 다시
+# 살릴 수 있다(마지막에 매치된 패턴이 이긴다).
+# 이 두 줄이 잘못되면 소형객체 라우팅이 **조용히 꺼지므로**, docker/Dockerfile 이
+# 빌드 마지막에 실제 존재를 검사해서 빌드를 실패시킨다.
+!mec_sim_ice/datasets/dataset_small_t640/tiling.json
+!mec_sim_ice/training/small_object_detection/runs/detect/small_t640_r2/weights/best.pt

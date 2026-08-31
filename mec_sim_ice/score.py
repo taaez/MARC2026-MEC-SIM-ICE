@@ -6,6 +6,8 @@
 
     python3 mec_sim_ice/score.py
     python3 mec_sim_ice/score.py --conf 0.35 --json report.json
+        (--json 이 그냥 파일명이면 리포트는 실행한 자리가 아니라
+         vla_grounding/validation/runs/ 에 저장된다 -- 과거 실험 리포트와 같은 자리.)
 
 VRAM 8GB 한 장에서 나눠 돌리기 (모델별 스위치 -- offline_score.py 참고):
 
