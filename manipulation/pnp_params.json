@@ -20,6 +20,10 @@
     "inner_fk_closed_deg": 35,
     "inner_fk_margin_deg": 1
   },
+  "tumbler": {
+    "_note": "default 레이어 자체가 텀블러로 튜닝된 값이다. arm_base 는 섀시에 강체 고정이라 지면은 지형 고도와 무관하게 늘 같은 arm_base z 에 있고(조직위 참조 mock_agent_manipulation.py: GRASP=(0.40,0.0,-0.29) 'at the object on the ground'), 그래서 이 깊이는 인식이 아니라 상수로 두는 게 킷의 설계다. 여기 명시해 두면 텀블러는 깊이 측정 폴백으로 새지 않고 튜닝 상수를 그대로 쓴다.",
+    "grasp_down": -0.28
+  },
   "sunblock": {
     "_note": "held reading measured 37.7-39.4deg (2026-08-31, manip-trainer, grip_close=0.58) -- above tumbler's own empty~35 baseline, so the global threshold misjudged a real grasp as empty. Provisional: needs re-verification on GPU (grasp_fwd/grasp_down for sunblock itself were never confirmed either, only the threshold).",
     "inner_fk_closed_deg": 44,
@@ -30,7 +34,8 @@
     "grasp_lat": -0.06
   },
   "umbrella": {
-    "_note": "held readings measured 44.0-45.0deg live (rt02 2026-09-01, grip_close=0.58) -- ABOVE the empty~35 baseline: the thin shaft spreads the passive knuckle wider instead of blocking it short, so the below-threshold rule misread real grasps as empty (one sample read -41.4, a sign flip the below-rule already catches). inner_fk_hold_above_deg accepts the high side; depth-measured grasp height (grasp_xy[2]) handles the lying-shaft z.",
+    "_note": "held readings measured 44.0-45.0deg live (rt02 2026-09-01, grip_close=0.58) -- ABOVE the empty~35 baseline: the thin shaft spreads the passive knuckle wider instead of blocking it short, so the below-threshold rule misread real grasps as empty (one sample read -41.4, a sign flip the below-rule already catches). inner_fk_hold_above_deg accepts the high side.",
+    "_grasp_down_note": "grasp_down 은 일부러 비워둔다 -- 누운 우산 자루의 실측 상수가 아직 없어서, 있으면 틀린 텀블러 기본값(-0.28)을 물려받느니 깊이 측정 폴백(arm_pick.pick_and_place 참고)이 낫다. 한 번이라도 파지가 성공하면 그때의 grasp_down 을 여기 못박을 것 -- 상수가 되는 순간 카메라/평면적합/블롭선택에 의존하지 않게 된다.",
     "inner_fk_hold_above_deg": 40
   }
 }
