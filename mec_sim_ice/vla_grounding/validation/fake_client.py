@@ -61,6 +61,25 @@ CHASSIS_ANG_ACCEL = 3.0       # rad/s^2 <- 추정
 # 4륜조향 트랙폭. mock_agent_navigation.GoalSeekController.STEERING_TRACK 과 같은 값.
 # 2v <= w*T 인 명령은 이 차체에서 "너무 급한 선회" 라 정지한다(주석 근거: 같은 파일 51행).
 CHASSIS_STEERING_TRACK = 0.38
+# 차체 충돌 반경 (m) <- 추정. solid collider 를 켰을 때(colliders) 차체 중심이 장애물
+# 원에서 이만큼 안으로 들어오면 전진이 막힌다. participant_app 의 STAGE2_INFLATION_M
+# (= "로봇 반지름") 과 같은 자릿수로 잡았다.
+CHASSIS_COLLISION_RADIUS_M = 0.25
+
+# LiDAR (Velodyne VLP-16) -- 수직 FOV/링 수는 문서값, 나머지는 추정·모델 단순화.
+LIDAR_HEIGHT_M = 0.6            # 차체 원점 기준 장착 높이 <- 추정
+LIDAR_RINGS = 16                # VLP-16 (문서값)
+LIDAR_EL_MIN_DEG = -15.0        # 수직 FOV (문서값)
+LIDAR_EL_MAX_DEG = 15.0
+# 실물 방위 분해능은 ~0.2deg 다. 하네스 속도를 위해 굵게 잡았다 <- 모델 단순화.
+# 셀당 점 개수 문턱(MIN_POINTS_PER_CELL) 을 여기서 튜닝하면 라이브에서 과소평가된다.
+LIDAR_AZ_STEP_DEG = 1.0
+LIDAR_MAX_RANGE_M = 30.0        # 실물은 100m. 회피에 쓸 유효 거리만 <- 추정
+LIDAR_RANGE_NOISE_M = 0.02      # 거리 잡음 1sigma <- 추정 (실물 ±3cm 수준)
+# 콜라이더 원판을 이 높이의 원기둥으로 세워 레이캐스트한다 <- 추정.
+# **차/벤치/연석의 높이 차이는 모델링하지 않는다** -- 낮은 장애물에 대한 지면분리
+# 튜닝은 이 하네스로 검증할 수 없다.
+LIDAR_OBSTACLE_HEIGHT_M = 1.2
 
 # 팔 -- Isaac 의 position drive 추종 속도. 실측 불가라 보수적 추정.
 ARM_MAX_JOINT_RATE = 2.0      # rad/s
@@ -156,9 +175,13 @@ def install_shims():
       manipulation/  -- 위와 같은 모듈의 원본 위치
       리포 루트      -- participant_app 의 `from manipulation import transform_via_tf2`
                         (cfc3668) 가 **패키지**로 import 하므로 루트가 필요하다
+      demo_agents/   -- 팀 모듈(lidar_obstacles 등). launch.sh 도 PYTHONPATH 에 넣는다.
+                        vla_grounding_agent 는 아래에서 sys.modules 에 스텁을 선점하므로
+                        이 경로가 있어도 진짜(무거운 YOLO) 모듈이 로드되지 않는다.
     """
     _shim_sensor_msgs()
-    for p in (_DEMO_DIR, os.path.join(_REPO_ROOT, "manipulation"), _REPO_ROOT):
+    for p in (_DEMO_DIR, os.path.join(_REPO_ROOT, "manipulation"), _REPO_ROOT,
+              os.path.join(_MEC_ROOT, "demo_agents")):
         if p not in sys.path:
             sys.path.insert(0, p)
 
@@ -242,7 +265,7 @@ class Chassis:
     선회)은 허용된다 -- 같은 주석의 근거.
     """
 
-    def __init__(self, x, y, yaw, stall_rule=True):
+    def __init__(self, x, y, yaw, stall_rule=True, colliders=None):
         # stall_rule=False 로 두면 무효명령 규칙을 끈다 -- 이 규칙이 결론을 만들어낸 게
         # 아닌지 확인하는 대조군용(--no-stall-rule).
         self.stall_rule = bool(stall_rule)
@@ -252,6 +275,11 @@ class Chassis:
         self.stall_ticks = 0             # 무효명령으로 정지한 스텝 수
         self.dist_travelled = 0.0
         self.clamped = 0                 # 상한을 넘겨 잘린 명령 수
+        # 통과 불가 원판 [(x, y, r), ...]. 점유지도에 없는 장애물(주차 차량 등)을
+        # 물리적으로 재현한다 -- 라이브에서 로봇이 "머리 박고 못 가는" 그 상황이다.
+        # 비어 있으면(기본) 예전처럼 모든 것을 통과한다.
+        self.colliders = list(colliders or [])
+        self.blocked_ticks = 0           # 장애물에 막혀 전진 못한 스텝 수
 
     def command(self, v, w):
         cv = max(-CHASSIS_MAX_LINEAR, min(CHASSIS_MAX_LINEAR, float(v)))
@@ -273,14 +301,140 @@ class Chassis:
         if self.stall_rule and 2.0 * abs(self.v) <= abs(self.w) * CHASSIS_STEERING_TRACK:
             self.stall_ticks += 1        # 무효 명령 -> 차체 정지
             return
-        self.x += self.v * math.cos(self.yaw) * dt
-        self.y += self.v * math.sin(self.yaw) * dt
+        nx = self.x + self.v * math.cos(self.yaw) * dt
+        ny = self.y + self.v * math.sin(self.yaw) * dt
+        if self._blocked(nx, ny):
+            # 막혔다: 전진만 못 하고 조향/선회는 계속 먹는다. 속도도 죽여서 잔여속도로
+            # 뚫고 나가지 않게 한다.
+            self.blocked_ticks += 1
+            self.v = 0.0
+            self.yaw += self.w * dt
+            return
+        self.x, self.y = nx, ny
         self.yaw += self.w * dt
         self.dist_travelled += abs(self.v) * dt
+
+    def _blocked(self, nx, ny):
+        """차체 중심이 (nx, ny) 로 갔을 때 장애물 원과 겹치는가."""
+        for (ox, oy, orad) in self.colliders:
+            if math.hypot(nx - ox, ny - oy) < float(orad) + CHASSIS_COLLISION_RADIUS_M:
+                return True
+        return False
 
     @property
     def pose(self):
         return (self.x, self.y, self.yaw)
+
+
+class FakePointCloud2:
+    """`get_lidar()` 반환값 -- 실물 `sensor_msgs/PointCloud2` 의 최소 대역폭 모조품.
+
+    `xyz` (N,3 float32, **Base_LiDAR 프레임**) 가 하네스용 지름길이다. M1 은 이 지름길과
+    실물 파싱(`sensor_msgs_py.point_cloud2.read_points`)을 어댑터 함수 하나 뒤에 숨겨서
+    ROS 의존을 그 함수에 가둬야 한다 -- 그래야 지면분리·격자투영 같은 진짜 로직이 ROS
+    없이 여기서 검증된다.
+
+    `fields`/`point_step`/`data` 도 실물과 같은 레이아웃(xyz float32 연속)으로 채워두므로,
+    바이트를 직접 파싱하는 구현이라면 그 경로도 오프라인에서 그대로 돌려볼 수 있다.
+    """
+
+    def __init__(self, xyz, frame_id="Base_LiDAR", stamp_s=0.0):
+        self.xyz = np.ascontiguousarray(xyz, dtype=np.float32)
+        self.header = types.SimpleNamespace(frame_id=frame_id, stamp=float(stamp_s))
+        self.height = 1
+        self.width = int(self.xyz.shape[0])
+        self.is_dense = True
+        self.is_bigendian = False
+        self.point_step = 12                       # xyz float32 3개
+        self.row_step = self.point_step * self.width
+        # datatype 7 = sensor_msgs/PointField.FLOAT32
+        self.fields = [types.SimpleNamespace(name=n, offset=o, datatype=7, count=1)
+                       for n, o in (("x", 0), ("y", 4), ("z", 8))]
+
+    @property
+    def data(self):
+        return self.xyz.tobytes()
+
+    def __len__(self):
+        return self.width
+
+
+class LidarSim:
+    """VLP-16 레이캐스트 모델 (가정).
+
+    장애물을 지면(z=0)에서 LIDAR_OBSTACLE_HEIGHT_M 까지 세운 **원기둥**으로 보고, 링 ×
+    방위 격자의 광선마다 지면/원기둥 중 가장 가까운 교점을 찾는다. 레이캐스트라서 실물처럼
+    **가림(occlusion)** 과 **거리에 따른 점밀도 감소** 가 자연히 생긴다 -- 그게 이 모델을
+    쓰는 이유다. 점을 그냥 뿌리면 M1 의 지면분리도 셀 문턱도 검증되지 않는다.
+
+    반환 좌표계는 실물과 같은 **Base_LiDAR**(차체 정렬, 원점은 장착 위치)다. 그래야 M1 의
+    tf2 변환 단계가 오프라인에서도 실제로 실행된다.
+
+    모델링하지 않는 것: 장애물별 높이 차, 반사율/재질, 미검출, 모션 왜곡, 그리고 **지형
+    경사**(지면은 평면 z=0). 즉 지면분리의 경사 강건성은 여기서 검증할 수 없다.
+    """
+
+    def __init__(self, colliders, seed=2026):
+        self.colliders = list(colliders or [])
+        self._rng = np.random.default_rng(seed)
+        el = np.deg2rad(np.linspace(LIDAR_EL_MIN_DEG, LIDAR_EL_MAX_DEG, LIDAR_RINGS))
+        az = np.deg2rad(np.arange(0.0, 360.0, LIDAR_AZ_STEP_DEG))
+        E, A = np.meshgrid(el, az, indexing="ij")
+        E, A = E.ravel(), A.ravel()
+        # 센서 프레임 단위 방향벡터 (차체 +x 전방, +y 좌, +z 상)
+        self._dir_local = np.stack(
+            [np.cos(E) * np.cos(A), np.cos(E) * np.sin(A), np.sin(E)], axis=1)
+
+    def scan(self, pose, stamp_s=0.0):
+        """현재 자세에서 한 스윕. 반환은 Base_LiDAR 프레임 (N,3)."""
+        x, y, yaw = pose
+        cyaw, syaw = math.cos(yaw), math.sin(yaw)
+        d = self._dir_local
+        # 센서->월드는 yaw 회전뿐 (roll/pitch 는 모델링하지 않는다)
+        dw = np.stack([d[:, 0] * cyaw - d[:, 1] * syaw,
+                       d[:, 0] * syaw + d[:, 1] * cyaw,
+                       d[:, 2]], axis=1)
+
+        t = np.full(dw.shape[0], np.inf)
+
+        # 1) 지면 (z=0 평면). 아래로 향하는 광선만 맞는다.
+        down = dw[:, 2] < -1e-9
+        t[down] = LIDAR_HEIGHT_M / (-dw[down, 2])
+
+        # 2) 원기둥 옆면. 사거리 밖 장애물은 미리 걸러낸다.
+        for (cx, cy, rad) in self.colliders:
+            rad = float(rad)
+            if math.hypot(cx - x, cy - y) > LIDAR_MAX_RANGE_M + rad:
+                continue
+            fx, fy = x - cx, y - cy                      # 원 중심 기준 광선 원점
+            ex, ey = dw[:, 0], dw[:, 1]
+            a = ex * ex + ey * ey
+            b = fx * ex + fy * ey
+            c = fx * fx + fy * fy - rad * rad
+            disc = b * b - a * c
+            hit = (disc > 0.0) & (a > 1e-12)
+            if not np.any(hit):
+                continue
+            sq = np.sqrt(disc[hit])
+            t0 = (-b[hit] - sq) / a[hit]
+            t1 = (-b[hit] + sq) / a[hit]
+            tc = np.where(t0 > 0.0, t0, t1)              # 원 안에서 출발했으면 먼 쪽
+            # 교점 높이가 원기둥 범위 안일 때만 유효 (위/아래로 스쳐 지나가는 광선 제외)
+            zc = LIDAR_HEIGHT_M + tc * dw[hit, 2]
+            ok = (tc > 0.0) & (zc >= 0.0) & (zc <= LIDAR_OBSTACLE_HEIGHT_M)
+            idx = np.where(hit)[0][ok]
+            th = np.full(dw.shape[0], np.inf)
+            th[idx] = tc[ok]
+            t = np.minimum(t, th)
+
+        valid = np.isfinite(t) & (t <= LIDAR_MAX_RANGE_M)
+        if not np.any(valid):
+            return np.zeros((0, 3), dtype=np.float32)
+        tv = t[valid]
+        if LIDAR_RANGE_NOISE_M > 0.0:
+            tv = tv + self._rng.normal(0.0, LIDAR_RANGE_NOISE_M, size=tv.shape)
+        # 센서 프레임 점 = 단위방향 * 거리 (원점이 곧 장착 위치)
+        return (self._dir_local[valid] * tv[:, None]).astype(np.float32)
 
 
 class ArmSim:
@@ -380,8 +534,12 @@ class FakeMARCClient:
 
     def __init__(self, start_pose, occupancy, object_xyz, home_q, kin=None,
                  capture_radius=GRASP_CAPTURE_RADIUS_M, arm_base_fwd=0.18,
-                 sim_time_cap=1800.0, stall_rule=True):
-        self.chassis = Chassis(*start_pose, stall_rule=stall_rule)
+                 sim_time_cap=1800.0, stall_rule=True, colliders=None):
+        self.chassis = Chassis(*start_pose, stall_rule=stall_rule, colliders=colliders)
+        # 라이다는 차체와 같은 콜라이더를 본다 -- 막는 것과 보이는 것이 어긋나면
+        # 하네스가 거짓말을 하게 된다.
+        self._lidar = LidarSim(colliders)
+        self.lidar_calls = 0
         self.arm = ArmSim(home_q, kin=kin, capture_radius=capture_radius)
         self._occ = occupancy
         self.object_xyz = [float(v) for v in object_xyz]
@@ -474,7 +632,11 @@ class FakeMARCClient:
 
     def get_odom(self): return None
     def get_imu(self): return None
-    def get_lidar(self): return None
+    def get_lidar(self):
+        """VLP-16 한 스윕 (FakePointCloud2, Base_LiDAR 프레임). 콜라이더가 없으면 지면만."""
+        self.lidar_calls += 1
+        return FakePointCloud2(self._lidar.scan(self.chassis.pose, self.now_s()),
+                               stamp_s=self.now_s())
     def get_robot_image(self, which="base_left"): return None
     def get_robot_depth(self, which="base"): return None
     def list_cctv(self): return []
