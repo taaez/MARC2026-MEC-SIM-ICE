@@ -90,6 +90,14 @@ def locate_object_by_depth(client, tf_buffer, log):
         return None
     K = np.array(info_holder["msg"].k, dtype=np.float64).reshape(3, 3)
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    info_w, info_h = info_holder["msg"].width, info_holder["msg"].height
+    if (info_w, info_h) != (depth_msg.width, depth_msg.height):
+        # Wrong intrinsics silently produce wrong-but-plausible-looking 3D points (no crash,
+        # no error) -- this is the one failure mode here that would not announce itself.
+        log.warning("[floor] camera_info size (%dx%d) != depth image size (%dx%d) -- "
+                    "K matrix likely does not match this depth image, aborting",
+                    info_w, info_h, depth_msg.width, depth_msg.height)
+        return None
 
     try:
         tf = tf_buffer.lookup_transform("arm_base_link", CAMERA_FRAME, rclpy.time.Time(),
