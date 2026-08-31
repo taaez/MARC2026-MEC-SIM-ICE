@@ -24,5 +24,9 @@
     "_note": "held reading measured 37.7-39.4deg (2026-08-31, manip-trainer, grip_close=0.58) -- above tumbler's own empty~35 baseline, so the global threshold misjudged a real grasp as empty. Provisional: needs re-verification on GPU (grasp_fwd/grasp_down for sunblock itself were never confirmed either, only the threshold).",
     "inner_fk_closed_deg": 44,
     "inner_fk_margin_deg": 4
+  },
+  "cracker_box": {
+    "_note": "grasp_lat -0.05 (default) landed slightly left of center on the box (2026-09-01, manip-trainer); shifted right.",
+    "grasp_lat": -0.06
   }
 }
