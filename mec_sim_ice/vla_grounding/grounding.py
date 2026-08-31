@@ -723,11 +723,18 @@ def _build_decision(parsed: ParsedCommand, cam: CameraModel, cam_id: str,
             geo_rel = classify_relation(cam, a_loc, t_loc, cfg,
                                         hint=parsed.relation_hint)
 
-    # target 미탐지 시 anchor 좌표를 target 좌표로 대신 낸다: 허용 반경(5m)에
-    # 비해 실측 anchor↔target 거리가 훨씬 짧아 부분점수를 크게 건진다.
-    # anchor 와 같은 ground_point 규약을 쓴다 (Located.ground_point docstring).
-    target_coord = (_foot_adjusted_point(cam, t_loc, cfg) if t_loc is not None
-                    else list(anchor_coord))
+    # target 미탐지 시에도 텍스트가 ``on`` 을 확정하면 지지면 상면을 낸다.
+    # anchor 의 ground_point 를 그대로 복사하면 picnic table 위 물체도 지면 z 로
+    # 제출되어, target 이 없다는 사실과 별개인 1m 안팎의 구조적 z 오차가 더해진다.
+    # on 이 아닌 문항은 기존처럼 anchor 접촉점을 대신 낸다(허용 반경에 비해
+    # anchor↔target 거리가 짧아 부분점수를 건지는 보수적 fallback).
+    if t_loc is not None:
+        target_coord = _foot_adjusted_point(cam, t_loc, cfg)
+    elif a_loc is not None and parsed.relation_hint == "on":
+        target_coord = [float(a_loc.base[0]), float(a_loc.base[1]),
+                        float(a_loc.top_z)]
+    else:
+        target_coord = list(anchor_coord)
 
     relation: Optional[str] = None
     situation: Optional[str] = None

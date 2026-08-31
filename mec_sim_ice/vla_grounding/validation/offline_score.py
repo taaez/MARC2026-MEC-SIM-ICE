@@ -103,7 +103,7 @@ from grounding import resolve                      # noqa: E402
 from run_offline import load_round                 # noqa: E402
 from vlm_fallback import VlmTargetResolver          # noqa: E402
 from vlm_fallback import is_disabled as vlm_disabled  # noqa: E402
-from yolo_adapter import infer_cameras              # noqa: E402
+from yolo_adapter import infer_cameras, on_target_probe_augment  # noqa: E402
 
 from chungmu_gt import DEFAULT_SCENARIO, load_gt    # noqa: E402  (same dir)
 from score_report import report                     # noqa: E402  (same dir)
@@ -634,6 +634,9 @@ def main() -> int:
         parsed = parse_command(cmd)
         target_phrases = vlm_assist(cmd, parsed, vlm) if args.fallback else None
         t["vlm"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        on_target_probe_augment(parsed, model, images, dets, imgsz=args.imgsz)
+        t["yolo_probe"] = time.perf_counter() - t0
         t0 = time.perf_counter()
         if args.fallback:
             dino_augment(parsed, images, dets, target_phrases, dino, vlm)
