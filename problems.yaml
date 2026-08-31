@@ -3,11 +3,11 @@
 scenario: marc2026_chungmu
 stage1:
 - id: lf01_mug_table
-  enabled: false
+  enabled: true
 - id: lf02_tumbler_bench
   enabled: false
 - id: lf03_tumbler_hydrant
-  enabled: false
+  enabled: true
 - id: lf04_sunblock_table
   enabled: false
 - id: lf05_umbrella_vending
@@ -23,13 +23,13 @@ stage1:
 - id: lf10_tumbler_taxi
   enabled: false
 - id: lf11_umbrella_taxi
-  enabled: false
+  enabled: true
 - id: hf01_vending_umbrella
   enabled: false
 - id: hf02_table_pencilcase
   enabled: false
 - id: hf03_table_mug
-  enabled: false
+  enabled: true
 - id: hf04_park_sunblock
   enabled: false
 - id: hf05_bikerack_umbrella
@@ -70,14 +70,14 @@ stage1:
   enabled: false
 stage2:
 - id: rt01_parking_tumbler
-  enabled: true
+  enabled: false
 - id: rt02_parking_umbrella
-  enabled: true
+  enabled: false
 - id: rt03_vending_umbrella
-  enabled: true
+  enabled: false
 - id: rt04_taxi_tumbler
-  enabled: true
+  enabled: false
 - id: rt04b_taxi_umbrella
-  enabled: true
+  enabled: false
 - id: rtC2_fallenbike_pencil
-  enabled: true
+  enabled: false
