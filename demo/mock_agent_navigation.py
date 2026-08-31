@@ -25,6 +25,26 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+# 4-wheel-steer track (m). Same value as the platform's chassis steering track.
+# The chassis STOPS (applies 0) on a command where 2*v <= w*T -- a turn too tight for the
+# speed. It reports no error and keeps the last command, so the robot simply stops moving.
+STEERING_TRACK = 0.38
+
+
+def cap_angular(linear: float, angular: float, track: float = STEERING_TRACK) -> float:
+    """Clamp angular_z so that (linear, angular) stays a *valid* chassis command.
+
+    Every producer of cmd_vel must pass through here. A command with 2*v <= w*T makes the
+    chassis stall silently, which is indistinguishable from "goal unreachable" in the logs
+    -- see the straight-approach stall that cost 20s/attempt before this was shared.
+    Pure rotation (linear ~ 0) is exempt: the chassis can spin in place (X-pattern steering).
+    """
+    if linear <= 1e-3:
+        return angular
+    w_max = 1.8 * linear / track
+    return _clamp(angular, -w_max, w_max)
+
+
 class GoalSeekController:
     """Simple proportional (P) goal-seeking controller.
 
@@ -48,10 +68,8 @@ class GoalSeekController:
     MAX_ANGULAR = 1.2          # rad/s
     K_LINEAR = 0.5
     K_ANGULAR = 0.8
-    # 4-wheel-steer track (m). The chassis stops (0) when 2*v <= w*T (a turn too tight for the
-    # speed), so the controller caps w within 2v/T to always emit a valid (forward + steer)
-    # command. Same value as the platform's chassis steering track.
-    STEERING_TRACK = 0.38
+    # 4-wheel-steer track (m) -- see the module-level STEERING_TRACK / cap_angular().
+    STEERING_TRACK = STEERING_TRACK
 
     def compute(self, pose: tuple, goal: tuple, cruise: bool = False) -> tuple:
         """Compute one step of commands from the current pose and goal.
@@ -88,11 +106,9 @@ class GoalSeekController:
             linear = _clamp(self.K_LINEAR * dist, 0.0, self.MAX_LINEAR)  # decelerate near goal
 
         # Ackermann validity: a turn too tight for the speed (2v <= w*T) makes the chassis
-        # stop. Cap w within 2v/T (safety 0.9) so even a goal behind the robot keeps moving
-        # in the tightest valid arc (this chassis must move forward to steer).
-        if linear > 1e-3:
-            w_max = 1.8 * linear / self.STEERING_TRACK
-            angular = _clamp(angular, -w_max, w_max)
+        # stop. Cap w within 2v/T so even a goal behind the robot keeps moving in the
+        # tightest valid arc (this chassis must move forward to steer).
+        angular = cap_angular(linear, angular, self.STEERING_TRACK)
 
         return linear, angular, False
 

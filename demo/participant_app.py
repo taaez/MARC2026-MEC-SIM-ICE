@@ -42,7 +42,7 @@ from marc_sdk import MARCClient
 from vla_grounding_agent import VLAGroundingAgent
 from mock_agent_navigation import (
     OccupancyGridPlanner, PathFollower, GoalSeekController,
-    load_obstacles, obstacles_excluding_goal, load_mock_data,
+    cap_angular, obstacles_excluding_goal,
 )
 # Closed-loop placo pick from the manipulation kit (arm_pick.py): grasp_yaw wrist-roll +
 # DLS servo, targeting the object position. Requires placo (installed in the demo image).
@@ -50,6 +50,9 @@ from mock_agent_navigation import (
 # fallback reference.
 from arm_pick import run_pick_sequence
 from manipulation import transform_via_tf2
+# Lidar obstacle layer -- the occupancy map holds static road only, so parked vehicles and
+# the like have to be sensed. See mec_sim_ice/demo_agents/lidar_obstacles.py.
+from lidar_obstacles import LidarObstacleLayer
 
 log = logging.getLogger("participant_app")
 
@@ -63,6 +66,22 @@ STAGE2_INFLATION_M = 0.25      # erode free by the robot radius (avoids road<->g
 STAGE2_STUCK_TIME_S = 8.0      # if movement < threshold for this long, replan from the current pose
 STAGE2_STUCK_MOVE_M = 0.05
 GOAL_TOLERANCE = 0.7           # reached test (m)
+
+# -- Stall memory: obstacle evidence without a sensor --
+# The occupancy map holds static road only -- parked vehicles/bicycles/people are absent
+# (confirmed on the platform: the robot drives into a parked car and simply stops). A* then
+# keeps returning the same path through it, so the existing stall->replan loop never escapes
+# and burns the whole Stage 2 budget. Remembering where the chassis stopped turns that loop
+# into a real recovery. All three values are robot-scale, not scene-scale.
+# Lidar sweeps folded into the layer, in nav ticks. The nav loop runs at
+# STAGE2_NAV_RATE_HZ (10 Hz) and a VLP-16 sweeps at ~10 Hz, so every other tick keeps up
+# with the sensor without spending a scan parse on ticks that cannot carry new information.
+LIDAR_UPDATE_EVERY_TICKS = 2
+
+ROBOT_RADIUS_M = STAGE2_INFLATION_M      # the radius the planner already erodes free space by
+BLOCKAGE_RADIUS_M = 0.6                  # wider than the chassis, so A* must route around it
+BLOCKAGE_GROWTH_M = 0.4                  # stalled inside a known blockage -> it was too small
+BLOCKAGE_MAX_RADIUS_M = 2.0              # cap, so a bad mark cannot wall off the map
 
 # -- Pick approach --
 # Stop the chassis this far (m) in front of the object, then close the last stretch with a
@@ -81,15 +100,20 @@ GRASP_FWD_BACKOFF = -0.01
 # Retry budget for a failed pick (empty grasp, or grasped but missed the rear basket on place).
 MAX_PICK_ATTEMPTS = 3
 
-# -- Stage 2 delivery goal --
+# -- Stage 2 goals --
 # The Stage 2 task drives to the target object and then delivers it to the owner zone.
-# The pickup goal (target position) comes from the reveal (msg 411) at runtime, with the
-# Stage 2 grounding answer's target_coord as a fallback (see _wait_for_collect_goal). The
-# delivery goal comes from owner_position in the mission (msg 211), with delivery_coord from
-# mock_demo_data.yaml as a fallback. delivery_coord is pre-extracted from the scenario by
-# tools/mock_data_builder/gen_mock_demo_data.py; real participants do not have the scenario.
-_DELIVERY_COORD = load_mock_data().get("delivery_coord") or [-55.29138, 142.09763, 16.47326]
-DELIVERY_XY = (_DELIVERY_COORD[0], _DELIVERY_COORD[1])
+# Both goals come from the runtime protocol only: the pickup goal from the reveal (msg 411)
+# hint_center, with the Stage 2 grounding answer's target_coord as a fallback (see
+# _wait_for_collect_goal), and the delivery goal from owner_position in the mission
+# (msg 211). There is deliberately no mock_demo_data.yaml fallback for either -- that file
+# is pre-extracted from one scenario, so on any other scenario it aims tens of metres away
+# and fails silently. No owner_position -> no delivery leg (see _drive).
+
+# Approximate-location radius (m) assumed only when a reveal never arrives. hint_radius is
+# the platform's own statement of how uncertain hint_center is, so the goal-relaxation
+# distances below (planner snap, obstacle exclusion) are derived from it rather than fixed
+# per scene; this is just the no-reveal fallback.
+DEFAULT_HINT_RADIUS_M = 1.0
 
 
 class DemoParticipant:
@@ -126,7 +150,8 @@ class DemoParticipant:
         # _on_stage2_mission), used only if the reveal does not arrive.
         self._stage2_target_xy = None
         # Stage 2 delivery goal (owner) -- filled from owner_position in mission (msg 211).
-        # If not included (older runtime), fall back to delivery_coord (DELIVERY_XY).
+        # Stays None when the scenario defines no owner_zone; there is no scenario-derived
+        # fallback any more, so _drive skips the delivery leg instead of aiming elsewhere.
         self._pickup_xy = None
         self._occ_logged = False
         # CCTV warm-up gate (see _ensure_cctv_warm). The platform starts Stage 1 the
@@ -135,9 +160,28 @@ class DemoParticipant:
         # first ~2-4 rounds used to run with an empty image set. Block once, on the first
         # mission, until frames are actually flowing.
         self._cctv_warm = False
-        # Obstructions from the scenario yaml (landmarks such as vehicles) -- inject static
-        # obstacles not in the occupancy map into the planner to route around them (demo only).
-        self._obstacles = load_obstacles()
+        # Extra obstructions the occupancy map omits (vehicles/bicycles/people/objects).
+        # The demo filled this from mock_demo_data.yaml, i.e. from scenario ground truth the
+        # competition does not hand out -- on marc2026_chungmu that list even contained each
+        # pick target itself as a blocked circle. Detecting them is a participant task
+        # ("laser/camera sensing" per the dev guide), so this stays empty until the lidar
+        # local map lands; obstacles_excluding_goal below already handles a populated list.
+        self._obstacles = []
+        # Stage 2 reveal state (msg 411) beyond hint_center: hint_radius is the platform's
+        # own statement of how far off the hint may be, and it sizes the goal-relaxation
+        # distances in _drive so no scene's spacing is baked in.
+        self._hint_radius = None
+        # Lidar obstacle layer, built per Stage 2 run and shared by both legs (what leg 1
+        # bumps into is usually on leg 2's way back too). Set to None once the environment
+        # turns out to have no lidar, so a missing sensor costs one attempt, not one per tick.
+        self._lidar_layer = None
+        # Base_LiDAR -> chassis mount offset (dx, dy). Static, so tf is asked once per run;
+        # (0, 0) (sensor above the chassis origin) when tf cannot supply it.
+        self._lidar_mount_xy = (0.0, 0.0)
+        self._stage2_task = ""
+        self._stage2_submitted_target = None
+        self._reveal_log_path = os.environ.get(
+            "MARC_REVEAL_LOG", "./results/stage2_reveals.jsonl")
         self._register_handlers()
 
     # -- handler registration --
@@ -231,14 +275,16 @@ class DemoParticipant:
             self._pickup_xy = (float(op[0]), float(op[1]))
             log.info("[Stage2] owner_position(runtime-provided)=%s", self._pickup_xy)
         # Grounding: look up the pre-extracted Stage 2 answer for this task (mock VLA).
+        self._stage2_task = mission.task_description
         result = self.vla.process_stage2(mission.task_description)
         self.client.submit_stage2_grounding(result)
         # Keep the answer's target as a fallback pickup goal (used if no reveal arrives).
         tc = result.target_coord
         if tc and len(tc) >= 2:
             self._stage2_target_xy = (float(tc[0]), float(tc[1]))
+        self._stage2_submitted_target = list(tc) if tc else None
         log.info("[Stage2] submitted grounding target=%s, delivery point=%s",
-                 self._stage2_target_xy, self._pickup_xy or DELIVERY_XY)
+                 self._stage2_target_xy, self._pickup_xy)
 
     def _on_stage2_reveal(self, reveal):
         """Stage 2 post-grounding reveal (msg 411) -- adopt the approximate location/type as the pick goal.
@@ -248,11 +294,17 @@ class DemoParticipant:
         radius, so use the type (target_type) to decide which object to pick up (the demo
         only demonstrates reaching the location).
         """
-        log.info("[Stage2] reveal received -- score=%s, type=%s, center=%s, r=%.1f",
+        log.info("[Stage2] reveal received -- score=%s, type=%s, center=%s, r=%s",
                  reveal.grounding_score, reveal.target_type,
                  reveal.hint_center, reveal.hint_radius)
         if reveal.hint_center and len(reveal.hint_center) >= 2:
             self._collect_xy = (float(reveal.hint_center[0]), float(reveal.hint_center[1]))
+        try:
+            # 0.0 is not a usable radius -- treat it as "not stated" and fall back.
+            self._hint_radius = float(reveal.hint_radius) or None
+        except (TypeError, ValueError):
+            self._hint_radius = None
+        self._append_reveal_log(reveal)
 
     def _drive(self):
         """Called once in a separate thread on entering STAGE2_RUN -- pick up the object then deliver it.
@@ -268,10 +320,19 @@ class DemoParticipant:
 
         # Poll briefly until the reveal (approximate location) arrives after scoring -> pickup goal.
         collect_xy = self._wait_for_collect_goal(timeout=5.0)
-        # Delivery goal = runtime-provided owner_position (msg 211); if not included, fall back to delivery_coord.
-        pickup_xy = self._pickup_xy if self._pickup_xy is not None else DELIVERY_XY
+        # Delivery goal = runtime-provided owner_position (msg 211). None = the scenario
+        # defines no owner_zone, so there is no delivery leg to run (handled at leg 2).
+        pickup_xy = self._pickup_xy
+        # How far the platform says hint_center may be off. Every goal-relaxation distance
+        # below is derived from it, so nothing encodes one scene's spacing.
+        hint_r = self._hint_radius if self._hint_radius is not None else DEFAULT_HINT_RADIUS_M
         log.info("[Stage2] navigation start -- collect=%s deliver=%s (timeout %.0fs)",
                  collect_xy, pickup_xy, STAGE2_NAV_TIMEOUT_S)
+
+        # Fresh obstacle layer per run -- the scene is re-posed between rounds, so evidence
+        # from the previous round is not evidence about this one.
+        self._lidar_layer = LidarObstacleLayer()
+        self._lidar_mount_xy = self._lidar_mount_offset()
 
         # Top-heavy robot tip-over prevention: fold the arm to HOME before driving -> lower CoG.
         self._stow_arm()
@@ -281,8 +342,10 @@ class DemoParticipant:
         approach = self._standoff_goal(collect_xy, TUMBLER_STANDOFF_M)
         log.info("[Stage2] leg1 -> object %s front standoff %s",
                  tuple(round(v, 2) for v in collect_xy), tuple(round(v, 2) for v in approach))
-        # Aggressive planner tuning for the tight pick approach (low inflation + wide goal-exclusion).
-        self._navigate_to(approach, deadline, tol=0.45, inflation_m=0.10, exclude_m=1.0)
+        # Aggressive planner tuning for the tight pick approach (low inflation + goal-exclusion
+        # and snap sized by the stated hint uncertainty rather than by this scene's spacing).
+        self._navigate_to(approach, deadline, tol=0.45, inflation_m=0.10,
+                          exclude_m=max(0.6, hint_r), snap_m=max(1.0, hint_r))
         if not c.is_running:
             return
         # Final straight approach: drive straight at the object until arm_base fwd reaches grasp reach.
@@ -343,8 +406,12 @@ class DemoParticipant:
             self._stow_arm()
 
         # -- leg 2: deliver to the owner zone --
-        log.info("[Stage2] leg2 -> deliver to owner zone %s", pickup_xy)
-        reached = self._navigate_to(pickup_xy, deadline)
+        reached = False
+        if pickup_xy is None:
+            log.error("[Stage2] no owner_position in the mission -- skipping the delivery leg")
+        else:
+            log.info("[Stage2] leg2 -> deliver to owner zone %s", pickup_xy)
+            reached = self._navigate_to(pickup_xy, deadline)
 
         # No recovery attempted here (no fresh perception of where it fell) -- just surface it,
         # since a silent loss would otherwise look identical to a normal successful delivery.
@@ -437,6 +504,10 @@ class DemoParticipant:
                 break
             ang = max(-0.4, min(0.4, 1.5 * lat))         # center the object (lat -> 0)
             lin = 0.12 if abs(lat) < 0.15 else 0.06      # badly off -> creep slower while turning
+            # Same chassis validity cap the path controllers use: without it this leg emits
+            # 2v <= w*T whenever |lat| >= 0.211, and the chassis silently stops -- it burned
+            # the whole 20 s budget moving 6 mm, leaving the object out of arm reach.
+            ang = cap_angular(lin, ang)
             c.send_cmd_vel(linear_x=lin, angular_z=ang)
             c.sleep(STAGE2_NAV_DT)
         for _ in range(5):
@@ -479,8 +550,107 @@ class DemoParticipant:
                     timeout, self._stage2_target_xy)
         return self._stage2_target_xy
 
+    def _lidar_mount_offset(self):
+        """Base_LiDAR -> chassis (dx, dy) from tf, or (0, 0) when tf cannot answer.
+
+        Static transform, so it is read once per run rather than per scan. The fallback
+        assumes the sensor sits above the chassis origin; that is a few centimetres of
+        error on a 0.25 m grid, which is why a failure here only degrades accuracy instead
+        of disabling the layer.
+        """
+        if self._tf_buffer is None:
+            return (0.0, 0.0)
+        try:
+            import rclpy
+            tf = self._tf_buffer.lookup_transform(
+                "base_link", "Base_LiDAR", rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=1.0))
+            t = tf.transform.translation
+            log.info("[Stage2] lidar mount offset from tf: (%.3f, %.3f)", t.x, t.y)
+            return (float(t.x), float(t.y))
+        except Exception as e:
+            log.info("[Stage2] lidar mount offset unavailable (%s) -- assuming (0, 0)", e)
+            return (0.0, 0.0)
+
+    def _update_lidar_layer(self, pose):
+        """Fold one lidar sweep into the obstacle layer. Returns newly blocked cell count.
+
+        Disables the layer permanently on the first failure: an environment without a lidar
+        should cost one attempt, not one per tick for the whole run.
+        """
+        if self._lidar_layer is None:
+            return 0
+        try:
+            return self._lidar_layer.update(self.client.get_lidar(), pose,
+                                            self._lidar_mount_xy)
+        except Exception as e:
+            log.warning("[Stage2] lidar unavailable (%s) -- obstacle layer off, "
+                        "falling back to stall memory only", e)
+            self._lidar_layer = None
+            return 0
+
+    def _plan_obstacles(self, goal, exclude_m):
+        """Everything the planner should route around on this leg.
+
+        Two sources into one list: what the lidar sees ahead, and what the chassis has
+        already stalled against. The goal itself is excluded from both -- the target object
+        and its landmark are solid to the lidar, and blocking the goal makes the leg
+        unplannable.
+        """
+        obstacles = list(self._obstacles)
+        if self._lidar_layer is not None:
+            obstacles.extend(self._lidar_layer.discs())
+        return obstacles_excluding_goal(obstacles, goal, exclude_m=exclude_m)
+
+    def _remember_blockage(self, pose, goal):
+        """Mark the spot the chassis just stalled against, so the replan routes around it.
+
+        This is the only obstacle evidence available without a sensor, and it costs nothing
+        we are not already reading (the pose polled every tick). It is a recovery, not a
+        substitute for sensing: it learns only after contact, one blockage at a time, and
+        each lesson costs STAGE2_STUCK_TIME_S. The lidar local map supersedes it for
+        anything visible ahead; this stays for what that misses (kerbs, low steps, wheel
+        traps) and for the competition scenario, where no obstacle list exists at all.
+
+        The disc is placed just *ahead* of the robot -- its near edge at the front of the
+        footprint -- rather than on the robot, so the planner never has to snap the start
+        cell out of blocked space. Stalling again inside a known disc grows that disc
+        instead of stacking another: a first mark too narrow to force a detour would
+        otherwise be re-hit forever.
+
+        Returns True when the obstacle list changed (the caller then refreshes its
+        per-leg view of it).
+        """
+        x, y, yaw = pose
+        d = ROBOT_RADIUS_M + BLOCKAGE_RADIUS_M
+        bx, by = x + d * math.cos(yaw), y + d * math.sin(yaw)
+
+        # Never wall off the goal: closing on the target legitimately slows the robot to a
+        # crawl, and a disc over the goal makes the rest of the leg unplannable.
+        if math.hypot(bx - goal[0], by - goal[1]) <= BLOCKAGE_RADIUS_M:
+            log.info("[Stage2] stalled next to the goal -- not marking it blocked")
+            return False
+
+        for i, (ox, oy, orad) in enumerate(self._obstacles):
+            if math.hypot(bx - ox, by - oy) <= orad:
+                if orad >= BLOCKAGE_MAX_RADIUS_M:
+                    log.warning("[Stage2] stalled inside a maxed-out blockage at "
+                                "(%.2f, %.2f) -- cannot grow it further", ox, oy)
+                    return False
+                grown = min(BLOCKAGE_MAX_RADIUS_M, orad + BLOCKAGE_GROWTH_M)
+                self._obstacles[i] = (ox, oy, grown)
+                log.info("[Stage2] stalled inside a known blockage -> grew (%.2f, %.2f) "
+                         "to r=%.2fm", ox, oy, grown)
+                return True
+
+        self._obstacles.append((bx, by, BLOCKAGE_RADIUS_M))
+        log.info("[Stage2] blockage remembered at (%.2f, %.2f) r=%.2fm (%d known)",
+                 bx, by, BLOCKAGE_RADIUS_M, len(self._obstacles))
+        return True
+
     def _navigate_to(self, goal, deadline, tol=GOAL_TOLERANCE,
-                     inflation_m=STAGE2_INFLATION_M, exclude_m=0.6, cruise=False):
+                     inflation_m=STAGE2_INFLATION_M, exclude_m=0.6, cruise=False,
+                     snap_m=None):
         """Drive to a single goal (x, y) by following occupancy A*. True if reached, False on timeout.
 
         Args:
@@ -488,6 +658,10 @@ class DemoParticipant:
             inflation_m: erode the free area by this much (lower = enter tighter spots).
             exclude_m: drop scenario obstacles within this radius of the goal (keep it reachable).
             cruise: True -> pass-through waypoint, no near-goal deceleration.
+            snap_m: how far the planner may move start/goal onto free space to make a plan.
+                Defaults to the leg's own reached-test distance, since a goal snapped
+                further than that is a goal we cannot finish the leg from. (It used to be a
+                fixed 8 m, which can silently relocate the goal into a different area.)
         The deadline is a shared SIM-time budget across all Stage 2 legs.
         """
         c = self.client
@@ -495,8 +669,10 @@ class DemoParticipant:
         follower = None
         fallback_ctrl = GoalSeekController()
 
-        # Obstacles for this leg -- exclude the goal itself (pickup target/owner) and avoid only the surrounding obstructions.
-        leg_obstacles = obstacles_excluding_goal(self._obstacles, goal, exclude_m=exclude_m)
+        # Obstacles for this leg -- lidar layer + stall memory, minus anything on the goal.
+        leg_obstacles = self._plan_obstacles(goal, exclude_m)
+        snap = max(1.0, float(tol)) if snap_m is None else float(snap_m)
+        tick = 0
 
         last_xy = None
         last_progress_t = c.now_s()
@@ -509,6 +685,12 @@ class DemoParticipant:
                 c.sleep(STAGE2_NAV_DT)
                 continue
             x, y, yaw = pose
+            tick += 1
+            # Sense before hitting anything. The stall path below only reacts after contact.
+            new_cells = 0
+            if tick % LIDAR_UPDATE_EVERY_TICKS == 0:
+                new_cells = self._update_lidar_layer(pose)
+
             dist = math.hypot(goal[0] - x, goal[1] - y)
             if dist < tol:
                 reached_goal = True
@@ -519,19 +701,39 @@ class DemoParticipant:
             occ = c.get_occupancy_map()
             if occ is not None:
                 planner.update_from_msg(occ)
+                # Match the layer's cell size to the map's, so the discs it emits tile the
+                # planner grid instead of straddling it.
+                if self._lidar_layer is not None:
+                    self._lidar_layer.set_resolution(occ.info.resolution)
                 if not self._occ_logged:
                     self._occ_logged = True
                     log.info("[Stage2] occupancy received: %dx%d res=%.3f origin=(%.1f, %.1f)",
                              occ.info.width, occ.info.height, occ.info.resolution,
                              occ.info.origin.position.x, occ.info.origin.position.y)
 
-            # Detect stall -> trigger replanning
+            # Replan triggers, in the order we want them to fire: a new obstacle across the
+            # remaining path (before contact), then a stall (after contact, for whatever the
+            # lidar missed). Replanning on a timer instead would rewrite the path every cycle
+            # and make the follower jitter, so it is event-driven.
             need_replan = follower is None
+            if new_cells and follower is not None and self._lidar_layer is not None:
+                remaining = follower.path[follower.idx:]
+                if self._lidar_layer.blocks_path(remaining, start_xy=(x, y)):
+                    log.info("[Stage2] lidar: %d new cell(s) across the remaining path "
+                             "-> replanning (%d blocked, %.1f m2)", new_cells,
+                             self._lidar_layer.stats()["blocked_cells"],
+                             self._lidar_layer.stats()["blocked_area_m2"])
+                    leg_obstacles = self._plan_obstacles(goal, exclude_m)
+                    need_replan = True
             if last_xy is not None:
                 if math.hypot(x - last_xy[0], y - last_xy[1]) > STAGE2_STUCK_MOVE_M:
                     last_progress_t = c.now_s()
                 elif c.now_s() - last_progress_t > STAGE2_STUCK_TIME_S:
                     log.info("[Stage2] stall detected -> replanning")
+                    # Replanning on an unchanged map returns the same path, so record what
+                    # we just stopped against before asking for a new one.
+                    if self._remember_blockage((x, y, yaw), goal):
+                        leg_obstacles = self._plan_obstacles(goal, exclude_m)
                     need_replan = True
                     last_progress_t = c.now_s()
             last_xy = (x, y)
@@ -544,7 +746,7 @@ class DemoParticipant:
                     # Increase the snap radius so start/goal off the road (free) are also corrected to nearby free.
                     # Inject scenario obstructions (vehicles/bicycles/people/objects) as obstacles to route around.
                     path = planner.plan((x, y), goal, inflation_m=inflation_m,
-                                        snap_m=8.0, extra_obstacles=leg_obstacles)
+                                        snap_m=snap, extra_obstacles=leg_obstacles)
                     if path:
                         follower = PathFollower(path, passthrough=cruise)
                         log.info("[Stage2] occupancy A* path %d waypoints", len(path))
@@ -614,6 +816,34 @@ class DemoParticipant:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception as e:
             log.warning("[Score] JSONL logging failed: %s", e)
+
+    def _append_reveal_log(self, reveal):
+        """Append one JSONL line per Stage 2 reveal (msg 411).
+
+        Path from MARC_REVEAL_LOG (default ./results/stage2_reveals.jsonl). This is the only
+        record of what the platform actually hands the driving legs, and nothing else in the
+        pipeline captures it -- the offline harness has been assuming a perfect hint, so how
+        far hint_center really sits from the object (and how large hint_radius is) is still
+        unmeasured. It decides whether close-range re-detection is a precision nicety or a
+        hard requirement, since the arm only reaches ~0.75 m. Logging must never break the
+        run loop, so failures are logged and swallowed.
+        """
+        try:
+            entry = {
+                "sim_time": self.client.now_s(),
+                "task_description": self._stage2_task,
+                "grounding_score": reveal.grounding_score,
+                "target_type": reveal.target_type,
+                "hint_center": list(reveal.hint_center or []),
+                "hint_radius": reveal.hint_radius,
+                "submitted_target_coord": self._stage2_submitted_target,
+            }
+            os.makedirs(os.path.dirname(self._reveal_log_path) or ".", exist_ok=True)
+            with open(self._reveal_log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            log.info("[Stage2] reveal logged -> %s", self._reveal_log_path)
+        except Exception as e:
+            log.warning("[Stage2] reveal JSONL logging failed: %s", e)
 
     def _on_state_change(self, old, new):
         log.info("[STATE] %s -> %s", old, new)
