@@ -230,19 +230,14 @@ class DemoParticipant:
         self._round_commands = {}
         self._score_log_path = os.environ.get("MARC_SCORE_LOG", "./results/scores.jsonl")
         # world -> arm_base_link tf, used by _object_arm_xy for the real (not assumed)
-        # chassis->arm mount offset/rotation. The listener must be kept alive (held as an
-        # attribute) or it stops receiving tf broadcasts.
-        # Offline harnesses (vla_grounding/validation/stage2_sim.py) run without ROS, so a
-        # missing tf2_ros is not fatal here -- _object_arm_xy falls back to the pose-based
-        # computation when the buffer is None.
-        try:
-            from tf2_ros import Buffer, TransformListener
-            self._tf_buffer = Buffer()
-            self._tf_listener = TransformListener(self._tf_buffer, self.client.node)
-        except Exception as e:
-            log.warning("[Stage2] tf2 unavailable (%s) -- falling back to "
-                        "ARM_BASE_FWD pose math in _object_arm_xy", e)
-            self._tf_buffer = self._tf_listener = None
+        # chassis->arm mount offset/rotation, and by _locate_object_by_depth for the
+        # camera->arm transform. Created in run() AFTER client.connect() -- NOT here:
+        # rclpy.init() only happens inside connect(), so a TransformListener built at
+        # construction time always died with "rclpy.init() has not been called", which
+        # silently disabled BOTH the real-tf path of _object_arm_xy (falling back to the
+        # unverified ARM_BASE_FWD assumption) and the depth-refinement pick correction,
+        # on every live run (observed in every run4/run3/... startup log tonight).
+        self._tf_buffer = self._tf_listener = None
         # Stage 2 pickup goal -- filled from the approximate location hint in the reveal (msg 411).
         # If not received, fall back to the Stage 2 answer target (_stage2_target_xy).
         self._collect_xy = None
@@ -777,12 +772,35 @@ class DemoParticipant:
         """
         c = self.client
         t_end = min(deadline, self._clock.elapsed + max_t)
+        # True while backing straight up because the chassis is past/over the object --
+        # see below. Hysteresis: engage under target_fwd-0.03, release at target_fwd+0.10
+        # so the normal forward creep (which also centers lat) finishes the last stretch.
+        reversing = False
         while c.is_running and self._clock.tick() < t_end:
             gxy = self._object_arm_xy(obj_xy)
             if gxy is None:
                 break
             fwd, lat = gxy
+            if reversing:
+                if fwd >= target_fwd + 0.10:
+                    reversing = False
+                else:
+                    c.send_cmd_vel(linear_x=-0.10, angular_z=0.0)
+                    c.sleep(STAGE2_NAV_DT)
+                    continue
             if fwd <= target_fwd + 0.02:
+                if fwd < target_fwd - 0.03:
+                    # The chassis is past (or on top of) the object -- measured live on
+                    # rt01: the leg arrived 0.22 m from the object (follower done fired at
+                    # its own 0.7 m tolerance, past the 0.58 m standoff, plus residual
+                    # 0.8 m/s coasting), so every pick ran at fwd 0.02~0.16 against a
+                    # grasp tuned for 0.47 and failed 3/3. Backing straight up restores
+                    # the tuned grasp distance and also brings the object back into the
+                    # base camera's view for the depth refinement.
+                    log.info("[Stage2] approach: object at fwd=%.3f < target %.2f -- "
+                             "chassis past/over it, backing up", fwd, target_fwd)
+                    reversing = True
+                    continue
                 break
             ang = max(-0.4, min(0.4, 1.5 * lat))         # center the object (lat -> 0)
             lin = 0.12 if abs(lat) < 0.15 else 0.06      # badly off -> creep slower while turning
@@ -966,6 +984,11 @@ class DemoParticipant:
         planner = OccupancyGridPlanner()
         follower = None
         fallback_ctrl = GoalSeekController()
+        # The controller's class-level reached test (0.7 m) can be looser than this leg's
+        # tol (e.g. the tight pick approach at 0.45) -- shadow it per-instance so the
+        # fallback actually finishes the leg inside tol instead of declaring victory 0.7 m
+        # out (see the follower-done handling below for the measured failure this caused).
+        fallback_ctrl.GOAL_TOLERANCE = min(fallback_ctrl.GOAL_TOLERANCE, tol)
 
         # Obstacles for this leg -- lidar layer + stall memory, minus anything on the goal.
         leg_obstacles = self._plan_obstacles(goal, exclude_m)
@@ -978,6 +1001,7 @@ class DemoParticipant:
         reached_goal = False
         braking = False   # edge-tracked so the reactive brake logs once per onset, not every tick
         brake_held_since = None   # elapsed-clock value; see BRAKE_STALL_S
+        closing_logged = False    # edge-tracked so the precise-close log fires once, not every tick
         force_replan = False      # set by the brake-stall escalation below, consumed next tick
 
         while c.is_running and self._clock.tick() < deadline:
@@ -1092,7 +1116,31 @@ class DemoParticipant:
                 linear, angular, done, info = follower.compute(pose)
                 wp_str = " wp %d/%d=(%.1f, %.1f)" % (
                     info["idx"], info["total"], info["waypoint"][0], info["waypoint"][1])
-                if done:
+                if done and dist >= tol:
+                    # The follower's internal done test is its controller's own
+                    # GOAL_TOLERANCE (0.7 m on the final waypoint) -- looser than this
+                    # leg's tol, so "done" can mean anywhere within 0.7 m of the goal,
+                    # including PAST it. Measured live on rt01's pick approach
+                    # (tol=0.45, standoff only 0.58 m from the object): done fired
+                    # 0.68 m past-side of the standoff, 0.22 m from the object, and the
+                    # chassis ended up on top of the pick target. Override this tick's
+                    # command with the fallback controller's precise close instead --
+                    # deliberately NOT `follower = None` here: that would make
+                    # `need_replan = follower is None` true on every remaining tick of
+                    # this leg (re-running A* every 100 ms for no reason, confirmed
+                    # offline: the very next tick re-triggers this same branch, over and
+                    # over, until dist < tol). Overriding linear/angular in place needs
+                    # no replan at all.
+                    if not closing_logged:
+                        log.info("[Stage2] follower done at %.2fm > tol %.2fm -- "
+                                 "closing precisely with the fallback controller", dist, tol)
+                        closing_logged = True
+                    linear, angular, reached = fallback_ctrl.compute(pose, goal, cruise=cruise)
+                    if reached:
+                        reached_goal = True
+                        log.info("[STAGE2] reached goal at (%.2f, %.2f)", x, y)
+                        break
+                elif done:
                     reached_goal = True
                     log.info("[STAGE2] reached goal at (%.2f, %.2f)", x, y)
                     break
@@ -1219,9 +1267,28 @@ class DemoParticipant:
 
     # -- run --
 
+    def _setup_tf(self):
+        """Create the tf listener -- must run after client.connect() (rclpy initialised).
+
+        The listener must be kept alive (held as an attribute) or it stops receiving tf
+        broadcasts. Offline harnesses (vla_grounding/validation/stage2_sim.py) never call
+        run(), so there self._tf_buffer stays None and _object_arm_xy uses its pose-math
+        fallback -- identical to the previous behaviour.
+        """
+        try:
+            from tf2_ros import Buffer, TransformListener
+            self._tf_buffer = Buffer()
+            self._tf_listener = TransformListener(self._tf_buffer, self.client.node)
+            log.info("[Stage2] tf2 listener up (world->arm_base_link / camera transforms live)")
+        except Exception as e:
+            log.warning("[Stage2] tf2 unavailable (%s) -- falling back to "
+                        "ARM_BASE_FWD pose math in _object_arm_xy", e)
+            self._tf_buffer = self._tf_listener = None
+
     def run(self):
         if not self.client.connect():
             raise SystemExit("Registration failed -- check the runtime and the token.")
+        self._setup_tf()
         self.client.run()
 
 
