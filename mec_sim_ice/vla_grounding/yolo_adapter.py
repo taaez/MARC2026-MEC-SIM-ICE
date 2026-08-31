@@ -25,6 +25,14 @@ except ImportError:               # run directly as a script from within vla_gro
 _log = logging.getLogger(__name__)
 
 
+# 정상 문턱에서 사라진 ``on`` target 을 같은 detector 로 한 번 더 확인할 때의
+# probe 문턱. 이 값은 곧바로 일반 탐지 문턱으로 쓰지 않는다. 명령이 ``on`` 을
+# 말했고, 해당 landmark 가 이미 검출된 카메라에서, bbox 가 landmark 상면과
+# 이미지상 겹치는 같은 클래스 후보에만 적용한다. 따라서 낮은 raw confidence
+# 하나만으로 카메라/target 이 선택되는 경로는 없다.
+ON_TARGET_PROBE_CONF = 0.001
+
+
 # 물체가 작아 whole-frame confidence 가 구조적으로 낮게 나오는 클래스는
 # 전역 문턱(0.25)보다 낮은 값을 쓴다. 실측(2026-08-29,
 # validation/diag_small_object_conf.py, conf=0.001 raw 분포 39문항 전수):
@@ -87,6 +95,112 @@ def infer_cameras(model, images_bgr: dict, min_conf: float = 0.25,
             out[cam_id] = detections_from_result(results[0], min_conf=min_conf,
                                                  min_conf_by_class=min_conf_by_class)
     return out
+
+
+def _bbox_iou(a: tuple, b: tuple) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0.0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    return inter / union if union > 0.0 else 0.0
+
+
+def _looks_on_bbox(anchor: Detection, target: Detection) -> bool:
+    """grounding._looks_on 과 같은 저비용 이미지 공간 사전판정."""
+    ax1, ay1, ax2, ay2 = anchor.bbox
+    tx1, ty1, tx2, ty2 = target.bbox
+    overlap = min(ax2, tx2) - max(ax1, tx1)
+    if overlap <= 0.3 * (tx2 - tx1):
+        return False
+    return ay1 - (ty2 - ty1) <= ty2 <= ay2
+
+
+def on_target_probe_augment(parsed, model, images_bgr: dict, detections: dict,
+                            imgsz: int = 1280,
+                            probe_conf: float = ON_TARGET_PROBE_CONF) -> None:
+    """정상 문턱에서 빠진 ``on`` target 을 문맥으로 제한해 보강한다.
+
+    작은 물체는 whole-frame YOLO 에서 올바른 bbox 를 내고도 confidence 만 매우
+    낮을 수 있다. 그렇다고 클래스별 전역 문턱을 0.001 로 낮추면 무관 카메라의
+    오탐까지 모두 resolver 후보가 된다. 이 함수는 아래 조건을 전부 만족할 때만
+    raw 후보를 ``detections`` 에 추가한다.
+
+      * 물체 문항이고 텍스트 relation 이 ``on``
+      * 명시 landmark 가 정상 문턱으로 이미 검출된 카메라
+      * 그 카메라에는 정상 문턱 target 이 아직 없음
+      * raw target bbox 의 아랫변이 landmark bbox 상면 영역과 겹침
+      * 높은 confidence 의 다른 클래스 bbox 와 사실상 같은 박스가 아님
+
+    routed detector 에서는 3종 소형 서브모델을 다시 돌리지 않고 ``general``
+    YOLO 만 probe 한다. 이 함수가 다루는 target 클래스는 general 모델 소유이며,
+    불필요한 타일 추론과 confidence scale 혼합을 피할 수 있다.
+    """
+    if (parsed.is_person or parsed.relation_hint != "on"
+            or not parsed.target_type or not parsed.landmark_type):
+        return
+
+    # package/flat 양쪽 import 경로를 지원한다. 모듈 상단에서 가져오면
+    # yolo_adapter 를 가볍게 import 하는 도구까지 command_parser 를 끌어온다.
+    try:
+        from .grounding import _landmark_ok, _target_ok
+    except ImportError:
+        from grounding import _landmark_ok, _target_ok
+
+    general = model.general if hasattr(model, "general") else model
+    general_imgsz = getattr(model, "imgsz", imgsz)
+    general_iou = getattr(model, "iou", 0.7)
+    general_device = getattr(model, "device", None)
+    if hasattr(model, "owned"):
+        names = getattr(general, "names", {})
+        target_ids = {int(i) for i, name in names.items()
+                      if name == parsed.target_type} if isinstance(names, dict) else {
+                          i for i, name in enumerate(names) if name == parsed.target_type}
+        if target_ids & set(model.owned):
+            return                    # 이 클래스는 타일 소형모델 소유
+
+    for cam_id, img in images_bgr.items():
+        cam_dets = detections.setdefault(cam_id, [])
+        anchors = [d for d in cam_dets
+                   if _landmark_ok(d.label, parsed.landmark_type)]
+        if not anchors or any(_target_ok(d.label, parsed) for d in cam_dets):
+            continue
+
+        result = general.predict(img, imgsz=general_imgsz, conf=probe_conf,
+                                 iou=general_iou, device=general_device,
+                                 verbose=False)[0]
+        if result.boxes is None:
+            continue
+        rescued = []
+        for b in result.boxes:
+            label = result.names[int(b.cls[0])]
+            if label != parsed.target_type:
+                continue
+            score = float(b.conf[0])
+            if score < probe_conf:
+                continue
+            bbox = tuple(float(v) for v in b.xyxy[0])
+            cand = Detection(label=label, bbox=bbox, score=score)
+            if not any(_looks_on_bbox(anchor, cand) for anchor in anchors):
+                continue
+            # DINO fallback 의 decoy 방어와 같은 원칙: 일반 detector 가 이미
+            # 다른 이름으로 확신하는 바로 그 소품이면 낮은 target 오탐을 버린다.
+            if any(d.label != label and d.score >= 0.5
+                   and _bbox_iou(bbox, d.bbox) >= 0.5 for d in cam_dets):
+                continue
+            rescued.append(cand)
+
+        if rescued:
+            cam_dets.extend(rescued)
+            _log.info("[yolo-probe] rescued %d low-conf target %r on %s "
+                      "(best=%.4f)", len(rescued), parsed.target_type, cam_id,
+                      max(d.score for d in rescued))
 
 
 # ── 소형객체 서브모델 라우팅 (training/small_object_detection/predict.py) ──

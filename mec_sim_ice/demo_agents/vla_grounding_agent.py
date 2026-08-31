@@ -35,7 +35,8 @@ from vla_grounding.pose_keypoints import AnkleKeypointEstimator
 from vla_grounding.pose_keypoints import is_disabled as pose_disabled
 from vla_grounding.vlm_fallback import VlmTargetResolver
 from vla_grounding.vlm_fallback import is_disabled as vlm_disabled
-from vla_grounding.yolo_adapter import infer_cameras, load_detector
+from vla_grounding.yolo_adapter import (infer_cameras, load_detector,
+                                         on_target_probe_augment)
 
 log = logging.getLogger("participant_app")
 
@@ -129,6 +130,10 @@ class VLAGroundingAgent:
 
         detections = infer_cameras(self._det, images, min_conf=self._conf,
                                    imgsz=self._imgsz)
+        # ``on`` 물체가 정상 문턱에서 빠졌을 때만, landmark 상면과 겹치는
+        # 동일 YOLO raw 후보를 보강한다. 전역 confidence 문턱은 건드리지 않는다.
+        on_target_probe_augment(parsed, self._det, images, detections,
+                                imgsz=self._imgsz)
         dino_augment(parsed, images, detections, target_phrases, self._dino, self._vlm)
         # 마지막 -- 위 단계가 추가한 person 탐지까지 발목 보정을 받아야 한다.
         pose_augment(parsed, images, detections, self._pose)

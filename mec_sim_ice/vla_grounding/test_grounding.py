@@ -197,6 +197,16 @@ def main() -> int:
           d is not None and d.debug.get("selection") == "anchor_only",
           d.debug.get("selection") if d else None)
 
+    # T12b. ``on`` target 미탐지 fallback 은 anchor 바닥이 아니라 지지면 상면.
+    #       target 자체를 못 본 오차에 table 높이만큼의 구조적 z 오차까지
+    #       더하지 않는다. near 문항의 기존 T12 동작은 그대로 유지한다.
+    parsed12b = parse_command("Find the mug on the picnic table.")
+    table12b = synth_det(cam, "picnic_table", (6, 0), 1.0, 0.8)
+    d = resolve(parsed12b, {"cam_a": [table12b]}, {"cam_a": cam}, cfg)
+    check("T12b-on-fallback-uses-support-top",
+          d is not None and d.target_coord[2] > d.anchor_coord[2] + 0.7,
+          f"anchor={d.anchor_coord if d else None} target={d.target_coord if d else None}")
+
     # T13. target 도 랜드마크도 없음 → 그때만 None (상위 폴백 몫)
     d = resolve(parsed, {"cam_a": []}, {"cam_a": cam}, cfg)
     check("T13-nothing-at-all", d is None, d)
