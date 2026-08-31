@@ -103,9 +103,12 @@ class AnkleKeypointEstimator:
         log.info("[pose-kp] loaded %s", self.weights)
 
     def foot_u(self, image_bgr, boxes: list) -> dict:
-        """한 프레임의 사람 bbox 목록 → {bbox 인덱스: 발목 가로 픽셀}.
+        """한 프레임의 사람 bbox 목록 → {bbox 인덱스: (발목 가로, 발목 세로) 픽셀}.
 
         찾지 못한 bbox 는 결과에 넣지 않는다 (호출부가 기존 동작 유지).
+        세로(v)는 prostrate 자세(bending/lying/prone)에서만 쓰인다 -- 그 자세는
+        bbox 아랫변이 발이 아니라 카메라에 가장 가까운 몸 부위라서. 다른
+        자세에서는 호출부가 v 를 무시하고 기존대로 접지선(bbox 아랫변)을 쓴다.
         """
         if not boxes:
             return {}
@@ -132,7 +135,8 @@ class AnkleKeypointEstimator:
             ank = [kps[j][a] for a in _ANKLE_IDX if kps[j][a][2] > _KP_CONF_MIN]
             if not ank:
                 continue
-            out[i] = float(np.mean([a[0] for a in ank]))
+            out[i] = (float(np.mean([a[0] for a in ank])),
+                      float(np.mean([a[1] for a in ank])))
         return out
 
 
