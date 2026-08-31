@@ -38,6 +38,8 @@ import threading
 import time
 from collections import deque
 
+import numpy as np
+
 from marc_sdk import MARCClient
 
 from vla_grounding_agent import VLAGroundingAgent
@@ -185,6 +187,13 @@ class DemoParticipant:
         # Stage 2 pickup goal -- filled from the approximate location hint in the reveal (msg 411).
         # If not received, fall back to the Stage 2 answer target (_stage2_target_xy).
         self._collect_xy = None
+        # Object type from the same reveal -- selects a pnp_params.json override in run_pick_sequence()
+        # (see arm_pick.load_params()), since one grasp/threshold set doesn't fit every object shape.
+        self._target_type = None
+        # base_camera/depth/info -- subscribed lazily (once) on first _locate_object_by_depth()
+        # call, not per pick attempt, so retries don't pile up duplicate raw subscriptions.
+        self._depth_cam_info = None
+        self._depth_cam_info_sub = None
         # Fallback pickup goal -- the Stage 2 grounding answer's target_coord (set in
         # _on_stage2_mission), used only if the reveal does not arrive.
         self._stage2_target_xy = None
@@ -340,6 +349,7 @@ class DemoParticipant:
         log.info("[Stage2] reveal received -- score=%s, type=%s, center=%s, r=%s",
                  reveal.grounding_score, reveal.target_type,
                  reveal.hint_center, reveal.hint_radius)
+        self._target_type = reveal.target_type or None
         if reveal.hint_center and len(reveal.hint_center) >= 2:
             self._collect_xy = (float(reveal.hint_center[0]), float(reveal.hint_center[1]))
         try:
@@ -415,10 +425,16 @@ class DemoParticipant:
                 break
             try:
                 grasp_xy = self._object_arm_xy(collect_xy)   # actual object position in the arm_base frame
-                log.info("[Stage2] object pick sequence attempt %d/%d (object-position grasp=%s)",
+                depth_xy = self._locate_object_by_depth()    # camera+depth refinement, if available
+                if depth_xy is not None:
+                    log.info("[Stage2] depth refinement grasp=%s (nav estimate was %s)",
+                             tuple(round(v, 3) for v in depth_xy),
+                             tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None)
+                    grasp_xy = depth_xy
+                log.info("[Stage2] object pick sequence attempt %d/%d (object-position grasp=%s, type=%s)",
                          attempt, MAX_PICK_ATTEMPTS,
-                         tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None)
-                held = run_pick_sequence(c, log, grasp_xy)
+                         tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None, self._target_type)
+                held = run_pick_sequence(c, log, grasp_xy, object_type=self._target_type)
                 c.send_cmd_vel(0.0, 0.0)
                 # Grip-hold feedback (participant style). None (no feedback) -> conservatively count
                 # the completed sequence as success.
@@ -580,6 +596,106 @@ class DemoParticipant:
         gxy = self._object_arm_xy(obj_xy)
         log.info("[Stage2] align done -- object arm coords %s",
                  tuple(round(v, 3) for v in gxy) if gxy else None)
+    def _locate_object_by_depth(self):
+        """Refine the pick point using the base camera's own depth (floor-height segmentation).
+
+        _object_arm_xy() gets the chassis into the right neighborhood from the (approximate,
+        per SDK docs) reveal hint_center; this looks at what the base camera actually sees
+        right now to correct the last bit of error before the fixed waypoint sequence commits
+        to a grasp point. Back-projects the whole depth image to arm_base_link via that
+        camera's own TF (Base_Camera_Center -> arm_base_link -- confirmed connected, distinct
+        from the broken world->arm_base_link link), takes the median height as the floor
+        (robust: most of the frame is floor), and grasps at the centroid of the largest
+        connected blob raised above it.
+
+        No learned model, so no CCTV-vs-robot-camera domain mismatch. Caveat: this finds
+        "something raised off the floor", not object identity -- if a distractor sits in the
+        same frame it could pick the wrong blob (e.g. the larger one). Validated so far only
+        with one object in view (manipulation_trainer, 2026-09-01); watch this in a real
+        Stage2 run where distractors are possible.
+
+        Returns (fwd, lat) in arm_base_link frame, or None if depth/camera_info/TF isn't
+        available, they don't agree on resolution, or no clear blob is found -- callers keep
+        their existing _object_arm_xy() estimate in that case, so this can only refine, never
+        regress below today's baseline.
+        """
+        if self._tf_buffer is None:
+            return None
+        try:
+            import rclpy
+            from sensor_msgs.msg import CameraInfo
+        except Exception:
+            return None
+
+        c = self.client
+        depth_msg = c.get_robot_depth("base")
+        if depth_msg is None:
+            return None
+
+        if self._depth_cam_info_sub is None:
+            def _on_depth_info(msg):
+                self._depth_cam_info = msg
+            self._depth_cam_info_sub = c.subscribe(
+                c.topics.robot("base_camera/depth/info"), CameraInfo, _on_depth_info)
+        t_end = c.now_s() + 1.0
+        while self._depth_cam_info is None and c.now_s() < t_end:
+            c.sleep(0.05)
+        info = self._depth_cam_info
+        if info is None:
+            return None
+        if (info.width, info.height) != (depth_msg.width, depth_msg.height):
+            log.warning("[Stage2] depth camera_info size (%dx%d) != depth image size (%dx%d) "
+                        "-- skipping depth refinement", info.width, info.height,
+                        depth_msg.width, depth_msg.height)
+            return None
+        K = np.array(info.k, dtype=np.float64).reshape(3, 3)
+        fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                "arm_base_link", "Base_Camera_Center", rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5))
+        except Exception as e:
+            log.warning("[Stage2] depth refinement: tf lookup Base_Camera_Center -> "
+                        "arm_base_link failed: %s", e)
+            return None
+        tr, rot = tf.transform.translation, tf.transform.rotation
+        qx, qy, qz, qw = rot.x, rot.y, rot.z, rot.w
+        R = np.array([
+            [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw),     2 * (qx * qz + qy * qw)],
+            [2 * (qx * qy + qz * qw),     1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+            [2 * (qx * qz - qy * qw),     2 * (qy * qz + qx * qw),     1 - 2 * (qx * qx + qy * qy)],
+        ])
+        C = np.array([tr.x, tr.y, tr.z])
+
+        h, w = depth_msg.height, depth_msg.width
+        depth = np.frombuffer(depth_msg.data, dtype=np.float32).reshape(h, w)
+        valid = np.isfinite(depth) & (depth > 0.05) & (depth < 5.0)
+        if not np.any(valid):
+            return None
+
+        us_grid, vs_grid = np.meshgrid(np.arange(w), np.arange(h))
+        x_cam = (us_grid - cx) / fx * depth
+        y_cam = (vs_grid - cy) / fy * depth
+        pts_cam = np.stack([x_cam, y_cam, depth], axis=-1)
+        pts_arm = pts_cam @ R.T + C
+        fwd, lat, up = pts_arm[..., 0], pts_arm[..., 1], pts_arm[..., 2]
+
+        floor_z = float(np.median(up[valid]))
+        candidate = valid & (up > floor_z + 0.03) & (fwd > 0.0) & (fwd < 1.2)
+        n_cand = int(np.sum(candidate))
+        if n_cand < 20:
+            return None
+
+        try:
+            from scipy import ndimage
+            labeled, n_blobs = ndimage.label(candidate)
+            sizes = ndimage.sum(candidate, labeled, index=range(1, n_blobs + 1))
+            blob_mask = labeled == (int(np.argmax(sizes)) + 1)
+        except ImportError:
+            blob_mask = candidate
+
+        return (float(np.mean(fwd[blob_mask])), float(np.mean(lat[blob_mask])))
 
     def _approach_straight(self, obj_xy, deadline, target_fwd=0.40, max_t=20.0):
         """Drive straight at the object until the arm_base forward distance reaches target_fwd.
