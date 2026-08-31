@@ -38,6 +38,8 @@ import threading
 import time
 from collections import deque
 
+import numpy as np
+
 from marc_sdk import MARCClient
 
 from vla_grounding_agent import VLAGroundingAgent
@@ -100,6 +102,41 @@ LIDAR_UPDATE_EVERY_TICKS = 2
 LIDAR_MAX_CONSEC_FAILS = 5
 
 ROBOT_RADIUS_M = STAGE2_INFLATION_M      # the radius the planner already erodes free space by
+
+# Reactive near-field brake -- independent of A*/replanning, checked every tick. The
+# lidar-triggered replan (blocks_path) and the stall-memory replan are both deliberative:
+# they wait for a full cycle (grid refresh + A* + a new PathFollower) before the chassis
+# command changes, which is at least one nav tick and often several. Something already
+# close and roughly ahead cannot wait that long -- this just zeroes linear velocity for
+# that one tick so the chassis stops before contact, then lets the existing stall/lidar
+# replan machinery (already reacting to near-zero movement) route around it. It does not
+# steer or replan by itself on purpose -- it only has to buy the time the deliberative
+# path needs, not solve avoidance itself.
+REACT_STOP_DIST_M = ROBOT_RADIUS_M + 0.35   # chassis radius + a few nav ticks of stopping slack
+REACT_STOP_CONE_DEG = 40.0                  # narrow and close on purpose: A* already keeps its
+                                             # own inflation clearance from known obstacles, so a
+                                             # wide/generous cone here just re-questions routes A*
+                                             # already judged clear and can deadlock a genuinely
+                                             # passable tight corridor (measured: 70deg/0.9m timed
+                                             # out rt02_parking_umbrella offline, which passes
+                                             # without this brake -- see stage2_sim.py --hidden-obstacles)
+
+# How long the brake may hold linear at 0 (while the follower wants to move) before this
+# counts as a stall on its own, instead of waiting for the generic STAGE2_STUCK_TIME_S(8s)
+# window to notice the same thing indirectly.
+#
+# Measured live (rt01_parking_tumbler, post-hang-fix): once something sits persistently
+# within the brake's stop zone, the follower keeps recomputing a nonzero linear every tick
+# (it does not know the brake exists) and the brake keeps clamping it back to 0 -- angular
+# is untouched, so heading keeps refining toward the waypoint while XY stays frozen, which
+# *looks* exactly like a slow-converging turn but is actually the brake holding the whole
+# time. This repeated 4 times in one leg1 approach, ~30-40s lost per occurrence, before the
+# generic stall detector's 8s window finally caught up and forced a replan. Since the brake
+# already knows precisely why linear is 0 (unlike the generic stall test, which only sees
+# XY not moving and has to infer a cause), there is no reason to wait the full 8s: treat a
+# sustained brake-hold as an immediate stall -- same _remember_blockage + replan path, just
+# triggered by the mechanism that actually caused the freeze instead of by its symptom.
+BRAKE_STALL_S = 1.5
 BLOCKAGE_RADIUS_M = 0.6                  # wider than the chassis, so A* must route around it
 BLOCKAGE_GROWTH_M = 0.4                  # stalled inside a known blockage -> it was too small
 BLOCKAGE_MAX_RADIUS_M = 2.0              # cap, so a bad mark cannot wall off the map
@@ -137,6 +174,48 @@ MAX_PICK_ATTEMPTS = 3
 DEFAULT_HINT_RADIUS_M = 1.0
 
 
+class ElapsedClock:
+    """Monotonic elapsed-seconds accumulator over `client.now_s()`, immune to a backward jump.
+
+    Why this exists: `now_s()` returns `time.time()` (a huge wall-clock epoch value) until the
+    first `/clock` message arrives, then switches to sim-time (a small value). Every deadline in
+    this file used to be computed once as `now_s() + budget` and compared against later `now_s()`
+    calls -- if that one computation happened to land in the wall-clock-fallback window, the
+    deadline is a huge epoch-based number that no future sim-time `now_s()` can ever reach, so
+    `now_s() < deadline` stays true forever and the loop never exits. This is the exact bug
+    documented in STAGE2_SESSION_REPORT_2026-08-22.md for demo/agent_vla.py's _observe() (fixed
+    there with an iteration-count budget instead); the same pattern reappeared here in at least
+    six places and was reproduced live twice in a row (participant registering while STAGE1_RUN/
+    STAGE2_RUN was already in progress -- exactly maximises the chance the first now_s() call
+    lands before /clock).
+
+    Rather than patch each call site with its own iteration-count workaround (loses the sim-time
+    budget semantics, which matter here since STAGE2_NAV_TIMEOUT_S etc. are meant to scale with
+    RTF), this tracks elapsed sim-time as a running sum of consecutive deltas: a delta is only
+    ever added if it is a plausible forward step. A jump backward (the wall-clock -> sim-time
+    switch) contributes 0 instead of going negative, and a jump forward larger than one plausible
+    tick is capped at 1s so a single stray large delta cannot itself satisfy a whole timeout.
+    Genuine sim-time -- even sped up by RTF -- always advances in small steps between our own
+    poll calls, so this never treats real progress as 0.
+    """
+
+    _MAX_TICK_S = 1.0
+
+    def __init__(self, client):
+        self._client = client
+        self._last = client.now_s()
+        self.elapsed = 0.0
+
+    def tick(self):
+        """Advance and return the cumulative elapsed seconds since this clock was created."""
+        now = self._client.now_s()
+        delta = now - self._last
+        self._last = now
+        if delta > 0.0:
+            self.elapsed += min(delta, self._MAX_TICK_S)
+        return self.elapsed
+
+
 class DemoParticipant:
     """SDK-based demo participant -- connects the VLA/nav logic through handlers."""
 
@@ -151,22 +230,24 @@ class DemoParticipant:
         self._round_commands = {}
         self._score_log_path = os.environ.get("MARC_SCORE_LOG", "./results/scores.jsonl")
         # world -> arm_base_link tf, used by _object_arm_xy for the real (not assumed)
-        # chassis->arm mount offset/rotation. The listener must be kept alive (held as an
-        # attribute) or it stops receiving tf broadcasts.
-        # Offline harnesses (vla_grounding/validation/stage2_sim.py) run without ROS, so a
-        # missing tf2_ros is not fatal here -- _object_arm_xy falls back to the pose-based
-        # computation when the buffer is None.
-        try:
-            from tf2_ros import Buffer, TransformListener
-            self._tf_buffer = Buffer()
-            self._tf_listener = TransformListener(self._tf_buffer, self.client.node)
-        except Exception as e:
-            log.warning("[Stage2] tf2 unavailable (%s) -- falling back to "
-                        "ARM_BASE_FWD pose math in _object_arm_xy", e)
-            self._tf_buffer = self._tf_listener = None
+        # chassis->arm mount offset/rotation, and by _locate_object_by_depth for the
+        # camera->arm transform. Created in run() AFTER client.connect() -- NOT here:
+        # rclpy.init() only happens inside connect(), so a TransformListener built at
+        # construction time always died with "rclpy.init() has not been called", which
+        # silently disabled BOTH the real-tf path of _object_arm_xy (falling back to the
+        # unverified ARM_BASE_FWD assumption) and the depth-refinement pick correction,
+        # on every live run (observed in every run4/run3/... startup log tonight).
+        self._tf_buffer = self._tf_listener = None
         # Stage 2 pickup goal -- filled from the approximate location hint in the reveal (msg 411).
         # If not received, fall back to the Stage 2 answer target (_stage2_target_xy).
         self._collect_xy = None
+        # Object type from the same reveal -- selects a pnp_params.json override in run_pick_sequence()
+        # (see arm_pick.load_params()), since one grasp/threshold set doesn't fit every object shape.
+        self._target_type = None
+        # base_camera/depth/info -- subscribed lazily (once) on first _locate_object_by_depth()
+        # call, not per pick attempt, so retries don't pile up duplicate raw subscriptions.
+        self._depth_cam_info = None
+        self._depth_cam_info_sub = None
         # Fallback pickup goal -- the Stage 2 grounding answer's target_coord (set in
         # _on_stage2_mission), used only if the reveal does not arrive.
         self._stage2_target_xy = None
@@ -203,6 +284,10 @@ class DemoParticipant:
         # in a row) disables the layer -- see _update_lidar_layer for why a one-shot disable
         # is dangerous.
         self._lidar_fail_streak = 0
+        # Elapsed-time clock for this run's deadlines -- see ElapsedClock. Built fresh in
+        # _drive() (like _lidar_layer) since "elapsed" only means something relative to when
+        # this run's driving started.
+        self._clock = None
         self._stage2_task = ""
         self._stage2_submitted_target = None
         self._reveal_log_path = os.environ.get(
@@ -322,6 +407,7 @@ class DemoParticipant:
         log.info("[Stage2] reveal received -- score=%s, type=%s, center=%s, r=%s",
                  reveal.grounding_score, reveal.target_type,
                  reveal.hint_center, reveal.hint_radius)
+        self._target_type = reveal.target_type or None
         if reveal.hint_center and len(reveal.hint_center) >= 2:
             self._collect_xy = (float(reveal.hint_center[0]), float(reveal.hint_center[1]))
         try:
@@ -340,8 +426,14 @@ class DemoParticipant:
         task_complete. All legs share one sim-time budget.
         """
         c = self.client
-        # SIM-time deadline (via /clock) -- shared across all legs, robust to real-time factor < 1.
-        deadline = c.now_s() + STAGE2_NAV_TIMEOUT_S
+        # Elapsed-time clock for this run -- see ElapsedClock. Every "deadline" from here on is
+        # an elapsed-seconds budget measured against self._clock.tick(), NOT an absolute now_s()
+        # value: a plain `now_s() + budget` computed here can land before the first /clock
+        # message (a huge wall-clock fallback), making every later `now_s() < deadline` compare
+        # against a value no sim-time now_s() can ever reach -- an infinite hang, reproduced live
+        # twice (see STAGE2_SESSION_REPORT_2026-08-22.md for the same bug in agent_vla.py).
+        self._clock = ElapsedClock(c)
+        deadline = STAGE2_NAV_TIMEOUT_S
 
         # Poll briefly until the reveal (approximate location) arrives after scoring -> pickup goal.
         collect_xy = self._wait_for_collect_goal(timeout=5.0)
@@ -391,16 +483,22 @@ class DemoParticipant:
         # released the gripper by the time it returns).
         basket_ok = False
         for attempt in range(1, MAX_PICK_ATTEMPTS + 1):
-            if not c.is_running or c.now_s() >= deadline:
+            if not c.is_running or self._clock.tick() >= deadline:
                 log.warning("[Stage2] pick retry budget exhausted (run stopped or deadline hit) "
                             "before attempt %d/%d", attempt, MAX_PICK_ATTEMPTS)
                 break
             try:
                 grasp_xy = self._object_arm_xy(collect_xy)   # actual object position in the arm_base frame
-                log.info("[Stage2] object pick sequence attempt %d/%d (object-position grasp=%s)",
+                depth_xy = self._locate_object_by_depth()    # camera+depth refinement, if available
+                if depth_xy is not None:
+                    log.info("[Stage2] depth refinement grasp=%s (nav estimate was %s)",
+                             tuple(round(v, 3) for v in depth_xy),
+                             tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None)
+                    grasp_xy = depth_xy
+                log.info("[Stage2] object pick sequence attempt %d/%d (object-position grasp=%s, type=%s)",
                          attempt, MAX_PICK_ATTEMPTS,
-                         tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None)
-                held = run_pick_sequence(c, log, grasp_xy)
+                         tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None, self._target_type)
+                held = run_pick_sequence(c, log, grasp_xy, object_type=self._target_type)
                 c.send_cmd_vel(0.0, 0.0)
                 # Grip-hold feedback (participant style). None (no feedback) -> conservatively count
                 # the completed sequence as success.
@@ -539,8 +637,8 @@ class DemoParticipant:
         without also shrinking the remaining approach room).
         """
         c = self.client
-        t_end = min(deadline, c.now_s() + max_t)
-        while c.is_running and c.now_s() < t_end:
+        t_end = min(deadline, self._clock.elapsed + max_t)
+        while c.is_running and self._clock.tick() < t_end:
             gxy = self._object_arm_xy(obj_xy)
             if gxy is None:
                 break
@@ -562,6 +660,106 @@ class DemoParticipant:
         gxy = self._object_arm_xy(obj_xy)
         log.info("[Stage2] align done -- object arm coords %s",
                  tuple(round(v, 3) for v in gxy) if gxy else None)
+    def _locate_object_by_depth(self):
+        """Refine the pick point using the base camera's own depth (floor-height segmentation).
+
+        _object_arm_xy() gets the chassis into the right neighborhood from the (approximate,
+        per SDK docs) reveal hint_center; this looks at what the base camera actually sees
+        right now to correct the last bit of error before the fixed waypoint sequence commits
+        to a grasp point. Back-projects the whole depth image to arm_base_link via that
+        camera's own TF (Base_Camera_Center -> arm_base_link -- confirmed connected, distinct
+        from the broken world->arm_base_link link), takes the median height as the floor
+        (robust: most of the frame is floor), and grasps at the centroid of the largest
+        connected blob raised above it.
+
+        No learned model, so no CCTV-vs-robot-camera domain mismatch. Caveat: this finds
+        "something raised off the floor", not object identity -- if a distractor sits in the
+        same frame it could pick the wrong blob (e.g. the larger one). Validated so far only
+        with one object in view (manipulation_trainer, 2026-09-01); watch this in a real
+        Stage2 run where distractors are possible.
+
+        Returns (fwd, lat) in arm_base_link frame, or None if depth/camera_info/TF isn't
+        available, they don't agree on resolution, or no clear blob is found -- callers keep
+        their existing _object_arm_xy() estimate in that case, so this can only refine, never
+        regress below today's baseline.
+        """
+        if self._tf_buffer is None:
+            return None
+        try:
+            import rclpy
+            from sensor_msgs.msg import CameraInfo
+        except Exception:
+            return None
+
+        c = self.client
+        depth_msg = c.get_robot_depth("base")
+        if depth_msg is None:
+            return None
+
+        if self._depth_cam_info_sub is None:
+            def _on_depth_info(msg):
+                self._depth_cam_info = msg
+            self._depth_cam_info_sub = c.subscribe(
+                c.topics.robot("base_camera/depth/info"), CameraInfo, _on_depth_info)
+        t_end = self._clock.elapsed + 1.0
+        while self._depth_cam_info is None and self._clock.tick() < t_end:
+            c.sleep(0.05)
+        info = self._depth_cam_info
+        if info is None:
+            return None
+        if (info.width, info.height) != (depth_msg.width, depth_msg.height):
+            log.warning("[Stage2] depth camera_info size (%dx%d) != depth image size (%dx%d) "
+                        "-- skipping depth refinement", info.width, info.height,
+                        depth_msg.width, depth_msg.height)
+            return None
+        K = np.array(info.k, dtype=np.float64).reshape(3, 3)
+        fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                "arm_base_link", "Base_Camera_Center", rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5))
+        except Exception as e:
+            log.warning("[Stage2] depth refinement: tf lookup Base_Camera_Center -> "
+                        "arm_base_link failed: %s", e)
+            return None
+        tr, rot = tf.transform.translation, tf.transform.rotation
+        qx, qy, qz, qw = rot.x, rot.y, rot.z, rot.w
+        R = np.array([
+            [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw),     2 * (qx * qz + qy * qw)],
+            [2 * (qx * qy + qz * qw),     1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+            [2 * (qx * qz - qy * qw),     2 * (qy * qz + qx * qw),     1 - 2 * (qx * qx + qy * qy)],
+        ])
+        C = np.array([tr.x, tr.y, tr.z])
+
+        h, w = depth_msg.height, depth_msg.width
+        depth = np.frombuffer(depth_msg.data, dtype=np.float32).reshape(h, w)
+        valid = np.isfinite(depth) & (depth > 0.05) & (depth < 5.0)
+        if not np.any(valid):
+            return None
+
+        us_grid, vs_grid = np.meshgrid(np.arange(w), np.arange(h))
+        x_cam = (us_grid - cx) / fx * depth
+        y_cam = (vs_grid - cy) / fy * depth
+        pts_cam = np.stack([x_cam, y_cam, depth], axis=-1)
+        pts_arm = pts_cam @ R.T + C
+        fwd, lat, up = pts_arm[..., 0], pts_arm[..., 1], pts_arm[..., 2]
+
+        floor_z = float(np.median(up[valid]))
+        candidate = valid & (up > floor_z + 0.03) & (fwd > 0.0) & (fwd < 1.2)
+        n_cand = int(np.sum(candidate))
+        if n_cand < 20:
+            return None
+
+        try:
+            from scipy import ndimage
+            labeled, n_blobs = ndimage.label(candidate)
+            sizes = ndimage.sum(candidate, labeled, index=range(1, n_blobs + 1))
+            blob_mask = labeled == (int(np.argmax(sizes)) + 1)
+        except ImportError:
+            blob_mask = candidate
+
+        return (float(np.mean(fwd[blob_mask])), float(np.mean(lat[blob_mask])))
 
     def _approach_straight(self, obj_xy, deadline, target_fwd=0.40, max_t=20.0):
         """Drive straight at the object until the arm_base forward distance reaches target_fwd.
@@ -573,13 +771,36 @@ class DemoParticipant:
         _align_to_object for why). SIM-time paced.
         """
         c = self.client
-        t_end = min(deadline, c.now_s() + max_t)
-        while c.is_running and c.now_s() < t_end:
+        t_end = min(deadline, self._clock.elapsed + max_t)
+        # True while backing straight up because the chassis is past/over the object --
+        # see below. Hysteresis: engage under target_fwd-0.03, release at target_fwd+0.10
+        # so the normal forward creep (which also centers lat) finishes the last stretch.
+        reversing = False
+        while c.is_running and self._clock.tick() < t_end:
             gxy = self._object_arm_xy(obj_xy)
             if gxy is None:
                 break
             fwd, lat = gxy
+            if reversing:
+                if fwd >= target_fwd + 0.10:
+                    reversing = False
+                else:
+                    c.send_cmd_vel(linear_x=-0.10, angular_z=0.0)
+                    c.sleep(STAGE2_NAV_DT)
+                    continue
             if fwd <= target_fwd + 0.02:
+                if fwd < target_fwd - 0.03:
+                    # The chassis is past (or on top of) the object -- measured live on
+                    # rt01: the leg arrived 0.22 m from the object (follower done fired at
+                    # its own 0.7 m tolerance, past the 0.58 m standoff, plus residual
+                    # 0.8 m/s coasting), so every pick ran at fwd 0.02~0.16 against a
+                    # grasp tuned for 0.47 and failed 3/3. Backing straight up restores
+                    # the tuned grasp distance and also brings the object back into the
+                    # base camera's view for the depth refinement.
+                    log.info("[Stage2] approach: object at fwd=%.3f < target %.2f -- "
+                             "chassis past/over it, backing up", fwd, target_fwd)
+                    reversing = True
+                    continue
                 break
             ang = max(-0.4, min(0.4, 1.5 * lat))         # center the object (lat -> 0)
             lin = 0.12 if abs(lat) < 0.15 else 0.06      # badly off -> creep slower while turning
@@ -606,9 +827,9 @@ class DemoParticipant:
         helper silently coercing "unknown" into "empty" for them.
         """
         c = self.client
-        deadline = c.now_s() + timeout
+        start = self._clock.elapsed
         val = c.is_basket_occupied()
-        while val is None and c.now_s() < deadline:
+        while val is None and self._clock.tick() - start < timeout:
             c.sleep(0.05)
             val = c.is_basket_occupied()
         return val
@@ -620,8 +841,8 @@ class DemoParticipant:
         within the timeout, fall back to the Stage 2 grounding answer's target (_stage2_target_xy).
         """
         c = self.client
-        deadline = c.now_s() + timeout
-        while c.now_s() < deadline:
+        start = self._clock.elapsed
+        while self._clock.tick() - start < timeout:
             if self._collect_xy is not None:
                 return self._collect_xy
             c.sleep(0.1)
@@ -756,12 +977,18 @@ class DemoParticipant:
                 Defaults to the leg's own reached-test distance, since a goal snapped
                 further than that is a goal we cannot finish the leg from. (It used to be a
                 fixed 8 m, which can silently relocate the goal into a different area.)
-        The deadline is a shared SIM-time budget across all Stage 2 legs.
+        `deadline` is elapsed seconds on self._clock (see ElapsedClock) since _drive() started,
+        shared across all Stage 2 legs -- not an absolute now_s() value.
         """
         c = self.client
         planner = OccupancyGridPlanner()
         follower = None
         fallback_ctrl = GoalSeekController()
+        # The controller's class-level reached test (0.7 m) can be looser than this leg's
+        # tol (e.g. the tight pick approach at 0.45) -- shadow it per-instance so the
+        # fallback actually finishes the leg inside tol instead of declaring victory 0.7 m
+        # out (see the follower-done handling below for the measured failure this caused).
+        fallback_ctrl.GOAL_TOLERANCE = min(fallback_ctrl.GOAL_TOLERANCE, tol)
 
         # Obstacles for this leg -- lidar layer + stall memory, minus anything on the goal.
         leg_obstacles = self._plan_obstacles(goal, exclude_m)
@@ -772,8 +999,12 @@ class DemoParticipant:
         pos_history = deque()
         last_log_t = 0.0
         reached_goal = False
+        braking = False   # edge-tracked so the reactive brake logs once per onset, not every tick
+        brake_held_since = None   # elapsed-clock value; see BRAKE_STALL_S
+        closing_logged = False    # edge-tracked so the precise-close log fires once, not every tick
+        force_replan = False      # set by the brake-stall escalation below, consumed next tick
 
-        while c.is_running and c.now_s() < deadline:
+        while c.is_running and self._clock.tick() < deadline:
             pose = c.get_world_pose()
             if pose is None:
                 c.sleep(STAGE2_NAV_DT)
@@ -795,10 +1026,24 @@ class DemoParticipant:
             occ = c.get_occupancy_map()
             if occ is not None:
                 planner.update_from_msg(occ)
-                # Match the layer's cell size to the map's, so the discs it emits tile the
-                # planner grid instead of straddling it.
-                if self._lidar_layer is not None:
-                    self._lidar_layer.set_resolution(occ.info.resolution)
+                # NOTE: the lidar layer deliberately keeps its OWN (coarser) cell size and is
+                # no longer synced to the map's. This used to call set_resolution(occ.info.
+                # resolution) so its discs would tile the planner grid exactly, but that is
+                # cosmetic -- _block_obstacles paints world-coordinate circles, which need no
+                # alignment with the layer's own grid -- and on the live map (0.05 m/cell) it
+                # broke the layer three ways at once:
+                #   1. MAX_BLOCKED_CELLS is a cell *count*, so the same 8000 cells fell from a
+                #      500 m2 budget at 0.25 m to 20 m2 at 0.05 m. Measured live: saturated in
+                #      ~8 s, after which update() drops every new cell -- the obstacle ahead
+                #      never enters the layer, and new_blocked stays 0, which also permanently
+                #      kills the `if new_cells` replan trigger in this loop.
+                #   2. MIN_POINTS_PER_CELL=2 stops being reachable for most cells: at 5 cm the
+                #      returns spread thin, so real obstacle surface goes unmarked. Measured on
+                #      identical live sweeps: 0.05 m marked 777 cells / 1.9 m2, while 0.25 m
+                #      marked 89 cells / 5.6 m2 -- fewer cells covering ~3x more real surface.
+                #   3. discs() emits radius == cell size, so 0.05 m gave the planner a sparse
+                #      dot pattern A* can thread between, instead of overlapping 0.25 m discs
+                #      that form a continuous barrier around a car.
                 if not self._occ_logged:
                     self._occ_logged = True
                     log.info("[Stage2] occupancy received: %dx%d res=%.3f origin=(%.1f, %.1f)",
@@ -809,7 +1054,8 @@ class DemoParticipant:
             # remaining path (before contact), then a stall (after contact, for whatever the
             # lidar missed). Replanning on a timer instead would rewrite the path every cycle
             # and make the follower jitter, so it is event-driven.
-            need_replan = follower is None
+            need_replan = follower is None or force_replan
+            force_replan = False
             if new_cells and follower is not None and self._lidar_layer is not None:
                 remaining = follower.path[follower.idx:]
                 if self._lidar_layer.blocks_path(remaining, start_xy=(x, y)):
@@ -870,7 +1116,31 @@ class DemoParticipant:
                 linear, angular, done, info = follower.compute(pose)
                 wp_str = " wp %d/%d=(%.1f, %.1f)" % (
                     info["idx"], info["total"], info["waypoint"][0], info["waypoint"][1])
-                if done:
+                if done and dist >= tol:
+                    # The follower's internal done test is its controller's own
+                    # GOAL_TOLERANCE (0.7 m on the final waypoint) -- looser than this
+                    # leg's tol, so "done" can mean anywhere within 0.7 m of the goal,
+                    # including PAST it. Measured live on rt01's pick approach
+                    # (tol=0.45, standoff only 0.58 m from the object): done fired
+                    # 0.68 m past-side of the standoff, 0.22 m from the object, and the
+                    # chassis ended up on top of the pick target. Override this tick's
+                    # command with the fallback controller's precise close instead --
+                    # deliberately NOT `follower = None` here: that would make
+                    # `need_replan = follower is None` true on every remaining tick of
+                    # this leg (re-running A* every 100 ms for no reason, confirmed
+                    # offline: the very next tick re-triggers this same branch, over and
+                    # over, until dist < tol). Overriding linear/angular in place needs
+                    # no replan at all.
+                    if not closing_logged:
+                        log.info("[Stage2] follower done at %.2fm > tol %.2fm -- "
+                                 "closing precisely with the fallback controller", dist, tol)
+                        closing_logged = True
+                    linear, angular, reached = fallback_ctrl.compute(pose, goal, cruise=cruise)
+                    if reached:
+                        reached_goal = True
+                        log.info("[STAGE2] reached goal at (%.2f, %.2f)", x, y)
+                        break
+                elif done:
                     reached_goal = True
                     log.info("[STAGE2] reached goal at (%.2f, %.2f)", x, y)
                     break
@@ -880,6 +1150,45 @@ class DemoParticipant:
                     reached_goal = True
                     log.info("[STAGE2] reached goal at (%.2f, %.2f)", x, y)
                     break
+
+            # Reactive brake -- see REACT_STOP_DIST_M above. Runs every tick regardless of
+            # whether this tick refreshed the lidar layer, so it acts on the freshest data
+            # available without waiting for LIDAR_UPDATE_EVERY_TICKS. Only clamps linear
+            # (still free to turn) -- steering out of the way is the replan's job, this only
+            # has to prevent contact before that replan lands.
+            danger = self._lidar_layer is not None and self._lidar_layer.danger_ahead(
+                pose, REACT_STOP_DIST_M, REACT_STOP_CONE_DEG,
+                goal=goal, goal_exclude_m=exclude_m)
+            blocked_by_brake = danger and linear > 0.0
+            if blocked_by_brake:
+                if not braking:
+                    log.info("[Stage2] lidar: obstacle within %.2fm ahead -> braking",
+                             REACT_STOP_DIST_M)
+                linear = 0.0
+                # BRAKE_STALL_S escalation -- see the constant's comment. The follower keeps
+                # wanting to move (that is what blocked_by_brake means) while heading keeps
+                # refining toward the waypoint (angular is untouched), which looks exactly
+                # like a slow-converging turn but is actually this brake holding the whole
+                # time. Don't wait for the generic 8s stall window to notice the same freeze
+                # indirectly -- treat a sustained hold as an immediate stall.
+                if brake_held_since is None:
+                    brake_held_since = self._clock.elapsed
+                elif self._clock.elapsed - brake_held_since >= BRAKE_STALL_S:
+                    log.info("[Stage2] brake held %.1fs -> treating as stall, replanning",
+                             self._clock.elapsed - brake_held_since)
+                    if self._remember_blockage((x, y, yaw), goal):
+                        leg_obstacles = self._plan_obstacles(goal, exclude_m)
+                    force_replan = True
+                    brake_held_since = None
+                    # Same reason as the generic stall path: start the window fresh so it
+                    # does not also fire on this same freeze a few ticks later. pos_history
+                    # is keyed on c.now_s() (see below), NOT self._clock.elapsed -- these are
+                    # two different clocks and must not be mixed.
+                    pos_history.clear()
+                    pos_history.append((c.now_s(), x, y))
+            else:
+                brake_held_since = None
+            braking = danger
 
             c.send_cmd_vel(linear_x=linear, angular_z=angular)
 
@@ -958,9 +1267,28 @@ class DemoParticipant:
 
     # -- run --
 
+    def _setup_tf(self):
+        """Create the tf listener -- must run after client.connect() (rclpy initialised).
+
+        The listener must be kept alive (held as an attribute) or it stops receiving tf
+        broadcasts. Offline harnesses (vla_grounding/validation/stage2_sim.py) never call
+        run(), so there self._tf_buffer stays None and _object_arm_xy uses its pose-math
+        fallback -- identical to the previous behaviour.
+        """
+        try:
+            from tf2_ros import Buffer, TransformListener
+            self._tf_buffer = Buffer()
+            self._tf_listener = TransformListener(self._tf_buffer, self.client.node)
+            log.info("[Stage2] tf2 listener up (world->arm_base_link / camera transforms live)")
+        except Exception as e:
+            log.warning("[Stage2] tf2 unavailable (%s) -- falling back to "
+                        "ARM_BASE_FWD pose math in _object_arm_xy", e)
+            self._tf_buffer = self._tf_listener = None
+
     def run(self):
         if not self.client.connect():
             raise SystemExit("Registration failed -- check the runtime and the token.")
+        self._setup_tf()
         self.client.run()
 
 

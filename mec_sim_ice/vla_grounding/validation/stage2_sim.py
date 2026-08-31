@@ -183,10 +183,15 @@ def run_one(pid, entry, gt, occ, mods, args):
     pick_ret = {}
     _pick = participant_app.run_pick_sequence
 
-    def pick(c, log, grasp_xy=None):
+    def pick(c, log, grasp_xy=None, **kw):
+        # **kw 로 받는다 -- 이 래퍼는 계측만 하고 인자는 그대로 흘려보내는 게 전부인데,
+        # 시그니처를 고정해두면 arm_pick.run_pick_sequence 에 인자가 하나 늘 때마다
+        # (예: object_type, 9d21241) TypeError 가 나고, 그게 participant_app 의 pick 재시도
+        # except 에 삼켜져서 **크래시 없이 전 문항 파지 실패**로만 보인다. 실제로 그렇게
+        # 6/6 -> 0/6 이 나서 주행 회귀로 오해하기 딱 좋았다.
         pick_ret["grasp_xy"] = grasp_xy
         t0 = client.now_s()
-        held = _pick(c, log, grasp_xy)
+        held = _pick(c, log, grasp_xy, **kw)
         pick_ret["held"] = held
         pick_ret["sim_s"] = client.now_s() - t0
         return held
