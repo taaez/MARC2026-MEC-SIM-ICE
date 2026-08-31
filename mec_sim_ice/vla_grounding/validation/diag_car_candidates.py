@@ -3,7 +3,7 @@
 
 Mac 실측(2026-08-29): _open_space_pick() 의 clearance 마진이 3.5m vs 0.9m 로
 압도적이라 하드웨어 수치 차이로 뒤집힐 만큼 근소하지 않다. 그런데도 CUDA
-report(report_cuda.json)에서는 landmark=0 으로 나왔다 -- 즉 clearance
+report(runs/report_cuda.json)에서는 landmark=0 으로 나왔다 -- 즉 clearance
 로직 자체의 문제가 아니라, 그 앞단(YOLO raw 검출)이 CUDA 에서 다르게
 나왔을 가능성이 높다. 이 스크립트는 그 raw 검출을 그대로 찍어서 Mac 과
 바로 대조할 수 있게 한다.
@@ -30,7 +30,7 @@ from grounding import CAR_CLASSES, Detection, GroundingConfig, _landmark_ok, loc
 from run_offline import load_round
 
 _ROOT = os.path.join(_HERE, "..", "..", "..")
-WEIGHTS = os.environ.get("VLA_GROUNDING_DET_WEIGHTS",
+WEIGHTS = os.environ.get("VLA_DET_WEIGHTS",
                          os.path.join(_ROOT, "mec_sim_ice", "demo_agents",
                                       "weights", "best.pt"))
 RECORDS = os.path.join(_ROOT, "mec_sim_ice", "records")

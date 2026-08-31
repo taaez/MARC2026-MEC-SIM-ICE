@@ -61,7 +61,9 @@ Stage1 / Stage2 는 따로 집계한다:
   --answer-key <jsonl>  기본 validation/runs/chungmu_full39_2026-08-25.jsonl
   --scenario <yaml>     기본 vla_grounding/content-image-2026.R03/marc2026_chungmu.yaml
   --conf 0.25 --imgsz 1280
-  --json report.json    리포트를 JSON 으로도 저장 (score_report.py 와 동일 스키마)
+  --json report.json    리포트를 JSON 으로도 저장 (score_report.py 와 동일 스키마).
+                        그냥 파일명이면 validation/runs/ 에 저장된다 (과거 리포트와
+                        같은 자리). 경로를 명시하면 그대로 쓴다.
   --fallback / --no-fallback   DINO/VLM 폴백 강제 on/off. 기본은 **자동**이고, 자동은
                         '라이브와 같게 맞추되 못 돌릴 환경이면 알리고 빠진다' 규칙이다
                         (transformers + 가속기(CUDA/MPS) 있으면 켬, 없으면 끄고 리포트에 명시).
@@ -116,8 +118,22 @@ BORROW_SAMPLES_FALLBACK = 8
 # 디렉토리에서 실행하든 인자 없이 그냥 돌아가게 하려는 것.
 DEFAULT_RECORDS = os.path.join(_MEC_ROOT, "records")
 DEFAULT_WEIGHTS = os.path.join(_MEC_ROOT, "demo_agents", "weights", "best.pt")
-DEFAULT_ANSWER_KEY = os.path.join(_VALIDATION_DIR, "runs",
-                                  "chungmu_full39_2026-08-25.jsonl")
+# 보존할 실행 기록(정답지·과거 리포트)이 모이는 곳. --json 리포트도 여기로 간다.
+RUNS_DIR = os.path.join(_VALIDATION_DIR, "runs")
+DEFAULT_ANSWER_KEY = os.path.join(RUNS_DIR, "chungmu_full39_2026-08-25.jsonl")
+
+
+def resolve_report_path(path: str) -> str:
+    """--json 인자를 리포트 저장 경로로 바꾼다.
+
+    디렉토리 없는 그냥 파일명(``--json report.json``)이면 runs/ 안에 저장한다 --
+    실험 리포트가 실행한 CWD(보통 리포 루트)에 흩어지지 않고 과거 기록들과 한곳에
+    모이도록. 경로를 명시하면(``--json ./x.json``, ``--json /tmp/x.json``) 그대로 쓴다.
+    """
+    if os.path.dirname(path):          # 경로를 명시했으면 존중한다
+        return path
+    os.makedirs(RUNS_DIR, exist_ok=True)
+    return os.path.join(RUNS_DIR, path)
 
 
 def load_answer_key(path: str, scenario: str | None = None) -> dict:
@@ -413,7 +429,10 @@ def main() -> int:
                     help="서브모델 전용 conf (B 와 스케일이 다르다 — evaluate.py 스윕 근거)")
     ap.add_argument("--no-small", action="store_true",
                     help="서브모델 라우팅 없이 B 단독으로 채점 (도입 전과의 비교용)")
-    ap.add_argument("--json", default=None)
+    ap.add_argument("--json", default=None,
+                    help="리포트를 JSON 으로도 저장. 그냥 파일명이면 "
+                         "validation/runs/ 안에 저장하고(과거 리포트와 같은 자리), "
+                         "경로를 명시하면 그대로 쓴다.")
     ap.add_argument("--no-stage2-exec", action="store_true",
                     help="Stage2 실행(주행/집기/배달) 시뮬을 건너뛴다. "
                          "기본은 실행 -- stage2_sim.py 로 participant_app 을 그대로 굴린다")
@@ -841,7 +860,8 @@ def main() -> int:
             # rounds[i]["fields"] 스키마를 다른 곳에서 덮어쓰지 않는다).
             final["stage2_execution"] = s2_summary
 
-    rc = report(scored_rounds, final, args.json)
+    rc = report(scored_rounds, final,
+                resolve_report_path(args.json) if args.json else None)
     if s2_exec:
         print_stage2_execution(s2_exec, s2_summary,
                                final.get("stage2_grounding_average"))

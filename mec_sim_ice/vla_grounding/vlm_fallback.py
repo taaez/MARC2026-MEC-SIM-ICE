@@ -37,7 +37,7 @@ Isaac Sim 과 나눠 쓰는 제약(MARC2026_STAGE1_BRIEF.md §1)에서 이 낭�
 검증 전에는 제출 기본값을 바꾸지 말 것.
 
 기본값 (2026-08-29부터 OFF):
-  chungmu 39라운드 실측(report_fb_fix.json) -- 이 폴백이 켜진 조건에서 39/39
+  chungmu 39라운드 실측(validation/runs/report_fb_fix.json) -- 이 폴백이 켜진 조건에서 39/39
   전부 command_parser 가 닫힌 동의어 사전 안에서 target 을 뽑아, 호출 조건
   (target_type is None)이 단 한 번도 성립하지 않았다. 즉 이 모듈은 39라운드
   내내 0회 호출되면서 모델을 상주시키기만 했다. 켜 둬 봐야 chungmu 에서는

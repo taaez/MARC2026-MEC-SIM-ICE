@@ -98,10 +98,16 @@ POSE_BUCKET_CLASSES = {
     "standing": ("person_walking", "person_walking_away", "person_reaching"),
 }
 
-# Team convention (vla_grounding/RUNBOOK.md): the fine-tuned detector lives at
-# demo/weights/best.pt (received from the training teammate, not in git).
+# Team convention (vla_grounding/RUNBOOK.md, RUNBOOK_record.md): the fine-tuned
+# detector lives at mec_sim_ice/demo_agents/weights/best.pt. _HERE is mec_sim_ice/,
+# so demo_agents/ is a sibling of this file -- the same weights the live
+# vla_grounding pipeline loads (demo_agents/vla_grounding_agent.py:DET_WEIGHTS).
+# (2026-08-31: was "demo/weights/best.pt", a path that never existed after the
+#  repo cleanup moved the team's agents into demo_agents/. It went unnoticed
+#  because the documented collection mode MARC_RECORD_ONLY=1 skips the detector
+#  load entirely -- recording *with* scoring would have failed to find weights.)
 DET_WEIGHTS = os.environ.get("VLA_DET_WEIGHTS",
-                             os.path.join(_HERE, "demo", "weights", "best.pt"))
+                             os.path.join(_HERE, "demo_agents", "weights", "best.pt"))
 DET_IMGSZ = 1280   # CCTV native resolution (1280x720)
 DET_CONF = 0.35
 

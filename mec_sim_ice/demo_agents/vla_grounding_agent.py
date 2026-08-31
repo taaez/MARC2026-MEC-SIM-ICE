@@ -16,8 +16,9 @@ This is the team's Stage 1 implementation: participant_app.py (the default
 entry point) wires it. A separate record-only pipeline (record_agent_vla.py)
 stays available side-by-side via MARC_ENTRYPOINT=participant_app_record.py.
 
-Weights: demo/weights/best.pt -- the team's YOLO detector, classes per
-training/det_classes.py. Override with VLA_GROUNDING_DET_WEIGHTS if needed.
+Weights: demo_agents/weights/best.pt (this file's own directory) -- the team's
+YOLO detector, classes per training/det_classes.py. Override with
+VLA_DET_WEIGHTS if needed (record_agent_vla.py reads the same variable).
 """
 
 import logging
@@ -39,7 +40,7 @@ from vla_grounding.yolo_adapter import infer_cameras, load_detector
 log = logging.getLogger("participant_app")
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-DET_WEIGHTS = os.environ.get("VLA_GROUNDING_DET_WEIGHTS",
+DET_WEIGHTS = os.environ.get("VLA_DET_WEIGHTS",
                              os.path.join(_HERE, "weights", "best.pt"))
 DET_IMGSZ = 1280   # CCTV native resolution (1280x720)
 # 0.35 -> 0.25: 오프라인 실측에서 0.35 는 53.48, 0.25 이하는 57.80 이었다

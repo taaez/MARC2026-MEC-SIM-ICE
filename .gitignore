@@ -19,8 +19,11 @@ simulation-platform/.env
 demo/weights/
 *.pt
 *.pt.bak
-# 채점 결과 원본은 results/(위에서 무시) 에 쌓이고, 보존할 실행만 아래로 복사한다.
-!/mec_sim_ice/vla_grounding/validation/runs/*.jsonl
+# 채점 결과 원본은 results/(위에서 무시) 에 쌓이고, 보존할 실행만
+# mec_sim_ice/vla_grounding/validation/runs/ 로 복사해 커밋한다.
+# (그 폴더에는 별도 예외 규칙이 필요 없다 -- .json/.jsonl 을 무시하는 규칙 자체가
+#  없어서 그냥 커밋된다. 예전에 있던 `!.../runs/*.jsonl` 줄은 아무 일도 하지 않는
+#  no-op 이었는데 마치 그게 있어야 커밋되는 것처럼 읽혀서 지웠다.)
 
 # 2026-08-29 폴더 정리: mec_sim_ice/test/ 를 코드/데이터셋/결과물로 분리하면서
 # 데이터셋·학습 결과물(용량 큼, trainer_output/results 와 같은 성격)은 기존 컨벤션대로 git 밖에 둔다.
