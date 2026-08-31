@@ -64,7 +64,14 @@ def build_gt(scenario_path):
     }
 
 
-def make_occupancy(scenario_path, gt, occupancy_path):
+def make_occupancy(scenario_path, gt, occupancy_path, hide_obstacles=False):
+    """합성 점유지도. `hide_obstacles` 면 장애물을 **지도에 안 넣는다**.
+
+    라이브 점유지도에는 주차 차량이 없다는 게 데스크탑에서 실측으로 확인됐다(로봇이
+    경로상의 차에 그대로 머리를 박는다). 기본 합성 지도는 장애물을 격자에 구워버려서
+    그 상황이 재현되지 않으므로, 이 모드에서는 지도는 비우고 대신 같은 원판을 차체
+    **충돌체**로 넘겨(run_one) 라이브와 같은 조건을 만든다.
+    """
     if occupancy_path and os.path.exists(occupancy_path):
         return load_occupancy(occupancy_path), f"실제 점유지도 {occupancy_path}"
     obstacles = scenario_obstacles(scenario_path)
@@ -73,8 +80,30 @@ def make_occupancy(scenario_path, gt, occupancy_path):
     ys = ([gt["robot_start"][1], gt["owner_position"][1]]
           + [e["target_coord"][1] for _, e in gt["problems"]] + [o[1] for o in obstacles])
     bounds = (min(xs) - 10, min(ys) - 10, max(xs) + 10, max(ys) + 10)
+    if hide_obstacles:
+        return (build_synthetic_grid([], bounds),
+                f"합성 지도 -- **장애물 없음**(라이브 점유지도 재현), "
+                f"장애물 {len(obstacles)}개는 차체 충돌체로만 존재")
     return (build_synthetic_grid(obstacles, bounds),
             f"합성 지도 -- 시나리오 장애물 {len(obstacles)}개, 도로 경계 없음")
+
+
+def colliders_for(gt, obj, args):
+    """이 문항에서 차체가 실제로 못 뚫는 원판 목록.
+
+    출발점/대상/owner 를 품는 원판은 뺀다 -- 그건 애초에 풀 수 없는 문항이라
+    "정체 기억이 우회를 만드는가" 라는 질문과 무관한 실패가 되기 때문이다.
+    """
+    if not getattr(args, "hidden_obstacles", False):
+        return []
+    keep, start = [], gt["robot_start"]
+    anchors = [(obj[0], obj[1]), (gt["owner_position"][0], gt["owner_position"][1]),
+               (start[0], start[1])]
+    for (ox, oy, orad) in gt.get("colliders", []):
+        if any(math.hypot(ax - ox, ay - oy) <= float(orad) + 1.0 for ax, ay in anchors):
+            continue
+        keep.append((ox, oy, orad))
+    return keep
 
 
 def run_one(pid, entry, gt, occ, mods, args):
@@ -93,6 +122,7 @@ def run_one(pid, entry, gt, occ, mods, args):
         capture_radius=args.capture_radius,
         arm_base_fwd=participant_app.ARM_BASE_FWD,
         sim_time_cap=args.sim_cap, stall_rule=not args.no_stall_rule,
+        colliders=colliders_for(gt, obj, args),
     )
     fake_client.set_current_client(client)
     fake_client.patch_sim_clock(client)
@@ -202,6 +232,7 @@ def run_one(pid, entry, gt, occ, mods, args):
         "task_complete": client.task_completed,
         "hit_cap": client.hit_time_cap,
         "stall_ticks": client.chassis.stall_ticks,
+        "blocked_ticks": client.chassis.blocked_ticks,
         "clamped": client.chassis.clamped,
         "travelled_m": client.chassis.dist_travelled,
         "max_joint_lag": client.arm.max_joint_lag,
@@ -210,7 +241,7 @@ def run_one(pid, entry, gt, occ, mods, args):
 
 def run_execution(scenario=DEFAULT_SCENARIO, occupancy=None, problem=None,
                   hint_noise=0.0, capture_radius=None, sim_cap=1800.0,
-                  stall_rule=True, fix_approach_cap=False,
+                  stall_rule=True, fix_approach_cap=False, hidden_obstacles=False,
                   progress=True, header=False):
     """rt 문항들을 participant_app 그대로 실행하고 `(rows, info)` 를 돌려준다.
 
@@ -220,14 +251,21 @@ def run_execution(scenario=DEFAULT_SCENARIO, occupancy=None, problem=None,
         capture_radius=(fake_client.GRASP_CAPTURE_RADIUS_M if capture_radius is None
                         else float(capture_radius)),
         sim_cap=float(sim_cap), no_stall_rule=not stall_rule,
-        fix_approach_cap=bool(fix_approach_cap), hint_noise=float(hint_noise))
+        fix_approach_cap=bool(fix_approach_cap), hint_noise=float(hint_noise),
+        hidden_obstacles=bool(hidden_obstacles))
 
     gt = build_gt(scenario)
     if problem:
         gt["problems"] = [(p, e) for p, e in gt["problems"] if p == problem]
         if not gt["problems"]:
             raise LookupError(f"그런 retrieval 문항이 없다: {problem}")
-    occ, occ_label = make_occupancy(scenario, gt, occupancy)
+    occ, occ_label = make_occupancy(scenario, gt, occupancy, hide_obstacles=hidden_obstacles)
+    gt["colliders"] = scenario_obstacles(scenario) if hidden_obstacles else []
+
+    # 이 하네스가 쏘는 reveal 은 가짜다(hint_center = GT, hint_radius 고정). 앱의
+    # reveal 기록(MARC_REVEAL_LOG)은 **라이브 hint 오차 실측용** 파일이므로, 여기서
+    # 다른 경로로 돌려 실측치가 시뮬 값으로 오염되지 않게 한다.
+    os.environ["MARC_REVEAL_LOG"] = "./results/stage2_reveals_SIM.jsonl"
 
     # shim 을 먼저 깔고 나서야 participant_app 을 import 할 수 있다.
     marc_types, _nav = fake_client.install_shims()
@@ -343,6 +381,10 @@ def main() -> int:
                     help="후보 수정안 A/B -- _approach_straight 가 내보내는 cmd_vel 에 "
                          "GoalSeekController 와 같은 Ackermann 상한(w<=1.8v/T)을 씌워본다. "
                          "participant_app.py 는 수정하지 않는다")
+    ap.add_argument("--hidden-obstacles", action="store_true",
+                    help="라이브 재현 -- 장애물을 점유지도에서 빼고 차체 충돌체로만 둔다. "
+                         "점유지도에 주차 차량이 없다는 실측을 반영한다(로봇이 차에 "
+                         "머리를 박는 그 상황)")
     ap.add_argument("--no-stall-rule", action="store_true",
                     help="대조군 -- Ackermann 무효명령(2v<=wT) 정지 규칙을 끈다. "
                          "이 규칙이 결론을 만들어낸 게 아닌지 확인할 때")
@@ -357,7 +399,8 @@ def main() -> int:
             scenario=args.scenario, occupancy=args.occupancy, problem=args.problem,
             hint_noise=args.hint_noise, capture_radius=args.capture_radius,
             sim_cap=args.sim_cap, stall_rule=not args.no_stall_rule,
-            fix_approach_cap=args.fix_approach_cap, progress=True, header=True)
+            fix_approach_cap=args.fix_approach_cap,
+            hidden_obstacles=args.hidden_obstacles, progress=True, header=True)
     except LookupError as e:
         print(e)
         return 1
