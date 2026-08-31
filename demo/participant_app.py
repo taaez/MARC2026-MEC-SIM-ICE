@@ -36,6 +36,7 @@ import math
 import os
 import threading
 import time
+from collections import deque
 
 from marc_sdk import MARCClient
 
@@ -63,8 +64,20 @@ STAGE2_NAV_TIMEOUT_S = 1800.0
 STAGE2_NAV_RATE_HZ = 10.0
 STAGE2_NAV_DT = 1.0 / STAGE2_NAV_RATE_HZ
 STAGE2_INFLATION_M = 0.25      # erode free by the robot radius (avoids road<->grass step stalls)
-STAGE2_STUCK_TIME_S = 8.0      # if movement < threshold for this long, replan from the current pose
-STAGE2_STUCK_MOVE_M = 0.05
+# Stall test: total displacement over a trailing STAGE2_STUCK_TIME_S-second window must
+# exceed STAGE2_STUCK_MOVE_M, or it is a stall. This used to compare consecutive ticks
+# (0.1s apart) instead of a window -- since GoalSeekController's decel is
+# linear=clamp(K_LINEAR*dist, ...) with K_LINEAR=0.5, speed drops under
+# STAGE2_STUCK_MOVE_M/STAGE2_NAV_DT = 0.5 m/s the moment dist < 1.0m, so *every* tick of a
+# normal, correctly-progressing final approach could fail that single-tick test and the
+# stall clock would never reset. Chained short in-place rotations (heading_err > 45deg,
+# linear=0 -- exactly 0 m/tick) between frequent lidar replans compound this: none of them
+# individually looks stuck, but nothing between them resets the old per-tick check either.
+# Measured live: this fired mid-lidar-replan-burst on rt02 while the chassis was still
+# making net progress. A window fixes both: slow-but-real progress accumulates past the
+# threshold, and a genuinely stationary chassis still gets caught after the same 8s.
+STAGE2_STUCK_TIME_S = 8.0      # trailing window length (s) -- see above; not independently tuned
+STAGE2_STUCK_MOVE_M = 0.05     # total displacement (m) required within that window
 GOAL_TOLERANCE = 0.7           # reached test (m)
 
 # -- Stall memory: obstacle evidence without a sensor --
@@ -755,8 +768,8 @@ class DemoParticipant:
         snap = max(1.0, float(tol)) if snap_m is None else float(snap_m)
         tick = 0
 
-        last_xy = None
-        last_progress_t = c.now_s()
+        # Sliding window of (t, x, y) for the stall test -- see STAGE2_STUCK_TIME_S above.
+        pos_history = deque()
         last_log_t = 0.0
         reached_goal = False
 
@@ -806,18 +819,29 @@ class DemoParticipant:
                              self._lidar_layer.stats()["blocked_area_m2"])
                     leg_obstacles = self._plan_obstacles(goal, exclude_m)
                     need_replan = True
-            if last_xy is not None:
-                if math.hypot(x - last_xy[0], y - last_xy[1]) > STAGE2_STUCK_MOVE_M:
-                    last_progress_t = c.now_s()
-                elif c.now_s() - last_progress_t > STAGE2_STUCK_TIME_S:
-                    log.info("[Stage2] stall detected -> replanning")
+            # Trim the window to the trailing STAGE2_STUCK_TIME_S seconds -- keep popping
+            # while the *second* entry is still old enough, so pos_history[0] ends up as the
+            # oldest sample that is >= the window length old (or the very first sample this
+            # leg has seen, if the leg hasn't run that long yet).
+            now_t = c.now_s()
+            pos_history.append((now_t, x, y))
+            while len(pos_history) >= 2 and now_t - pos_history[1][0] >= STAGE2_STUCK_TIME_S:
+                pos_history.popleft()
+            if now_t - pos_history[0][0] >= STAGE2_STUCK_TIME_S:
+                moved = math.hypot(x - pos_history[0][1], y - pos_history[0][2])
+                if moved <= STAGE2_STUCK_MOVE_M:
+                    log.info("[Stage2] stall detected (%.3fm over %.1fs) -> replanning",
+                             moved, now_t - pos_history[0][0])
                     # Replanning on an unchanged map returns the same path, so record what
                     # we just stopped against before asking for a new one.
                     if self._remember_blockage((x, y, yaw), goal):
                         leg_obstacles = self._plan_obstacles(goal, exclude_m)
                     need_replan = True
-                    last_progress_t = c.now_s()
-            last_xy = (x, y)
+                    # Start a fresh window from here -- otherwise the very next tick sees
+                    # the same near-zero displacement over the same stale window and fires
+                    # again immediately, on top of whatever replan just happened.
+                    pos_history.clear()
+                    pos_history.append((now_t, x, y))
 
             if need_replan:
                 if not planner.ready:
