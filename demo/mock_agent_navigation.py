@@ -323,6 +323,21 @@ class OccupancyGridPlanner:
 
     # -- internal helpers --
 
+    def is_free(self, x, y):
+        """월드 점이 점유지도 상 자유공간(원시 셀값 0)인가.
+
+        `extra_obstacles`/inflation 은 모른다 -- 계획용이 아니라, waypoint_avoid.relocate()
+        가 원 둘레 우회의 어느 쪽이 도로 밖(잔디·벽)으로 나가는지 고를 때 쓴다. 범위
+        밖/미탐사 셀은 자유공간이 아닌 것으로 본다 -- 안 보이는 셀을 안전한 우회로
+        취급하면 안 되므로 보수적으로 막힌 쪽으로 판정한다.
+        """
+        if not self.ready:
+            return True   # 격자가 아직 없으면 판단 근거가 없다 -- 막지 않는다
+        r, c = self._w2c(x, y)
+        if not self._in_bounds(r, c):
+            return False
+        return bool(self._grid[r, c] == 0)
+
     def _in_bounds(self, r, c):
         return 0 <= r < self._h and 0 <= c < self._w
 
@@ -498,3 +513,29 @@ def obstacles_excluding_goal(obstacles, goal_xy, exclude_m=0.6):
             continue
         out.append((x, y, r))
     return out
+
+
+def nearest_only_exclude(obstacles, goal_xy, search_m):
+    """목표 근방에서 가장 가까운 장애물 **하나만** 제외한다 (전부가 아니라).
+
+    `obstacles_excluding_goal()` 은 `search_m` 안의 것을 전부 지운다 -- 목표 지점
+    자체의 크기만큼 좁은 반경이면 맞는 동작이지만, `search_m` 을 위치 불확실성
+    (reveal 의 hint_radius) 만큼 넓혀야 하면 그 반경 안의 다른 모든 것 -- 대상 물체가
+    기대어 있는 기둥·벤치 같은 랜드마크까지 -- 같이 사라진다. 장애물이 이미
+    개체 단위 원(클러스터)으로 들어와 있다면, 목표와 안 붙어 있는 것들은 애초에
+    별개의 원이므로 목표에 가장 가까운 원 하나만 "이게 목표 자체"로 보고 빼면 되고
+    나머지는 그대로 회피 대상으로 남겨도 목표 도달 가능성이 깨지지 않는다.
+
+    목표 물체와 랜드마크가 맞닿아 하나의 원으로 합쳐진 경우(우산이 기둥에 기댄 등)는
+    이 함수로 못 푼다 -- 그 원의 중심이 랜드마크 쪽으로 끌려가 있으면 이 원마저
+    회피 대상으로 남아 진입로가 막힐 수 있다. 알려진 한계이며, 라이브에서 관측되면
+    그때 클러스터 내부의 목표 인근 셀만 떼어내는 부분 제외로 확장한다.
+    """
+    gx, gy = float(goal_xy[0]), float(goal_xy[1])
+    search2 = float(search_m) ** 2
+    best_i, best_d2 = None, search2
+    for i, (x, y, _r) in enumerate(obstacles):
+        d2 = (x - gx) ** 2 + (y - gy) ** 2
+        if d2 <= best_d2:
+            best_i, best_d2 = i, d2
+    return [o for i, o in enumerate(obstacles) if i != best_i]

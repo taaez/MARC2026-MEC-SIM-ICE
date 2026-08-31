@@ -45,7 +45,7 @@ from marc_sdk import MARCClient
 from vla_grounding_agent import VLAGroundingAgent
 from mock_agent_navigation import (
     OccupancyGridPlanner, PathFollower, GoalSeekController,
-    cap_angular, obstacles_excluding_goal,
+    cap_angular, obstacles_excluding_goal, nearest_only_exclude,
 )
 # Closed-loop placo pick from the manipulation kit (arm_pick.py): grasp_yaw wrist-roll +
 # DLS servo, targeting the object position. Requires placo (installed in the demo image).
@@ -56,6 +56,14 @@ from manipulation import transform_via_tf2
 # Lidar obstacle layer -- the occupancy map holds static road only, so parked vehicles and
 # the like have to be sensed. See mec_sim_ice/demo_agents/lidar_obstacles.py.
 from lidar_obstacles import LidarObstacleLayer
+# Waypoint-circle reroute -- bends only the path segments an obstacle circle actually
+# crosses, in place, no A*/follower cycle. See mec_sim_ice/demo_agents/waypoint_avoid.py.
+from waypoint_avoid import relocate
+# Depth-camera ghost-wall veto -- clears lidar cells the front depth camera confirms as
+# floor this frame, correcting the rotation-induced ground misclassification the lidar
+# layer's own single-percentile estimate cannot avoid. See
+# mec_sim_ice/demo_agents/depth_ground_veto.py.
+import depth_ground_veto
 
 log = logging.getLogger("participant_app")
 
@@ -141,6 +149,12 @@ BLOCKAGE_RADIUS_M = 0.6                  # wider than the chassis, so A* must ro
 BLOCKAGE_GROWTH_M = 0.4                  # stalled inside a known blockage -> it was too small
 BLOCKAGE_MAX_RADIUS_M = 2.0              # cap, so a bad mark cannot wall off the map
 
+# Waypoint-circle reroute (see waypoint_avoid.relocate) -- tried before a full A* replan
+# when a new lidar cluster crosses the remaining path. inflation_m (the leg's own A* erosion
+# radius) is already the robot-radius clearance; a touch more accounts for the follower's
+# P-control not tracking the bent path exactly (it cuts corners toward the next waypoint).
+RELOCATE_MARGIN_M = 0.10
+
 # -- Pick approach --
 # Stop the chassis this far (m) in front of the object, then close the last stretch with a
 # straight approach (the planner cannot enter a tight spot fully). Avoids driving over the object.
@@ -154,6 +168,15 @@ ARM_BASE_FWD = 0.18
 # so the gripper closes around its body (a small backoff grabbed only the edge -> dropped in
 # transit), tuned slightly forward for a secure grip.
 GRASP_FWD_BACKOFF = -0.01
+# Depth-refinement distractor window (m): only raised pixels within this radius of the
+# nav-estimated object position count. Wide enough to absorb hint_center error at pick
+# range (~0.5m observed), narrow enough to exclude the bulk of a parked car / vending
+# machine sharing the frame. See _locate_object_by_depth.
+DEPTH_EXPECT_WINDOW_M = 0.5
+# Arm forward reach cap (m) -- the offline harness scores reach against 0.75; command a
+# grasp beyond it and the descend waypoint just times out "unreached" and the gripper
+# closes wherever the servo stalled (a silent air-grab). Clamp with a loud warning instead.
+ARM_REACH_FWD_M = 0.72
 
 # Retry budget for a failed pick (empty grasp, or grasped but missed the rear basket on place).
 MAX_PICK_ATTEMPTS = 3
@@ -241,6 +264,9 @@ class DemoParticipant:
         # Stage 2 pickup goal -- filled from the approximate location hint in the reveal (msg 411).
         # If not received, fall back to the Stage 2 answer target (_stage2_target_xy).
         self._collect_xy = None
+        # Ground z at the pick site (reveal hint_center[2]) -- see _on_stage2_reveal for
+        # why _object_arm_xy must not hand tf2 a z=0 point on this terrain.
+        self._collect_z = 0.0
         # Object type from the same reveal -- selects a pnp_params.json override in run_pick_sequence()
         # (see arm_pick.load_params()), since one grasp/threshold set doesn't fit every object shape.
         self._target_type = None
@@ -280,6 +306,13 @@ class DemoParticipant:
         # Base_LiDAR -> chassis mount offset (dx, dy). Static, so tf is asked once per run;
         # (0, 0) (sensor above the chassis origin) when tf cannot supply it.
         self._lidar_mount_xy = (0.0, 0.0)
+        # base_link -> Base_Camera_Center mount rotation/translation, for depth_ground_veto.
+        # Static (chassis-mounted, not arm-mounted), so tf is asked once per run -- same
+        # reasoning as _lidar_mount_xy above, but a full rotation is needed (not just dx,dy)
+        # since the camera is tilted to see the floor ahead. None -> veto is skipped for the
+        # whole run (lidar-only fallback, unaffected).
+        self._cam_mount_R = None
+        self._cam_mount_t = None
         # Consecutive lidar update failures. Only a *sustained* failure (LIDAR_MAX_CONSEC_FAILS
         # in a row) disables the layer -- see _update_lidar_layer for why a one-shot disable
         # is dangerous.
@@ -410,6 +443,13 @@ class DemoParticipant:
         self._target_type = reveal.target_type or None
         if reveal.hint_center and len(reveal.hint_center) >= 2:
             self._collect_xy = (float(reveal.hint_center[0]), float(reveal.hint_center[1]))
+            # Ground z at the pick site. chungmu terrain sits at world z~16.3-16.7, so a
+            # transform of (x, y, 0.0) would hand tf2 a point ~16m under the ground -- any
+            # non-yaw tilt in the target frame then leaks that huge z error into (fwd, lat)
+            # (1deg of tilt x 16m = 0.29m). Latent today (world->arm_base_link never
+            # resolves, see _object_arm_xy), but armed the moment that tf ever connects.
+            if len(reveal.hint_center) >= 3:
+                self._collect_z = float(reveal.hint_center[2])
         try:
             # 0.0 is not a usable radius -- treat it as "not stated" and fall back.
             self._hint_radius = float(reveal.hint_radius) or None
@@ -450,6 +490,7 @@ class DemoParticipant:
         # from the previous round is not evidence about this one.
         self._lidar_layer = LidarObstacleLayer()
         self._lidar_mount_xy = self._lidar_mount_offset()
+        self._cam_mount_R, self._cam_mount_t = self._camera_mount_transform()
 
         # Top-heavy robot tip-over prevention: fold the arm to HOME before driving -> lower CoG.
         self._stow_arm()
@@ -489,12 +530,21 @@ class DemoParticipant:
                 break
             try:
                 grasp_xy = self._object_arm_xy(collect_xy)   # actual object position in the arm_base frame
-                depth_xy = self._locate_object_by_depth()    # camera+depth refinement, if available
+                # camera+depth refinement, if available -- anchored to the nav estimate so a
+                # distractor sharing the frame cannot drag the grasp point (see the method).
+                depth_xy = self._locate_object_by_depth(expected_xy=grasp_xy)
                 if depth_xy is not None:
                     log.info("[Stage2] depth refinement grasp=%s (nav estimate was %s)",
                              tuple(round(v, 3) for v in depth_xy),
                              tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None)
                     grasp_xy = depth_xy
+                if grasp_xy is not None and grasp_xy[0] > ARM_REACH_FWD_M:
+                    # Beyond reach the descend waypoint just times out "unreached" and the
+                    # gripper closes mid-air wherever the servo stalled -- surface it loudly.
+                    log.warning("[Stage2] grasp fwd %.2fm exceeds arm reach %.2fm -- "
+                                "clamping (approach probably stopped short; pick may miss)",
+                                grasp_xy[0], ARM_REACH_FWD_M)
+                    grasp_xy = (ARM_REACH_FWD_M, grasp_xy[1])
                 log.info("[Stage2] object pick sequence attempt %d/%d (object-position grasp=%s, type=%s)",
                          attempt, MAX_PICK_ATTEMPTS,
                          tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None, self._target_type)
@@ -597,7 +647,11 @@ class DemoParticipant:
         """
         if self._tf_buffer is not None:
             try:
-                fwd, lat = transform_via_tf2(self._tf_buffer, (obj_xy[0], obj_xy[1], 0.0))
+                # NOTE: the z here must be the real ground height (reveal hint_center[2]),
+                # NOT 0.0 -- chungmu ground sits at world z~16.5, and a point 16m below
+                # ground leaks into (fwd, lat) through any tilt in the transform.
+                fwd, lat = transform_via_tf2(
+                    self._tf_buffer, (obj_xy[0], obj_xy[1], self._collect_z))
                 return (fwd - GRASP_FWD_BACKOFF, lat)
             except Exception as e:
                 log.warning("[Stage2] tf2 world->arm_base_link transform failed: %s "
@@ -660,8 +714,13 @@ class DemoParticipant:
         gxy = self._object_arm_xy(obj_xy)
         log.info("[Stage2] align done -- object arm coords %s",
                  tuple(round(v, 3) for v in gxy) if gxy else None)
-    def _locate_object_by_depth(self):
+    def _locate_object_by_depth(self, expected_xy=None):
         """Refine the pick point using the base camera's own depth (floor-height segmentation).
+
+        expected_xy: nav-estimated (fwd, lat) of the object in the arm_base frame. When
+        given, only raised pixels within DEPTH_EXPECT_WINDOW_M of it count -- distractor
+        rejection that needs no scipy and no identity model (see the candidate filter
+        below for why "largest blob" is the wrong rule on exactly the frames that matter).
 
         _object_arm_xy() gets the chassis into the right neighborhood from the (approximate,
         per SDK docs) reveal hint_center; this looks at what the base camera actually sees
@@ -749,6 +808,25 @@ class DemoParticipant:
         candidate = valid & (up > floor_z + 0.03) & (fwd > 0.0) & (fwd < 1.2)
         n_cand = int(np.sum(candidate))
         if n_cand < 20:
+            return None
+
+        if expected_xy is not None:
+            # Distractor rejection anchored to the nav estimate. "Largest blob" -- and,
+            # with scipy absent (true on the live host), the even blunter fallback of
+            # averaging EVERY raised pixel in frame -- gets dragged by whatever else is
+            # raised in view: the parked car on rt01, the vending machine on rt03.
+            # Those are exactly the frames where this refinement matters most. The nav
+            # estimate is only hint-grade, but the window merely has to exclude *other*
+            # objects, not be precise. Nothing near the estimate -> None (callers keep
+            # the nav estimate), never a polluted average.
+            ef, el = float(expected_xy[0]), float(expected_xy[1])
+            near = candidate & ((fwd - ef) ** 2 + (lat - el) ** 2
+                                <= DEPTH_EXPECT_WINDOW_M ** 2)
+            if int(np.sum(near)) >= 20:
+                return (float(np.mean(fwd[near])), float(np.mean(lat[near])))
+            log.info("[Stage2] depth refinement: no raised blob within %.2fm of the nav "
+                     "estimate (%d raised px elsewhere in frame) -- keeping the nav "
+                     "estimate", DEPTH_EXPECT_WINDOW_M, n_cand)
             return None
 
         try:
@@ -857,17 +935,26 @@ class DemoParticipant:
         assumes the sensor sits above the chassis origin; that is a few centimetres of
         error on a 0.25 m grid, which is why a failure here only degrades accuracy instead
         of disabling the layer.
+
+        Frame reality (probed live, 2026-09-01): the tf forest is split in two -- the
+        chassis frame is `car_base_link` (there is NO `base_link`), and every sensor hangs
+        under `arm_base_link`, which has no edge to the world/car tree at all. So the only
+        resolvable transform is `arm_base_link -> Base_LiDAR`; the arm_base->chassis leg is
+        bridged with the same ARM_BASE_FWD forward-offset assumption _object_arm_xy's
+        fallback already relies on (one shared assumption, not a second independent one).
         """
         if self._tf_buffer is None:
             return (0.0, 0.0)
         try:
             import rclpy
             tf = self._tf_buffer.lookup_transform(
-                "base_link", "Base_LiDAR", rclpy.time.Time(),
+                "arm_base_link", "Base_LiDAR", rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=1.0))
             t = tf.transform.translation
-            log.info("[Stage2] lidar mount offset from tf: (%.3f, %.3f)", t.x, t.y)
-            return (float(t.x), float(t.y))
+            dx, dy = float(t.x) + ARM_BASE_FWD, float(t.y)
+            log.info("[Stage2] lidar mount offset from tf (arm_base + ARM_BASE_FWD): "
+                     "(%.3f, %.3f)", dx, dy)
+            return (dx, dy)
         except Exception as e:
             log.info("[Stage2] lidar mount offset unavailable (%s) -- assuming (0, 0)", e)
             return (0.0, 0.0)
@@ -904,6 +991,84 @@ class DemoParticipant:
                 self._lidar_layer = None
             return 0
 
+    def _camera_mount_transform(self):
+        """chassis -> Base_Camera_Center (R, t) from tf, or (None, None) if unavailable.
+
+        Static transform, read once per run -- same reasoning as _lidar_mount_offset, but
+        a full rotation is needed here (not just dx, dy) since the camera is tilted to see
+        the floor ahead. None -> depth ghost-veto is skipped for the whole run; the lidar
+        layer works unaffected (this is a correction on top of it, not a dependency).
+
+        Frame reality (probed live, 2026-09-01): there is no `base_link`, and the sensors
+        hang under `arm_base_link`, which is disconnected from the world/car tree. So this
+        resolves `arm_base_link -> Base_Camera_Center` (which does exist) and bridges
+        arm_base->chassis with the ARM_BASE_FWD forward offset, assuming no relative
+        rotation -- the exact assumption _object_arm_xy's pose-math fallback already makes.
+        A ~0.1-0.2m residual mount error is fine here: the veto clears 0.25m grid cells in
+        patches, not point-precise geometry.
+        """
+        if self._tf_buffer is None:
+            return None, None
+        try:
+            import rclpy
+            tf = self._tf_buffer.lookup_transform(
+                "arm_base_link", "Base_Camera_Center", rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=1.0))
+        except Exception as e:
+            log.info("[Stage2] camera mount transform unavailable (%s) -- "
+                     "depth ghost-veto off", e)
+            return None, None
+        tr, rot = tf.transform.translation, tf.transform.rotation
+        R = depth_ground_veto.quat_to_rotmat(rot.x, rot.y, rot.z, rot.w)
+        t = np.array([tr.x + ARM_BASE_FWD, tr.y, tr.z])
+        log.info("[Stage2] camera mount transform acquired (arm_base + ARM_BASE_FWD) -- "
+                 "depth ghost-veto active")
+        return R, t
+
+    def _update_depth_veto(self, pose):
+        """Clear lidar cells the front depth camera confirms as floor this frame.
+
+        See depth_ground_veto.py for why this fixes what the lidar layer's own ground
+        estimate cannot: a single frame's plane fit does not accumulate the per-azimuth
+        error that makes rotation a ghost-wall generator for a 360-degree sweep.
+
+        Every failure mode here (no tf, no depth topic yet, camera_info/depth size
+        mismatch, a raw exception) returns 0 silently -- this is a correction layered on
+        top of an already fail-tolerant lidar layer, not a dependency it needs to keep
+        working.
+        """
+        if self._lidar_layer is None or self._cam_mount_R is None:
+            return 0
+        c = self.client
+        try:
+            from sensor_msgs.msg import CameraInfo
+        except Exception:
+            return 0
+        depth_msg = c.get_robot_depth("base")
+        if depth_msg is None:
+            return 0
+        if self._depth_cam_info_sub is None:
+            def _on_depth_info(msg):
+                self._depth_cam_info = msg
+            self._depth_cam_info_sub = c.subscribe(
+                c.topics.robot("base_camera/depth/info"), CameraInfo, _on_depth_info)
+        info = self._depth_cam_info
+        if info is None or (info.width, info.height) != (depth_msg.width, depth_msg.height):
+            return 0
+        try:
+            h, w = depth_msg.height, depth_msg.width
+            depth = np.frombuffer(depth_msg.data, dtype=np.float32).reshape(h, w)
+            K = np.array(info.k, dtype=np.float64).reshape(3, 3)
+            pts = depth_ground_veto.confirmed_floor_world_xy(
+                depth, K, self._cam_mount_R, self._cam_mount_t, pose)
+        except Exception as e:
+            log.warning("[Stage2] depth ghost-veto frame failed: %s: %s", type(e).__name__, e)
+            return 0
+        cleared = self._lidar_layer.veto_free(pts)
+        if cleared:
+            log.info("[Stage2] depth ghost-veto: cleared %d cell(s)", cleared)
+        return cleared
+
     def _plan_obstacles(self, goal, exclude_m):
         """Everything the planner should route around on this leg.
 
@@ -934,6 +1099,23 @@ class DemoParticipant:
         lidar_discs = obstacles_excluding_goal(lidar_discs, goal, exclude_m=exclude_m)
         memory = obstacles_excluding_goal(self._obstacles, goal, exclude_m=BLOCKAGE_RADIUS_M)
         return lidar_discs + memory
+
+    def _plan_circles(self, goal, exclude_m):
+        """Obstacles as one circle per object -- for the waypoint-circle reroute (relocate()).
+
+        Uses `clusters()` (one circle per connected blob) instead of `discs()` (one circle
+        per cell). That is what makes a narrower goal exemption possible: `_plan_obstacles`
+        above has to drop *everything* within `exclude_m` of the goal, because a lidar disc
+        carries no identity -- there is no way to tell "this cell is the target object" from
+        "this cell is the post it leans against" without also erasing the post. A cluster
+        does carry identity (it is already one physical blob), so only the cluster nearest
+        the goal needs exempting -- see `nearest_only_exclude`'s own docstring for the one
+        case this still cannot separate (target and landmark fused into a single blob).
+        """
+        circles = list(self._lidar_layer.clusters()) if self._lidar_layer is not None else []
+        circles = nearest_only_exclude(circles, goal, search_m=exclude_m)
+        memory = obstacles_excluding_goal(self._obstacles, goal, exclude_m=BLOCKAGE_RADIUS_M)
+        return circles + memory
 
     def _remember_blockage(self, pose, goal):
         """Mark the spot the chassis just stalled against, so the replan routes around it.
@@ -981,6 +1163,23 @@ class DemoParticipant:
                  bx, by, BLOCKAGE_RADIUS_M, len(self._obstacles))
         return True
 
+    def _reverse_escape(self, duration_s=1.5, speed=0.2):
+        """Back straight up briefly -- recovery for a chassis physically wedged in front.
+
+        Marking blockages and replanning assume the chassis can still execute commands;
+        a wedged chassis cannot (measured live: 75s of linear=0.8 with a frozen pose).
+        Reversing is the one motion a front-wedged chassis can still make, and the space
+        just behind is the robot's own freshly traversed track -- the best-known-clear
+        direction available without any sensing. Deliberately short: unjam, stop, and let
+        the normal plan loop take over from the new pose.
+        """
+        c = self.client
+        t_end = self._clock.elapsed + duration_s
+        while c.is_running and self._clock.tick() < t_end:
+            c.send_cmd_vel(linear_x=-speed, angular_z=0.0)
+            c.sleep(STAGE2_NAV_DT)
+        c.send_cmd_vel(0.0, 0.0)
+
     def _navigate_to(self, goal, deadline, tol=GOAL_TOLERANCE,
                      inflation_m=STAGE2_INFLATION_M, exclude_m=0.6, cruise=False,
                      snap_m=None):
@@ -1021,6 +1220,8 @@ class DemoParticipant:
         brake_held_since = None   # elapsed-clock value; see BRAKE_STALL_S
         closing_logged = False    # edge-tracked so the precise-close log fires once, not every tick
         force_replan = False      # set by the brake-stall escalation below, consumed next tick
+        last_cmd = (0.0, 0.0)     # (linear, angular) sent last tick -- for the lidar rotation gate
+        last_stall_xy = None      # where the previous stall fired -- repeat at the same spot = wedged
 
         while c.is_running and self._clock.tick() < deadline:
             pose = c.get_world_pose()
@@ -1032,7 +1233,18 @@ class DemoParticipant:
             # Sense before hitting anything. The stall path below only reacts after contact.
             new_cells = 0
             if tick % LIDAR_UPDATE_EVERY_TICKS == 0:
-                new_cells = self._update_lidar_layer(pose)
+                # Rotation gate: the layer's sweep-wide single-percentile ground estimate
+                # misfires per-azimuth while the chassis spins in place, so rotation is a
+                # ghost generator (its own MAX_RANGE_M note; measured live 2026-09-01
+                # 06:00-06:02: blocked_area exploded to 56 m2 during a replanning spin,
+                # relocate failed on every side and A* went unplannable while the chassis
+                # sat wedged). Skip *accumulating* sweeps while the last command was a
+                # pure spin -- nothing is being approached during a spin, so the safety
+                # cost is nil. The veto below only clears cells, so it always runs.
+                spinning = last_cmd[0] < 0.05 and abs(last_cmd[1]) > 0.3
+                if not spinning:
+                    new_cells = self._update_lidar_layer(pose)
+                self._update_depth_veto(pose)
 
             dist = math.hypot(goal[0] - x, goal[1] - y)
             if dist < tol:
@@ -1077,12 +1289,30 @@ class DemoParticipant:
             if new_cells and follower is not None and self._lidar_layer is not None:
                 remaining = follower.path[follower.idx:]
                 if self._lidar_layer.blocks_path(remaining, start_xy=(x, y)):
-                    log.info("[Stage2] lidar: %d new cell(s) across the remaining path "
-                             "-> replanning (%d blocked, %.1f m2)", new_cells,
-                             self._lidar_layer.stats()["blocked_cells"],
-                             self._lidar_layer.stats()["blocked_area_m2"])
-                    leg_obstacles = self._plan_obstacles(goal, exclude_m)
-                    need_replan = True
+                    # Try bending just the crossed segment(s) around the obstacle's circle
+                    # first -- no grid refresh / A* / follower swap, so it lands this same
+                    # tick instead of waiting a full replan cycle (see waypoint_avoid.py).
+                    # margin_m mirrors this leg's own A* erosion (inflation_m) plus a touch
+                    # of slack for the follower's corner-cutting P-control.
+                    circles = self._plan_circles(goal, exclude_m)
+                    rerouted = relocate(
+                        [(x, y)] + remaining, circles,
+                        margin_m=inflation_m + RELOCATE_MARGIN_M,
+                        is_free=planner.is_free if planner.ready else None)
+                    if rerouted is not None:
+                        follower.path[follower.idx:] = rerouted[1:]
+                        log.info("[Stage2] lidar: %d new cell(s) -> rerouted %d waypoint(s) "
+                                 "around obstacle circle(s) (%d blocked, %.1f m2)", new_cells,
+                                 len(rerouted) - 1,
+                                 self._lidar_layer.stats()["blocked_cells"],
+                                 self._lidar_layer.stats()["blocked_area_m2"])
+                    else:
+                        log.info("[Stage2] lidar: %d new cell(s) -- circle reroute blocked "
+                                 "on both sides -> full replan (%d blocked, %.1f m2)",
+                                 new_cells, self._lidar_layer.stats()["blocked_cells"],
+                                 self._lidar_layer.stats()["blocked_area_m2"])
+                        leg_obstacles = self._plan_obstacles(goal, exclude_m)
+                        need_replan = True
             # Trim the window to the trailing STAGE2_STUCK_TIME_S seconds -- keep popping
             # while the *second* entry is still old enough, so pos_history[0] ends up as the
             # oldest sample that is >= the window length old (or the very first sample this
@@ -1096,6 +1326,18 @@ class DemoParticipant:
                 if moved <= STAGE2_STUCK_MOVE_M:
                     log.info("[Stage2] stall detected (%.3fm over %.1fs) -> replanning",
                              moved, now_t - pos_history[0][0])
+                    # A SECOND stall at (nearly) the same spot means marking blockages and
+                    # replanning is not helping -- the chassis is physically wedged, where
+                    # no forward/turn command has any effect (measured live, rt02
+                    # 2026-09-01 06:01: pose frozen for 75s with linear=0.8 commanded and
+                    # even a w=1.2 spin frozen -- jammed on something below the lidar's
+                    # ground band). Reverse first, then let the normal replan continue.
+                    if (last_stall_xy is not None
+                            and math.hypot(x - last_stall_xy[0], y - last_stall_xy[1]) < 0.15):
+                        log.info("[Stage2] consecutive stall at the same spot -- chassis "
+                                 "wedged, reversing to escape")
+                        self._reverse_escape()
+                    last_stall_xy = (x, y)
                     # Replanning on an unchanged map returns the same path, so record what
                     # we just stopped against before asking for a new one.
                     if self._remember_blockage((x, y, yaw), goal):
@@ -1209,6 +1451,7 @@ class DemoParticipant:
             braking = danger
 
             c.send_cmd_vel(linear_x=linear, angular_z=angular)
+            last_cmd = (linear, angular)
 
             # Progress log (throttled to ~1s SIM time) -- for tracking pose/dist/v/w
             now = c.now_s()
