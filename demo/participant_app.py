@@ -907,15 +907,33 @@ class DemoParticipant:
     def _plan_obstacles(self, goal, exclude_m):
         """Everything the planner should route around on this leg.
 
-        Two sources into one list: what the lidar sees ahead, and what the chassis has
-        already stalled against. The goal itself is excluded from both -- the target object
-        and its landmark are solid to the lidar, and blocking the goal makes the leg
-        unplannable.
+        Two sources, excluded near the goal by two DIFFERENT radii -- they are not the same
+        kind of evidence:
+
+        - Lidar discs are a sensor GUESS that can legitimately be the target object itself
+          (or its landmark) -- excluding a wide radius (exclude_m, sized by the reveal's own
+          hint_radius) around the goal is what keeps the leg plannable at all.
+        - Stall-memory (self._obstacles) is not a guess -- it is "the chassis physically hit
+          something at this exact point", recorded by _remember_blockage(), which already
+          refuses to mark anything within BLOCKAGE_RADIUS_M of the goal so a normal
+          approach-speed slowdown near the target is never misread as a wall. Applying the
+          much larger exclude_m here too silently discards that evidence whenever the real
+          obstruction happens to sit within the reveal's hint-uncertainty radius of the goal
+          -- which, in a scenario like "object next to a parked car", is exactly where a
+          real obstruction is likely to be. Measured live (rt01): a blockage grew to the
+          BLOCKAGE_MAX_RADIUS_M cap (2.0m) over 3 stalls while the chassis sat pinned at the
+          exact same spot the whole time -- A* kept returning the same 1-waypoint straight
+          path because this exclusion was silently stripping that blockage out before the
+          planner ever saw it (exclude_m for this leg is also 2.0m, from hint_radius, so
+          every mark landed inside it). The lidar genuinely saw nothing there (raw sweep
+          probe: no return within 3m of dead ahead) -- the mechanism the module's own
+          docstring names for exactly this case (kerbs/low steps/wheel traps the lidar
+          height-band cannot see) was firing correctly and then being discarded downstream.
         """
-        obstacles = list(self._obstacles)
-        if self._lidar_layer is not None:
-            obstacles.extend(self._lidar_layer.discs())
-        return obstacles_excluding_goal(obstacles, goal, exclude_m=exclude_m)
+        lidar_discs = list(self._lidar_layer.discs()) if self._lidar_layer is not None else []
+        lidar_discs = obstacles_excluding_goal(lidar_discs, goal, exclude_m=exclude_m)
+        memory = obstacles_excluding_goal(self._obstacles, goal, exclude_m=BLOCKAGE_RADIUS_M)
+        return lidar_discs + memory
 
     def _remember_blockage(self, pose, goal):
         """Mark the spot the chassis just stalled against, so the replan routes around it.
