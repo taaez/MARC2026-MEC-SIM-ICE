@@ -544,7 +544,8 @@ class DemoParticipant:
                     log.warning("[Stage2] grasp fwd %.2fm exceeds arm reach %.2fm -- "
                                 "clamping (approach probably stopped short; pick may miss)",
                                 grasp_xy[0], ARM_REACH_FWD_M)
-                    grasp_xy = (ARM_REACH_FWD_M, grasp_xy[1])
+                    # Preserve the depth-measured grasp height if present (3rd element).
+                    grasp_xy = (ARM_REACH_FWD_M,) + tuple(grasp_xy[1:])
                 log.info("[Stage2] object pick sequence attempt %d/%d (object-position grasp=%s, type=%s)",
                          attempt, MAX_PICK_ATTEMPTS,
                          tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None, self._target_type)
@@ -823,7 +824,16 @@ class DemoParticipant:
             near = candidate & ((fwd - ef) ** 2 + (lat - el) ** 2
                                 <= DEPTH_EXPECT_WINDOW_M ** 2)
             if int(np.sum(near)) >= 20:
-                return (float(np.mean(fwd[near])), float(np.mean(lat[near])))
+                # Measure the grasp HEIGHT too, not just (fwd, lat). grasp_down defaults
+                # are tuned per object family for a STANDING tumbler; a lying umbrella's
+                # shaft sits at floor level, so a fixed -0.28 closed the gripper ~5cm
+                # above it (measured live rt02 2026-09-01: fingers brushed the shaft top,
+                # inner_fk spread to 44-45deg, and the hold check misread it as empty).
+                # Grab slightly below the blob's top surface, floored just above the
+                # measured ground so the fingers cannot jam into the floor.
+                obj_up = float(np.mean(up[near]))
+                down = max(obj_up - 0.01, floor_z + 0.012)
+                return (float(np.mean(fwd[near])), float(np.mean(lat[near])), down)
             log.info("[Stage2] depth refinement: no raised blob within %.2fm of the nav "
                      "estimate (%d raised px elsewhere in frame) -- keeping the nav "
                      "estimate", DEPTH_EXPECT_WINDOW_M, n_cand)

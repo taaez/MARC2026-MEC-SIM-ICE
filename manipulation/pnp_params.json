@@ -28,5 +28,9 @@
   "cracker_box": {
     "_note": "grasp_lat -0.05 (default) landed slightly left of center on the box (2026-09-01, manip-trainer); shifted right.",
     "grasp_lat": -0.06
+  },
+  "umbrella": {
+    "_note": "held readings measured 44.0-45.0deg live (rt02 2026-09-01, grip_close=0.58) -- ABOVE the empty~35 baseline: the thin shaft spreads the passive knuckle wider instead of blocking it short, so the below-threshold rule misread real grasps as empty (one sample read -41.4, a sign flip the below-rule already catches). inner_fk_hold_above_deg accepts the high side; depth-measured grasp height (grasp_xy[2]) handles the lying-shaft z.",
+    "inner_fk_hold_above_deg": 40
   }
 }
