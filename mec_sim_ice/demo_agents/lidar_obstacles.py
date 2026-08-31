@@ -252,6 +252,40 @@ class LidarObstacleLayer:
         dist = np.linalg.norm(cells[:, None, :] - proj, axis=2)
         return bool((dist.min() if dist.size else np.inf) < corridor_m)
 
+    def danger_ahead(self, pose, max_dist, cone_deg=70.0, goal=None, goal_exclude_m=0.0):
+        """차단 셀 중 로봇 전방 `cone_deg` 안, `max_dist` 이내에 있는 게 하나라도 있는가.
+
+        `blocks_path()`는 "남은 경로가 막혔나"를 보고 A* 재계획을 트리거한다 -- 재계획
+        사이클(격자 갱신 + A* + follower 교체) 한 바퀴만큼 항상 늦다. 이건 그 대신 매 틱
+        직접 속도를 깎는 반응형 제동용이라 계획을 전혀 참조하지 않는다 -- "지금 정면
+        가까이에 뭐가 있나"만 본다. 일단 멈추면 정체판정(STAGE2_STUCK_TIME_S)이 이어받아
+        우회를 만든다.
+
+        `goal`/`goal_exclude_m`: `_plan_obstacles`가 A* 에 넘기기 전 목표 근처 장애물을
+        빼는 것과 같은 이유로 여기서도 빼야 한다 -- 픽업 대상 자체가 라이다에는 그냥
+        장애물이라, 이 제외가 없으면 standoff 로 다가가는 정상 접근이 "장애물 코앞"으로
+        보여 영원히 제동만 걸리고 못 붙는다 (실측: rt02 가 이 누락으로 1800s 타임아웃).
+        """
+        if not self._blocked:
+            return False
+        x, y, yaw = pose
+        pts = np.asarray(list(self._blocked.values()), dtype=np.float64)   # (N, 2)
+        if goal is not None and goal_exclude_m > 0.0:
+            near_goal = np.linalg.norm(pts - np.array(goal, dtype=np.float64), axis=1) <= goal_exclude_m
+            pts = pts[~near_goal]
+            if pts.size == 0:
+                return False
+        d = pts - np.array([x, y])
+        dist = np.linalg.norm(d, axis=1) - self._res
+        close = dist <= max_dist
+        if not np.any(close):
+            return False
+        fwd = np.array([math.cos(yaw), math.sin(yaw)])
+        dn = d[close]
+        distn = np.maximum(np.linalg.norm(dn, axis=1), 1e-6)
+        cosang = (dn @ fwd) / distn
+        return bool(np.any(cosang >= math.cos(math.radians(cone_deg))))
+
     def stats(self):
         """로깅용 -- 오분류 폭주를 눈으로 잡기 위한 것."""
         return {
