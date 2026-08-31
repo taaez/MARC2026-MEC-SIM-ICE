@@ -1,18 +1,28 @@
 {
-  "grasp_fwd": 0.47,
-  "grasp_lat": -0.05,
-  "grasp_down": -0.28,
-  "pre_up": 0.12,
-  "carry_up": 0.24,
-  "place_fwd": -0.28,
-  "place_lat": 0.0,
-  "place_up": 0.1,
-  "grip_close": 0.58,
-  "move_speed": 0.8,
-  "carry_speed": 0.4,
-  "grip_dwell": 1.0,
-  "grasp_yaw": 0.52,
-  "tum_fwd": 0.4,
-  "tum_lat": 0.0,
-  "tum_down": -0.29
+  "_comment": "default = fallback for any object_type not listed below (or when object_type is omitted). Per-object entries only need the keys that differ from default -- see arm_pick.load_params().",
+  "default": {
+    "grasp_fwd": 0.47,
+    "grasp_lat": -0.05,
+    "grasp_down": -0.28,
+    "pre_up": 0.12,
+    "carry_up": 0.24,
+    "place_fwd": -0.28,
+    "place_lat": 0.0,
+    "place_up": 0.1,
+    "grip_close": 0.58,
+    "move_speed": 0.8,
+    "carry_speed": 0.4,
+    "grip_dwell": 1.0,
+    "grasp_yaw": 0.52,
+    "tum_fwd": 0.4,
+    "tum_lat": 0.0,
+    "tum_down": -0.29,
+    "inner_fk_closed_deg": 35,
+    "inner_fk_margin_deg": 1
+  },
+  "sunblock": {
+    "_note": "held reading measured 37.7-39.4deg (2026-08-31, manip-trainer, grip_close=0.58) -- above tumbler's own empty~35 baseline, so the global threshold misjudged a real grasp as empty. Provisional: needs re-verification on GPU (grasp_fwd/grasp_down for sunblock itself were never confirmed either, only the threshold).",
+    "inner_fk_closed_deg": 44,
+    "inner_fk_margin_deg": 4
+  }
 }
