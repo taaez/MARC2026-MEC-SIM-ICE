@@ -78,6 +78,14 @@ GOAL_TOLERANCE = 0.7           # reached test (m)
 # with the sensor without spending a scan parse on ticks that cannot carry new information.
 LIDAR_UPDATE_EVERY_TICKS = 2
 
+# A single lidar update failure must not permanently disable avoidance for the rest of the
+# run -- a fresh subscription can throw (not just return None) for its first reading or two
+# while ROS/DDS discovery settles, exactly the pattern _ensure_cctv_warm and
+# _wait_basket_state already guard against for other topics. This many *consecutive*
+# failures (~1s at LIDAR_UPDATE_EVERY_TICKS) still catches a genuinely broken/absent sensor
+# without wasting the whole run parsing garbage.
+LIDAR_MAX_CONSEC_FAILS = 5
+
 ROBOT_RADIUS_M = STAGE2_INFLATION_M      # the radius the planner already erodes free space by
 BLOCKAGE_RADIUS_M = 0.6                  # wider than the chassis, so A* must route around it
 BLOCKAGE_GROWTH_M = 0.4                  # stalled inside a known blockage -> it was too small
@@ -178,6 +186,10 @@ class DemoParticipant:
         # Base_LiDAR -> chassis mount offset (dx, dy). Static, so tf is asked once per run;
         # (0, 0) (sensor above the chassis origin) when tf cannot supply it.
         self._lidar_mount_xy = (0.0, 0.0)
+        # Consecutive lidar update failures. Only a *sustained* failure (LIDAR_MAX_CONSEC_FAILS
+        # in a row) disables the layer -- see _update_lidar_layer for why a one-shot disable
+        # is dangerous.
+        self._lidar_fail_streak = 0
         self._stage2_task = ""
         self._stage2_submitted_target = None
         self._reveal_log_path = os.environ.get(
@@ -629,18 +641,33 @@ class DemoParticipant:
     def _update_lidar_layer(self, pose):
         """Fold one lidar sweep into the obstacle layer. Returns newly blocked cell count.
 
-        Disables the layer permanently on the first failure: an environment without a lidar
-        should cost one attempt, not one per tick for the whole run.
+        A missing topic (get_lidar() -> None, not an exception -- a fresh subscription
+        legitimately reads as "nothing yet") costs nothing here; lidar_xyz() already
+        returns None for that and LidarObstacleLayer.update() no-ops on it. Only a raw
+        exception (parse failure, comms fault) counts as a "fail" below, and only
+        LIDAR_MAX_CONSEC_FAILS of those *in a row* disable the layer -- disabling on the
+        first one, ever, meant a single transient hiccup (e.g. sensor_msgs_py missing so
+        the byte-parse fallback runs and trips once on a malformed early packet) killed
+        avoidance for the entire run with no way back, indistinguishable in the logs from
+        "no lidar at all". Any success resets the streak.
         """
         if self._lidar_layer is None:
             return 0
         try:
-            return self._lidar_layer.update(self.client.get_lidar(), pose,
-                                            self._lidar_mount_xy)
+            n = self._lidar_layer.update(self.client.get_lidar(), pose,
+                                         self._lidar_mount_xy)
+            self._lidar_fail_streak = 0
+            return n
         except Exception as e:
-            log.warning("[Stage2] lidar unavailable (%s) -- obstacle layer off, "
-                        "falling back to stall memory only", e)
-            self._lidar_layer = None
+            self._lidar_fail_streak += 1
+            log.warning("[Stage2] lidar update failed (%d/%d consecutive): %s: %s",
+                        self._lidar_fail_streak, LIDAR_MAX_CONSEC_FAILS,
+                        type(e).__name__, e)
+            if self._lidar_fail_streak >= LIDAR_MAX_CONSEC_FAILS:
+                log.warning("[Stage2] lidar failed %d times in a row -- obstacle layer "
+                            "off for the rest of this run, falling back to stall memory",
+                            self._lidar_fail_streak)
+                self._lidar_layer = None
             return 0
 
     def _plan_obstacles(self, goal, exclude_m):
