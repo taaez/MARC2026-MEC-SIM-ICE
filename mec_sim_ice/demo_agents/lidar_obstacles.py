@@ -114,6 +114,13 @@ LOCAL_WINDOW_M = 15.0
 # 남은 경로에서 이 거리 안에 차단 셀이 있으면 재계획한다. 차체 반폭 + 여유.
 PATH_CORRIDOR_M = 0.45
 
+# -- 클러스터링 (웨이포인트 원둘레 회피용, waypoint_avoid.py) --
+# 클러스터(주성분 장/단축 비)가 이 값을 넘으면 "길쭉한 장애물"(주차 차량 등)로 보고
+# 장축을 따라 여러 개의 둥근 원으로 쪼갠다. discs() 의 기존 주석("자동차처럼 길쭉한
+# 장애물을 원 하나로 감싸 과차단하는 문제")과 같은 이유 -- 외접원 하나로 감싸면 반경이
+# 커져 통로 하나를 통째로 막을 수 있다.
+ELONGATION_SPLIT_RATIO = 1.8
+
 
 def lidar_xyz(msg):
     """`get_lidar()` 결과 -> (N, 3) float32, **센서 프레임**. None 이면 쓸 점이 없다.
@@ -285,6 +292,35 @@ class LidarObstacleLayer:
         # 윈도우가 다시 여유를 만들었으므로 상한 플래그도 현재 상태에 맞춘다.
         self.capped = len(self._blocked) >= MAX_BLOCKED_CELLS
 
+    def veto_free(self, points_world):
+        """`depth_ground_veto` 가 이번 프레임 카메라로 바닥 확인한 지점들의 셀 차단을 해제한다.
+
+        회전 유령벽(모듈 docstring "경사면" 한계 참고)의 실전 보정 채널. `_counts`
+        도 함께 지운다 -- `_evict_far()` 와 같은 이유로, 카운트만 남겨두면 다음
+        스윕 히트 한 번에 바로 다시 막혀서(`MIN_POINTS_PER_CELL` 문턱을 이미
+        넘어선 채로 남아있으므로) 지우지 않은 것과 같아진다.
+
+        Args:
+            points_world: `(N, 2)` ndarray 또는 `[(x, y), ...]` -- 카메라가 바닥으로
+                확인한 세계좌표 점들.
+
+        Returns:
+            차단이 풀린 셀 수.
+        """
+        if points_world is None or len(points_world) == 0 or not self._blocked:
+            return 0
+        pts = np.asarray(points_world, dtype=np.float64)
+        cols = np.floor(pts[:, 0] / self._res).astype(np.int64)
+        rows = np.floor(pts[:, 1] / self._res).astype(np.int64)
+        cleared = 0
+        for r, c in set(zip(rows.tolist(), cols.tolist())):
+            key = (r, c)
+            if key in self._blocked:
+                del self._blocked[key]
+                self._counts.pop(key, None)
+                cleared += 1
+        return cleared
+
     # -- 출력 --
     def discs(self):
         """플래너용 `[(x, y, r), ...]`.
@@ -355,6 +391,92 @@ class LidarObstacleLayer:
         distn = np.maximum(np.linalg.norm(dn, axis=1), 1e-6)
         cosang = (dn @ fwd) / distn
         return bool(np.any(cosang >= math.cos(math.radians(cone_deg))))
+
+    def clusters(self, elong_ratio=ELONGATION_SPLIT_RATIO):
+        """차단 셀을 연결된 덩어리(장애물 하나)로 묶어 `[(x, y, r), ...]` 원으로 낸다.
+
+        `discs()` 는 셀 하나당 원 하나(플래너가 그대로 칠할 수 있는 조밀한 오버레이)인
+        반면, 이건 8-연결 성분으로 묶어 **장애물 하나당 원 하나**를 낸다 -- 발표자료의
+        DBSCAN 클러스터링과 목적이 같다(포인트 무더기 -> 장애물 개체). 격자 위에서는
+        8-연결 성분이 DBSCAN(eps=대각선 셀거리)과 같은 묶음을 주므로 거리행렬 없이
+        union-find 로 충분하다.
+
+        `waypoint_avoid.relocate()` 가 이 원의 둘레를 따라 웨이포인트를 재배치하는 데
+        쓴다. `discs()` 와 마찬가지로 마진을 넣지 않은 순수 물리적 외곽이다 -- 로봇
+        여유는 호출자가 더한다(`relocate()` 의 `margin_m`).
+        """
+        if not self._blocked:
+            return []
+        keys = list(self._blocked.keys())
+        idx = {k: i for i, k in enumerate(keys)}
+        parent = list(range(len(keys)))
+
+        def find(a):
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+
+        def union(a, b):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        for (r, c) in keys:
+            i = idx[(r, c)]
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    j = idx.get((r + dr, c + dc))
+                    if j is not None:
+                        union(i, j)
+
+        groups = {}
+        for i, k in enumerate(keys):
+            groups.setdefault(find(i), []).append(self._blocked[k])
+
+        circles = []
+        for members in groups.values():
+            circles.extend(self._circles_for(np.asarray(members, dtype=np.float64), elong_ratio))
+        return circles
+
+    def _circles_for(self, pts, elong_ratio):
+        """클러스터 하나(셀 중심점들) -> 원 하나, 또는 길쭉하면 여러 개로 쪼갠 원들."""
+        n = len(pts)
+        c = pts.mean(axis=0)
+        if n < 3:
+            r = (float(np.max(np.linalg.norm(pts - c, axis=1))) + self._res / 2
+                 if n > 1 else self._res)
+            return [(float(c[0]), float(c[1]), float(r))]
+
+        d = pts - c
+        cov = (d.T @ d) / n
+        eigvals, eigvecs = np.linalg.eigh(cov)   # 오름차순
+        minor_val, major_val = max(float(eigvals[0]), 0.0), max(float(eigvals[1]), 0.0)
+        if major_val < 1e-9 or math.sqrt(major_val / max(minor_val, 1e-9)) < elong_ratio:
+            r = float(np.max(np.linalg.norm(d, axis=1))) + self._res / 2
+            return [(float(c[0]), float(c[1]), float(r))]
+
+        # 장축을 따라 조각내기 -- 조각 폭(minor_r*2)을 넘지 않게 등분.
+        axis = eigvecs[:, 1]
+        proj = d @ axis
+        length = float(proj.max() - proj.min())
+        minor_r = max(math.sqrt(minor_val) + self._res / 2, self._res)
+        k = max(2, int(math.ceil(length / (2 * minor_r))))
+        edges = np.linspace(float(proj.min()), float(proj.max()), k + 1)
+        bins = np.clip(np.digitize(proj, edges[1:-1]), 0, k - 1)
+
+        out = []
+        for b in range(k):
+            sel = pts[bins == b]
+            if sel.size == 0:
+                continue
+            cc = sel.mean(axis=0)
+            rr = ((float(np.max(np.linalg.norm(sel - cc, axis=1))) + self._res / 2)
+                  if len(sel) > 1 else self._res)
+            out.append((float(cc[0]), float(cc[1]), float(rr)))
+        return out
 
     def stats(self):
         """로깅용 -- 오분류 폭주를 눈으로 잡기 위한 것."""
