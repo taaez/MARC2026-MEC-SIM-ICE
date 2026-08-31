@@ -34,11 +34,12 @@ pose graph 같은 건 필요 없다.
 여기서는 **스캔 자체에서 지면 높이를 추정한다**(하위 백분위수). 장착 높이 가정도, tf 의
 z 성분도 필요 없고, 지형이 통째로 오르내려도 따라간다.
 
-**한계 -- 경사면**: 지면 추정이 스캔 전체에 대해 하나뿐이라, 앞쪽이 오르막이면 그 지면이
-밴드에 들어와 유령 벽이 된다. 링 간 수직각으로 판정하는 방식(LeGO-LOAM 계열)이나 sector
-별 평면 적합(Patchwork 계열)이 정답이지만, **오프라인 하네스의 지면이 평면 z=0 이라
-경사 강건성을 검증할 방법이 지금 없다.** 검증할 수 없는 정교함을 미리 넣는 대신, 라이브에서
-경사 오탐이 관측되면 그때 올린다. 오탐 감시용으로 `stats()` 가 차단 셀 수를 돌려준다.
+**한계 -- 경사면**: 지면 추정은 방위각 섹터 x 거리 밴드별 국소 percentile 이다
+(GROUND_SECTORS 참고 -- 원래는 스캔 전체에 스칼라 하나였고, 그 버전은 경사·스폰
+고도차에서 로봇 주변 지면을 유령 링으로 만드는 게 라이브에서 거듭 실측되어 국소화했다).
+빈 하나 안에서의 경사(22.5deg 섹터 x 2.5m 밴드 내 높이 변화)는 여전히 평면 취급이므로,
+그래도 오탐이 남으면 링 간 수직각 판정(LeGO-LOAM 계열)이나 섹터별 평면 적합(Patchwork
+계열)이 다음 단계다. 오탐 감시용으로 `stats()` 가 차단 셀 수를 돌려준다.
 """
 
 from __future__ import annotations
@@ -51,6 +52,20 @@ import numpy as np
 # 지면 높이 추정에 쓰는 하위 백분위수. 0 이 아니라 5 인 이유: 최저점 하나가 이상치면
 # 지면 전체가 밀린다.
 GROUND_PERCENTILE = 5.0
+# 지면 추정을 방위각 섹터별 1차 직선 z = m*r + c 로 국소화한다 (Himmelsbach 계열의
+# 단순화판). 스윕 전역 스칼라 하나는 경사에서 무너진다는 게 거듭 실측됐는데(모듈
+# docstring 의 원래 한계 + 2026-09-01 라이브: 회전 중 blocked_area 56m2 폭발), 특히
+# 로봇 스폰 지점이 주변보다 높은 씬에서는 내리막을 내려다보는 것만으로 전역
+# percentile 이 먼 저지대 바닥에 물려 **로봇 발밑 근거리 지면이 유령 링**이 된다
+# (chungmu 지형 z 는 15.53~16.71 로 1.2m 차이). 거리 밴드 percentile 로도 부족하다
+# -- 8% 경사면 2.5m 밴드 안에서만 0.2m 가 변해 GROUND_BAND_MIN_M(0.15) 을 넘는다
+# (합성 검증으로 확인). 섹터별 직선 적합은 섹터 내 반경 방향 경사를 그대로 흡수한다.
+# 적합 재료는 섹터 하위 percentile + GROUND_ROUGH_BAND_M 러프 밴드(장애물 몸통 제외),
+# 점이 적거나 기울기가 비상식적이면(벽/차체에 적합) 전역 percentile 로 폴백.
+GROUND_SECTORS = 16          # 방위각 분할 (22.5deg 폭)
+GROUND_MIN_BIN_PTS = 30      # 이보다 적은 섹터는 전역 percentile 로 폴백
+GROUND_ROUGH_BAND_M = 0.3    # 적합 재료로 쓸 러프 지면 밴드 (섹터 percentile + 이 값)
+GROUND_MAX_SLOPE = 0.2       # |m| 상한 (~11deg 등판) -- 넘으면 오적합으로 보고 폴백
 # 추정 지면에서 이만큼 위부터 장애물로 본다. 이하는 지면·연석·노면 잡음.
 GROUND_BAND_MIN_M = 0.15
 # 이 위는 무시한다 -- 나뭇가지·차양처럼 밑으로 지나갈 수 있는 것.
@@ -226,10 +241,30 @@ class LidarObstacleLayer:
             return 0
         self.scans += 1
 
-        # 1) 지면 추정 -- 절대 높이가 아니라 이 스캔의 하위 백분위수
-        gz = float(np.percentile(pts[:, 2], GROUND_PERCENTILE))
-        self.last_ground_z = gz
-        z_rel = pts[:, 2] - gz
+        # 1) 지면 추정 -- 절대 높이가 아니라, 방위각 섹터별 1차 직선 z = m*r + c
+        # (GROUND_SECTORS 상수의 주석 참고 -- 전역 스칼라 하나는 경사/스폰 고도차에서
+        # 로봇 주변 지면을 유령 링으로 만들고, 거리 밴드 percentile 로도 부족하다).
+        gz_global = float(np.percentile(pts[:, 2], GROUND_PERCENTILE))
+        self.last_ground_z = gz_global
+        az = np.arctan2(pts[:, 1], pts[:, 0])
+        sector = ((az + math.pi) / (2.0 * math.pi) * GROUND_SECTORS).astype(np.int64)
+        sector = np.clip(sector, 0, GROUND_SECTORS - 1)
+        rng_all = np.hypot(pts[:, 0], pts[:, 1])
+        ground = np.full(pts.shape[0], gz_global)
+        for s in range(GROUND_SECTORS):
+            m = sector == s
+            if int(m.sum()) < GROUND_MIN_BIN_PTS:
+                continue
+            zs, rs = pts[m, 2], rng_all[m]
+            lo = float(np.percentile(zs, GROUND_PERCENTILE))
+            rough = zs <= lo + GROUND_ROUGH_BAND_M   # 장애물 몸통을 적합 재료에서 제외
+            if int(rough.sum()) < GROUND_MIN_BIN_PTS:
+                continue
+            slope, icept = np.polyfit(rs[rough], zs[rough], 1)
+            if abs(float(slope)) > GROUND_MAX_SLOPE:
+                continue                              # 벽/차체 오적합 -- 전역 폴백 유지
+            ground[m] = slope * rs + icept
+        z_rel = pts[:, 2] - ground
         keep = (z_rel > GROUND_BAND_MIN_M) & (z_rel < GROUND_BAND_MAX_M)
         if not np.any(keep):
             return 0
