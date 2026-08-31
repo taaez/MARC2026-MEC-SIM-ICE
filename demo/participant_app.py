@@ -100,6 +100,24 @@ LIDAR_UPDATE_EVERY_TICKS = 2
 LIDAR_MAX_CONSEC_FAILS = 5
 
 ROBOT_RADIUS_M = STAGE2_INFLATION_M      # the radius the planner already erodes free space by
+
+# Reactive near-field brake -- independent of A*/replanning, checked every tick. The
+# lidar-triggered replan (blocks_path) and the stall-memory replan are both deliberative:
+# they wait for a full cycle (grid refresh + A* + a new PathFollower) before the chassis
+# command changes, which is at least one nav tick and often several. Something already
+# close and roughly ahead cannot wait that long -- this just zeroes linear velocity for
+# that one tick so the chassis stops before contact, then lets the existing stall/lidar
+# replan machinery (already reacting to near-zero movement) route around it. It does not
+# steer or replan by itself on purpose -- it only has to buy the time the deliberative
+# path needs, not solve avoidance itself.
+REACT_STOP_DIST_M = ROBOT_RADIUS_M + 0.35   # chassis radius + a few nav ticks of stopping slack
+REACT_STOP_CONE_DEG = 40.0                  # narrow and close on purpose: A* already keeps its
+                                             # own inflation clearance from known obstacles, so a
+                                             # wide/generous cone here just re-questions routes A*
+                                             # already judged clear and can deadlock a genuinely
+                                             # passable tight corridor (measured: 70deg/0.9m timed
+                                             # out rt02_parking_umbrella offline, which passes
+                                             # without this brake -- see stage2_sim.py --hidden-obstacles)
 BLOCKAGE_RADIUS_M = 0.6                  # wider than the chassis, so A* must route around it
 BLOCKAGE_GROWTH_M = 0.4                  # stalled inside a known blockage -> it was too small
 BLOCKAGE_MAX_RADIUS_M = 2.0              # cap, so a bad mark cannot wall off the map
@@ -772,6 +790,7 @@ class DemoParticipant:
         pos_history = deque()
         last_log_t = 0.0
         reached_goal = False
+        braking = False   # edge-tracked so the reactive brake logs once per onset, not every tick
 
         while c.is_running and c.now_s() < deadline:
             pose = c.get_world_pose()
@@ -880,6 +899,21 @@ class DemoParticipant:
                     reached_goal = True
                     log.info("[STAGE2] reached goal at (%.2f, %.2f)", x, y)
                     break
+
+            # Reactive brake -- see REACT_STOP_DIST_M above. Runs every tick regardless of
+            # whether this tick refreshed the lidar layer, so it acts on the freshest data
+            # available without waiting for LIDAR_UPDATE_EVERY_TICKS. Only clamps linear
+            # (still free to turn) -- steering out of the way is the replan's job, this only
+            # has to prevent contact before that replan lands.
+            danger = self._lidar_layer is not None and self._lidar_layer.danger_ahead(
+                pose, REACT_STOP_DIST_M, REACT_STOP_CONE_DEG,
+                goal=goal, goal_exclude_m=exclude_m)
+            if danger and linear > 0.0:
+                if not braking:
+                    log.info("[Stage2] lidar: obstacle within %.2fm ahead -> braking",
+                             REACT_STOP_DIST_M)
+                linear = 0.0
+            braking = danger
 
             c.send_cmd_vel(linear_x=linear, angular_z=angular)
 
