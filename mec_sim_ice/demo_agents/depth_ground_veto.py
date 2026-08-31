@@ -84,6 +84,11 @@ def confirmed_floor_world_xy(depth, K, mount_R, mount_t, pose):
     valid = np.isfinite(d) & (d > 0.05) & (d < MAX_VETO_RANGE_M)
     if not np.any(valid):
         return np.empty((0, 2), dtype=np.float64)
+    # 무효 픽셀(NaN/inf/0 -- 뎁스 카메라가 흔히 내보낸다)을 아래 역투영에 넣기 전에
+    # 0 으로 눌러둔다. 결과는 어차피 valid 마스크가 걸러내므로 값 자체는 무관하지만,
+    # NaN 을 그대로 흘리면 matmul 이 매 프레임 RuntimeWarning 을 찍어 라이브 로그를
+    # 덮는다 (실측: 2026-09-01 제출본 라이브 런에서 veto 프레임마다 발생).
+    d = np.where(valid, d, 0.0)
 
     # 표준 핀홀 역투영 (카메라 광학 프레임: x=우, y=하, z=깊이) -- 실제 축이
     # base_link 의 어디를 가리키는지는 mount_R 이 정한다(장착 회전 전부를 여기서
