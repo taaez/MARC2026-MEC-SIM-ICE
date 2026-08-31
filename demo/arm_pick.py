@@ -98,6 +98,28 @@ def load_params(object_type=None):
     return p
 
 
+def object_param_keys(object_type):
+    """Keys tuned specifically for ``object_type`` in pnp_params.json (not inherited).
+
+    Used to tell "this object has its own tuned constant" from "this object is merely
+    inheriting the default layer", which decides whether a perception-measured value may
+    stand in -- see pick_and_place's grasp-height handling.
+    """
+    if not object_type:
+        return set()
+    try:
+        with open(_PARAMS_FILE) as f:
+            saved = json.load(f)
+    except Exception:
+        return set()
+    if not isinstance(saved, dict) or "default" not in saved:
+        return set()          # flat legacy file: no per-object layer at all
+    layer = saved.get(object_type)
+    if not isinstance(layer, dict):
+        return set()
+    return {k for k, v in layer.items() if isinstance(v, (int, float))}
+
+
 def _make_js(arm_q, grip):
     js = JointState()
     js.name = list(ARM_JOINT_NAMES) + list(GRIPPER_JOINT_NAMES)
@@ -451,17 +473,35 @@ def pick_and_place(client, log, grasp_xy=None, object_type=None):
     e.g. Stage2Reveal.target_type, so a sunblock can use its own grasp_down/inner_fk_* instead of a
     tumbler's.
     """
+    _log = log if callable(log) else log.info
     p = load_params(object_type)
     if grasp_xy is not None:
         p["grasp_fwd"] = float(grasp_xy[0])
         p["grasp_lat"] = float(grasp_xy[1])
-        # Optional 3rd element: depth-measured grasp HEIGHT (arm_base z). The per-object
-        # grasp_down default is tuned for a standing tumbler; a lying umbrella's shaft is
-        # at floor level, ~5cm below it (measured live rt02 2026-09-01: the fixed height
-        # closed the fingers on the shaft's top edge). When perception supplies a real
-        # height, prefer it -- same reasoning as grasp_xy overriding grasp_fwd/lat.
-        if len(grasp_xy) > 2:
-            p["grasp_down"] = float(grasp_xy[2])
+        # Grasp HEIGHT: the kit's design is that perception supplies only xy and the
+        # depth comes from pnp_params.json as a per-object constant in the arm_base frame
+        # (manipulation/README: "Grasp point xy comes from grasp_xy ...; depth/carry/
+        # basket/speed come from pnp_params.json"; organizer reference
+        # mock_agent_manipulation.py: GRASP = (0.40, 0.0, -0.29) "at the object on the
+        # ground"). That constant is the right primary source precisely because arm_base
+        # is rigidly fixed to the chassis: the ground sits at the same arm_base z whatever
+        # the world elevation of the spawn point, so no terrain/slope error can reach it,
+        # and it needs no depth camera, no floor fit, and no blob selection to be correct.
+        #
+        # An optional 3rd element carries a perception-measured height. It is a FALLBACK,
+        # used only when this object type has no tuned constant of its own and would
+        # otherwise inherit the default layer's value -- which is tuned for a standing
+        # tumbler and is simply wrong for a differently-shaped object (measured live rt02
+        # 2026-09-01: a lying umbrella's shaft sits below it, and the fingers closed on
+        # the shaft's top edge for 3/3 failures). A tuned constant always wins.
+        if len(grasp_xy) > 2 and grasp_xy[2] is not None:
+            if "grasp_down" in object_param_keys(object_type):
+                _log(f"  [grasp-z] keeping tuned {object_type} constant "
+                     f"{p['grasp_down']:.3f} (measured {float(grasp_xy[2]):.3f} ignored)")
+            else:
+                _log(f"  [grasp-z] no tuned constant for {object_type} -- using measured "
+                     f"height {float(grasp_xy[2]):.3f} (default was {p['grasp_down']:.3f})")
+                p["grasp_down"] = float(grasp_xy[2])
     return run_motion(client, log, p, "full")
 
 
