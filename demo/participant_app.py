@@ -121,6 +121,9 @@ class DemoParticipant:
         # Stage 2 pickup goal -- filled from the approximate location hint in the reveal (msg 411).
         # If not received, fall back to the Stage 2 answer target (_stage2_target_xy).
         self._collect_xy = None
+        # Object type from the same reveal -- selects a pnp_params.json override in run_pick_sequence()
+        # (see arm_pick.load_params()), since one grasp/threshold set doesn't fit every object shape.
+        self._target_type = None
         # Fallback pickup goal -- the Stage 2 grounding answer's target_coord (set in
         # _on_stage2_mission), used only if the reveal does not arrive.
         self._stage2_target_xy = None
@@ -186,6 +189,7 @@ class DemoParticipant:
         log.info("[Stage2] reveal received -- score=%s, type=%s, center=%s, r=%.1f",
                  reveal.grounding_score, reveal.target_type,
                  reveal.hint_center, reveal.hint_radius)
+        self._target_type = reveal.target_type or None
         if reveal.hint_center and len(reveal.hint_center) >= 2:
             self._collect_xy = (float(reveal.hint_center[0]), float(reveal.hint_center[1]))
 
@@ -241,10 +245,10 @@ class DemoParticipant:
                 break
             try:
                 grasp_xy = self._object_arm_xy(collect_xy)   # actual object position in the arm_base frame
-                log.info("[Stage2] object pick sequence attempt %d/%d (object-position grasp=%s)",
+                log.info("[Stage2] object pick sequence attempt %d/%d (object-position grasp=%s, type=%s)",
                          attempt, MAX_PICK_ATTEMPTS,
-                         tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None)
-                held = run_pick_sequence(c, log, grasp_xy)
+                         tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None, self._target_type)
+                held = run_pick_sequence(c, log, grasp_xy, object_type=self._target_type)
                 c.send_cmd_vel(0.0, 0.0)
                 # Grip-hold feedback (participant style). None (no feedback) -> conservatively count
                 # the completed sequence as success.
