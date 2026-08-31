@@ -120,6 +120,23 @@ REACT_STOP_CONE_DEG = 40.0                  # narrow and close on purpose: A* al
                                              # passable tight corridor (measured: 70deg/0.9m timed
                                              # out rt02_parking_umbrella offline, which passes
                                              # without this brake -- see stage2_sim.py --hidden-obstacles)
+
+# How long the brake may hold linear at 0 (while the follower wants to move) before this
+# counts as a stall on its own, instead of waiting for the generic STAGE2_STUCK_TIME_S(8s)
+# window to notice the same thing indirectly.
+#
+# Measured live (rt01_parking_tumbler, post-hang-fix): once something sits persistently
+# within the brake's stop zone, the follower keeps recomputing a nonzero linear every tick
+# (it does not know the brake exists) and the brake keeps clamping it back to 0 -- angular
+# is untouched, so heading keeps refining toward the waypoint while XY stays frozen, which
+# *looks* exactly like a slow-converging turn but is actually the brake holding the whole
+# time. This repeated 4 times in one leg1 approach, ~30-40s lost per occurrence, before the
+# generic stall detector's 8s window finally caught up and forced a replan. Since the brake
+# already knows precisely why linear is 0 (unlike the generic stall test, which only sees
+# XY not moving and has to infer a cause), there is no reason to wait the full 8s: treat a
+# sustained brake-hold as an immediate stall -- same _remember_blockage + replan path, just
+# triggered by the mechanism that actually caused the freeze instead of by its symptom.
+BRAKE_STALL_S = 1.5
 BLOCKAGE_RADIUS_M = 0.6                  # wider than the chassis, so A* must route around it
 BLOCKAGE_GROWTH_M = 0.4                  # stalled inside a known blockage -> it was too small
 BLOCKAGE_MAX_RADIUS_M = 2.0              # cap, so a bad mark cannot wall off the map
@@ -960,6 +977,8 @@ class DemoParticipant:
         last_log_t = 0.0
         reached_goal = False
         braking = False   # edge-tracked so the reactive brake logs once per onset, not every tick
+        brake_held_since = None   # elapsed-clock value; see BRAKE_STALL_S
+        force_replan = False      # set by the brake-stall escalation below, consumed next tick
 
         while c.is_running and self._clock.tick() < deadline:
             pose = c.get_world_pose()
@@ -1011,7 +1030,8 @@ class DemoParticipant:
             # remaining path (before contact), then a stall (after contact, for whatever the
             # lidar missed). Replanning on a timer instead would rewrite the path every cycle
             # and make the follower jitter, so it is event-driven.
-            need_replan = follower is None
+            need_replan = follower is None or force_replan
+            force_replan = False
             if new_cells and follower is not None and self._lidar_layer is not None:
                 remaining = follower.path[follower.idx:]
                 if self._lidar_layer.blocks_path(remaining, start_xy=(x, y)):
@@ -1091,11 +1111,35 @@ class DemoParticipant:
             danger = self._lidar_layer is not None and self._lidar_layer.danger_ahead(
                 pose, REACT_STOP_DIST_M, REACT_STOP_CONE_DEG,
                 goal=goal, goal_exclude_m=exclude_m)
-            if danger and linear > 0.0:
+            blocked_by_brake = danger and linear > 0.0
+            if blocked_by_brake:
                 if not braking:
                     log.info("[Stage2] lidar: obstacle within %.2fm ahead -> braking",
                              REACT_STOP_DIST_M)
                 linear = 0.0
+                # BRAKE_STALL_S escalation -- see the constant's comment. The follower keeps
+                # wanting to move (that is what blocked_by_brake means) while heading keeps
+                # refining toward the waypoint (angular is untouched), which looks exactly
+                # like a slow-converging turn but is actually this brake holding the whole
+                # time. Don't wait for the generic 8s stall window to notice the same freeze
+                # indirectly -- treat a sustained hold as an immediate stall.
+                if brake_held_since is None:
+                    brake_held_since = self._clock.elapsed
+                elif self._clock.elapsed - brake_held_since >= BRAKE_STALL_S:
+                    log.info("[Stage2] brake held %.1fs -> treating as stall, replanning",
+                             self._clock.elapsed - brake_held_since)
+                    if self._remember_blockage((x, y, yaw), goal):
+                        leg_obstacles = self._plan_obstacles(goal, exclude_m)
+                    force_replan = True
+                    brake_held_since = None
+                    # Same reason as the generic stall path: start the window fresh so it
+                    # does not also fire on this same freeze a few ticks later. pos_history
+                    # is keyed on c.now_s() (see below), NOT self._clock.elapsed -- these are
+                    # two different clocks and must not be mixed.
+                    pos_history.clear()
+                    pos_history.append((c.now_s(), x, y))
+            else:
+                brake_held_since = None
             braking = danger
 
             c.send_cmd_vel(linear_x=linear, angular_z=angular)
