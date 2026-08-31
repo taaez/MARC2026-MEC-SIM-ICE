@@ -348,6 +348,9 @@ class DemoParticipant:
                           exclude_m=max(0.6, hint_r), snap_m=max(1.0, hint_r))
         if not c.is_running:
             return
+        # Square up before creeping in -- see _align_to_object for why this can't be
+        # skipped even though _approach_straight also steers.
+        self._align_to_object(collect_xy, deadline)
         # Final straight approach: drive straight at the object until arm_base fwd reaches grasp reach.
         self._approach_straight(collect_xy, deadline, target_fwd=0.40)
         # Stop! the chassis driver keeps applying the last cmd_vel, so emit 0 before the pick
@@ -394,6 +397,7 @@ class DemoParticipant:
                 break
             if attempt < MAX_PICK_ATTEMPTS:
                 log.info("[Stage2] retrying pick (attempt %d/%d)", attempt + 1, MAX_PICK_ATTEMPTS)
+                self._align_to_object(collect_xy, deadline)
                 self._approach_straight(collect_xy, deadline, target_fwd=0.40)
                 for _ in range(5):
                     c.send_cmd_vel(0.0, 0.0)
@@ -486,12 +490,62 @@ class DemoParticipant:
         lat = -dx * ss + dy * cc           # car_base left (+Y)
         return (fwd - ARM_BASE_FWD - GRASP_FWD_BACKOFF, lat)
 
+    def _align_to_object(self, obj_xy, deadline, max_t=6.0, tol_rad=math.radians(8)):
+        """Rotate in place to face ``obj_xy`` before the final straight approach.
+
+        ``_approach_straight`` only has authority to correct a *small* lateral offset
+        while creeping forward -- its exit test is "close enough in depth" (fwd), not
+        "centered" (lat), on the assumption that the standoff arrival is already
+        roughly aligned. That assumption is not guaranteed: _navigate_to's goal test is
+        pure XY distance with no heading term, so a standoff reached from an angle (an
+        A* replan mid-corner, an off-path recovery, tracking error) can land with fwd
+        already inside target_fwd while lat is still large -- the straight-approach loop
+        then exits on its very first tick with the object off to the side and no time
+        left to correct it. Measured while trialling a pure-pursuit path follower whose
+        corner-cutting produced exactly this arrival (fwd=0.388/lat=0.917, broke in
+        0.2s, pick missed by 0.251m) -- that follower was reverted for a net time loss,
+        but the arrival-angle assumption it exposed was already latent, not new, so
+        this fix stays.
+
+        Squaring up first -- while there is still room in front to turn without
+        overshooting past the object -- is what actually fixes that, independent of
+        whatever put the chassis at an angle. Pure rotation, so it is safe to run even
+        very close in (unlike the forward creep, which cannot correct a large angle
+        without also shrinking the remaining approach room).
+        """
+        c = self.client
+        t_end = min(deadline, c.now_s() + max_t)
+        while c.is_running and c.now_s() < t_end:
+            gxy = self._object_arm_xy(obj_xy)
+            if gxy is None:
+                break
+            fwd, lat = gxy
+            # Bearing to the object in the arm_base frame (0 = dead ahead). atan2 (not the
+            # raw lat used for centering while moving) so a badly angled arrival -- fwd
+            # small or even negative, lat large -- still turns the right way instead of
+            # just riding a small-angle approximation past its range.
+            heading_err = math.atan2(lat, fwd) if fwd > 1e-3 else (
+                math.copysign(math.pi / 2, lat) if lat else 0.0)
+            if abs(heading_err) <= tol_rad:
+                break
+            ang = max(-0.5, min(0.5, 1.5 * heading_err))
+            c.send_cmd_vel(linear_x=0.0, angular_z=ang)
+            c.sleep(STAGE2_NAV_DT)
+        for _ in range(5):
+            c.send_cmd_vel(0.0, 0.0)
+            c.sleep(0.05)
+        gxy = self._object_arm_xy(obj_xy)
+        log.info("[Stage2] align done -- object arm coords %s",
+                 tuple(round(v, 3) for v in gxy) if gxy else None)
+
     def _approach_straight(self, obj_xy, deadline, target_fwd=0.40, max_t=20.0):
         """Drive straight at the object until the arm_base forward distance reaches target_fwd.
 
         The planner cannot enter a tight spot fully (it halts ~1 m out), so fill the remaining
         empty space by driving straight into the object, with a small lateral steering term to
-        center it (lat -> 0). SIM-time paced.
+        center it (lat -> 0). Call _align_to_object first -- this loop assumes it is already
+        roughly facing the object and cannot recover a large initial heading error (see
+        _align_to_object for why). SIM-time paced.
         """
         c = self.client
         t_end = min(deadline, c.now_s() + max_t)
