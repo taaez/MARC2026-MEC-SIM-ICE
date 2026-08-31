@@ -204,6 +204,10 @@ class Detection:
     # 위치를 이걸로 옮긴다 (_foot_adjusted_point). 선택 기하(locate)는 일부러
     # 건드리지 않는다 -- 이유는 그 함수의 docstring. None 이면 기존 동작 그대로.
     foot_u: Optional[float] = None
+    # 발목 keypoint 의 세로 픽셀. prostrate 자세(bending/lying/prone)에서만
+    # _foot_adjusted_point 가 쓴다 -- 그 자세는 bbox 아랫변이 발이 아니다.
+    # 다른 자세/None 이면 기존 동작(접지선) 그대로.
+    foot_v: Optional[float] = None
 
 
 @dataclass
@@ -689,22 +693,44 @@ def _foot_adjusted_point(cam: CameraModel, t_loc: Located,
     의 anchor 가 0.95 -> 0.04 로 무너져 target 이득(+0.07)을 넘는 손해가
     났다. 그래서 보정은 payload 를 만드는 이 지점에서만 적용한다.
 
-    세로는 접지선(bbox 아랫변)을 그대로 쓴다. 얕게 내려다보는 카메라에서
-    세로 픽셀 오차는 world 로 크게 증폭되므로(rig_7_a 실측 1px = 0.075m)
-    발목의 세로까지 쓰면 오히려 나빠진다.
+    세로는 원칙적으로 접지선(bbox 아랫변)을 쓴다. 얕게 내려다보는 카메라에서
+    세로 픽셀 오차는 world 로 크게 증폭되므로(rig_7_a 실측 1px = 0.075m) 서
+    있는 사람의 발목 세로까지 쓰면 오히려 나빠진다.
+
+    예외 — prostrate 자세(person_bending / person_lying_down / person_prone):
+    몸이 수평이라 bbox 아랫변은 '카메라에 가장 가까운 몸 부위'(머리·손)이고
+    발은 반대쪽 끝에 있다. 이 자세에서는 발목 관절이 지면 높이라 세로 증폭이
+    없으므로 발목의 세로를 직접 쓴다. footprint push 도 생략한다(발목이 곧
+    제출점). keypoint 오류 대비: 발목-세로 결과가 접지선 결과에서 2.5m 넘게
+    벗어나면 접지선으로 되돌린다. 자세 판정은 기존 POSE_CLASS(situation_
+    resolver) 를 그대로 쓰고, 씬 종속 상수는 넣지 않는다.
     """
     u = t_loc.det.foot_u
     if u is None:
         return t_loc.ground_point
     _, _, _, y2 = t_loc.det.bbox
     z = float(t_loc.base[2])
-    near = pixel_to_plane(cam, float(u), y2, plane_z=z)
+
+    v = float(y2)
+    use_ankle_v = False
+    if (t_loc.det.foot_v is not None
+            and PERSON_POSE_CLASSES.get(t_loc.det.label) == "prostrate"):
+        v = float(t_loc.det.foot_v)
+        use_ankle_v = True
+
+    near = pixel_to_plane(cam, float(u), v, plane_z=z)
     if near is None:
         return t_loc.ground_point
+    if use_ankle_v:
+        base_near = pixel_to_plane(cam, float(u), float(y2), plane_z=z)
+        if base_near is not None and float(np.linalg.norm(near[:2] - base_near[:2])) > 2.5:
+            near, use_ankle_v = base_near, False
+
     away = near[:2] - cam.C_w[:2]
     n = float(np.linalg.norm(away))
     away = away / n if n > 1e-9 else np.zeros(2)
-    xy = near[:2] + cfg.footprint_push * t_loc.radius * away
+    push = 0.0 if use_ankle_v else cfg.footprint_push
+    xy = near[:2] + push * t_loc.radius * away
     return [float(xy[0]), float(xy[1]), z]
 
 
