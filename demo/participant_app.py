@@ -157,6 +157,48 @@ MAX_PICK_ATTEMPTS = 3
 DEFAULT_HINT_RADIUS_M = 1.0
 
 
+class ElapsedClock:
+    """Monotonic elapsed-seconds accumulator over `client.now_s()`, immune to a backward jump.
+
+    Why this exists: `now_s()` returns `time.time()` (a huge wall-clock epoch value) until the
+    first `/clock` message arrives, then switches to sim-time (a small value). Every deadline in
+    this file used to be computed once as `now_s() + budget` and compared against later `now_s()`
+    calls -- if that one computation happened to land in the wall-clock-fallback window, the
+    deadline is a huge epoch-based number that no future sim-time `now_s()` can ever reach, so
+    `now_s() < deadline` stays true forever and the loop never exits. This is the exact bug
+    documented in STAGE2_SESSION_REPORT_2026-08-22.md for demo/agent_vla.py's _observe() (fixed
+    there with an iteration-count budget instead); the same pattern reappeared here in at least
+    six places and was reproduced live twice in a row (participant registering while STAGE1_RUN/
+    STAGE2_RUN was already in progress -- exactly maximises the chance the first now_s() call
+    lands before /clock).
+
+    Rather than patch each call site with its own iteration-count workaround (loses the sim-time
+    budget semantics, which matter here since STAGE2_NAV_TIMEOUT_S etc. are meant to scale with
+    RTF), this tracks elapsed sim-time as a running sum of consecutive deltas: a delta is only
+    ever added if it is a plausible forward step. A jump backward (the wall-clock -> sim-time
+    switch) contributes 0 instead of going negative, and a jump forward larger than one plausible
+    tick is capped at 1s so a single stray large delta cannot itself satisfy a whole timeout.
+    Genuine sim-time -- even sped up by RTF -- always advances in small steps between our own
+    poll calls, so this never treats real progress as 0.
+    """
+
+    _MAX_TICK_S = 1.0
+
+    def __init__(self, client):
+        self._client = client
+        self._last = client.now_s()
+        self.elapsed = 0.0
+
+    def tick(self):
+        """Advance and return the cumulative elapsed seconds since this clock was created."""
+        now = self._client.now_s()
+        delta = now - self._last
+        self._last = now
+        if delta > 0.0:
+            self.elapsed += min(delta, self._MAX_TICK_S)
+        return self.elapsed
+
+
 class DemoParticipant:
     """SDK-based demo participant -- connects the VLA/nav logic through handlers."""
 
@@ -230,6 +272,10 @@ class DemoParticipant:
         # in a row) disables the layer -- see _update_lidar_layer for why a one-shot disable
         # is dangerous.
         self._lidar_fail_streak = 0
+        # Elapsed-time clock for this run's deadlines -- see ElapsedClock. Built fresh in
+        # _drive() (like _lidar_layer) since "elapsed" only means something relative to when
+        # this run's driving started.
+        self._clock = None
         self._stage2_task = ""
         self._stage2_submitted_target = None
         self._reveal_log_path = os.environ.get(
@@ -368,8 +414,14 @@ class DemoParticipant:
         task_complete. All legs share one sim-time budget.
         """
         c = self.client
-        # SIM-time deadline (via /clock) -- shared across all legs, robust to real-time factor < 1.
-        deadline = c.now_s() + STAGE2_NAV_TIMEOUT_S
+        # Elapsed-time clock for this run -- see ElapsedClock. Every "deadline" from here on is
+        # an elapsed-seconds budget measured against self._clock.tick(), NOT an absolute now_s()
+        # value: a plain `now_s() + budget` computed here can land before the first /clock
+        # message (a huge wall-clock fallback), making every later `now_s() < deadline` compare
+        # against a value no sim-time now_s() can ever reach -- an infinite hang, reproduced live
+        # twice (see STAGE2_SESSION_REPORT_2026-08-22.md for the same bug in agent_vla.py).
+        self._clock = ElapsedClock(c)
+        deadline = STAGE2_NAV_TIMEOUT_S
 
         # Poll briefly until the reveal (approximate location) arrives after scoring -> pickup goal.
         collect_xy = self._wait_for_collect_goal(timeout=5.0)
@@ -419,7 +471,7 @@ class DemoParticipant:
         # released the gripper by the time it returns).
         basket_ok = False
         for attempt in range(1, MAX_PICK_ATTEMPTS + 1):
-            if not c.is_running or c.now_s() >= deadline:
+            if not c.is_running or self._clock.tick() >= deadline:
                 log.warning("[Stage2] pick retry budget exhausted (run stopped or deadline hit) "
                             "before attempt %d/%d", attempt, MAX_PICK_ATTEMPTS)
                 break
@@ -573,8 +625,8 @@ class DemoParticipant:
         without also shrinking the remaining approach room).
         """
         c = self.client
-        t_end = min(deadline, c.now_s() + max_t)
-        while c.is_running and c.now_s() < t_end:
+        t_end = min(deadline, self._clock.elapsed + max_t)
+        while c.is_running and self._clock.tick() < t_end:
             gxy = self._object_arm_xy(obj_xy)
             if gxy is None:
                 break
@@ -637,8 +689,8 @@ class DemoParticipant:
                 self._depth_cam_info = msg
             self._depth_cam_info_sub = c.subscribe(
                 c.topics.robot("base_camera/depth/info"), CameraInfo, _on_depth_info)
-        t_end = c.now_s() + 1.0
-        while self._depth_cam_info is None and c.now_s() < t_end:
+        t_end = self._clock.elapsed + 1.0
+        while self._depth_cam_info is None and self._clock.tick() < t_end:
             c.sleep(0.05)
         info = self._depth_cam_info
         if info is None:
@@ -707,8 +759,8 @@ class DemoParticipant:
         _align_to_object for why). SIM-time paced.
         """
         c = self.client
-        t_end = min(deadline, c.now_s() + max_t)
-        while c.is_running and c.now_s() < t_end:
+        t_end = min(deadline, self._clock.elapsed + max_t)
+        while c.is_running and self._clock.tick() < t_end:
             gxy = self._object_arm_xy(obj_xy)
             if gxy is None:
                 break
@@ -740,9 +792,9 @@ class DemoParticipant:
         helper silently coercing "unknown" into "empty" for them.
         """
         c = self.client
-        deadline = c.now_s() + timeout
+        start = self._clock.elapsed
         val = c.is_basket_occupied()
-        while val is None and c.now_s() < deadline:
+        while val is None and self._clock.tick() - start < timeout:
             c.sleep(0.05)
             val = c.is_basket_occupied()
         return val
@@ -754,8 +806,8 @@ class DemoParticipant:
         within the timeout, fall back to the Stage 2 grounding answer's target (_stage2_target_xy).
         """
         c = self.client
-        deadline = c.now_s() + timeout
-        while c.now_s() < deadline:
+        start = self._clock.elapsed
+        while self._clock.tick() - start < timeout:
             if self._collect_xy is not None:
                 return self._collect_xy
             c.sleep(0.1)
@@ -890,7 +942,8 @@ class DemoParticipant:
                 Defaults to the leg's own reached-test distance, since a goal snapped
                 further than that is a goal we cannot finish the leg from. (It used to be a
                 fixed 8 m, which can silently relocate the goal into a different area.)
-        The deadline is a shared SIM-time budget across all Stage 2 legs.
+        `deadline` is elapsed seconds on self._clock (see ElapsedClock) since _drive() started,
+        shared across all Stage 2 legs -- not an absolute now_s() value.
         """
         c = self.client
         planner = OccupancyGridPlanner()
@@ -908,7 +961,7 @@ class DemoParticipant:
         reached_goal = False
         braking = False   # edge-tracked so the reactive brake logs once per onset, not every tick
 
-        while c.is_running and c.now_s() < deadline:
+        while c.is_running and self._clock.tick() < deadline:
             pose = c.get_world_pose()
             if pose is None:
                 c.sleep(STAGE2_NAV_DT)
