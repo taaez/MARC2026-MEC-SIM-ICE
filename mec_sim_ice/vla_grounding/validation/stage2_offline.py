@@ -195,7 +195,10 @@ def check_grasp_geometry(gt, ground_z):
     if os.path.exists(DEFAULT_PNP):
         import json
         pnp = json.load(open(DEFAULT_PNP))
-    grasp_down = pnp.get("grasp_down")
+    # pnp_params.json 은 9d21241 부터 중첩 구조다({"default": {...}, "<object_type>": {...}}).
+    # 예전 flat 접근은 조용히 None 이 되어 아래 (c) 항목이 무의미해진다. 옛 flat 파일도
+    # 그대로 읽히도록 default 가 없으면 최상위를 본다.
+    grasp_down = (pnp.get("default") or pnp).get("grasp_down")
 
     # (a) 상수 사슬 -- 문항과 무관하게 한 번만. standoff 로 정지했을 때의 파지 거리.
     nominal = TUMBLER_STANDOFF_M - ARM_BASE_FWD - GRASP_FWD_BACKOFF

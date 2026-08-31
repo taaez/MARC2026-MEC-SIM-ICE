@@ -58,17 +58,43 @@ def _kin():
     return _KIN
 
 
-def load_params():
-    """Read pnp_params.json and return a dict overlaid on top of FINAL_PARAMS."""
+def load_params(object_type=None):
+    """Read pnp_params.json and return a dict overlaid on top of FINAL_PARAMS.
+
+    Layering (later overrides earlier, key-by-key): FINAL_PARAMS (code defaults,
+    includes inner_fk_closed_deg/inner_fk_margin_deg) -> saved["default"] ->
+    saved[object_type] if present. A grip threshold tuned for one object (e.g. a
+    tumbler) does not generalize to a differently-shaped one (e.g. sunblock held at
+    a wider angle than an empty tumbler close) -- per-object_type entries let each
+    pick use its own grasp_fwd/grasp_lat/grasp_down/inner_fk_* instead of one shared
+    global value.
+
+    Backward compatible with an old flat (non-nested) pnp_params.json: if the file
+    has no "default" key, its top level is treated as the single override layer
+    (equivalent to the previous behavior, object_type ignored).
+    """
     p = dict(FINAL_PARAMS)
+    p.setdefault("inner_fk_closed_deg", INNER_FK_CLOSED_DEG)
+    p.setdefault("inner_fk_margin_deg", INNER_FK_HOLD_MARGIN_DEG)
     try:
         with open(_PARAMS_FILE) as f:
             saved = json.load(f)
-        for k in p:
-            if k in saved:
-                p[k] = float(saved[k])
     except Exception:
-        pass
+        saved = {}
+
+    def _apply(layer):
+        if not isinstance(layer, dict):
+            return
+        for k, v in layer.items():
+            if isinstance(v, (int, float)):
+                p[k] = float(v)
+
+    if isinstance(saved, dict) and "default" in saved:
+        _apply(saved.get("default"))
+        if object_type:
+            _apply(saved.get(object_type))
+    else:
+        _apply(saved)
     return p
 
 
@@ -209,18 +235,22 @@ INNER_FK_HOLD_MARGIN_DEG = 1.0    # if it falls short by this much (<34deg), an 
 _HOLD_CHECK_WPS = ("lift", "over", "place")
 
 
-def grip_holding(client, grip_close, log, samples=6):
+def grip_holding(client, p, log, samples=6):
     """Determine whether an object is held from the inner_finger_knuckle (passive) angle.
 
     When commanded to close after grasp, an empty hand closes the fingers all the way and the
-    inner_finger_knuckle reaches ~35deg; if an object spreads and blocks the fingers, it falls short and
-    stops below that. Independent of object type/size (it can only reduce the closing, so <= 35). Uses
-    the less-closed (smaller) side of the two fingers.
-    (The grip_close argument is kept for backward compatibility and is not used in the decision.)
+    inner_finger_knuckle reaches ~inner_fk_closed_deg; if an object spreads and blocks the fingers,
+    it falls short and stops below that. Threshold is read from `p` (per-object_type via
+    load_params()) since the empty-close and held angles differ by object shape/size -- a tumbler's
+    empty close (~35deg) can be *lower* than a sunblock's actual held angle (~38-45deg observed), so
+    a single global threshold cannot classify both correctly. Uses the less-closed (smaller) side of
+    the two fingers.
     Returns: True (holding) / False (empty hand) / None (no feedback).
     """
     _log = log if callable(log) else log.info
-    thresh = np.deg2rad(INNER_FK_CLOSED_DEG - INNER_FK_HOLD_MARGIN_DEG)
+    closed_deg = float(p.get("inner_fk_closed_deg", INNER_FK_CLOSED_DEG))
+    margin_deg = float(p.get("inner_fk_margin_deg", INNER_FK_HOLD_MARGIN_DEG))
+    thresh = np.deg2rad(closed_deg - margin_deg)
     vals = []
     for _ in range(samples):
         try:
@@ -228,7 +258,7 @@ def grip_holding(client, grip_close, log, samples=6):
         except Exception:
             st = None
         if st is not None and getattr(st, "name", None):
-            fks = [float(p) for n, p in zip(st.name, st.position)
+            fks = [float(pos) for n, pos in zip(st.name, st.position)
                    if "inner_finger_knuckle" in n]
             if fks:
                 vals.append(min(fks))     # the less-closed (smaller) finger
@@ -239,7 +269,7 @@ def grip_holding(client, grip_close, log, samples=6):
     g = sum(vals) / len(vals)
     holding = bool(g < thresh)
     _log(f"  [grip] inner_fk={np.rad2deg(g):.1f}deg "
-         f"(empty~{INNER_FK_CLOSED_DEG:.0f}, thresh<{INNER_FK_CLOSED_DEG-INNER_FK_HOLD_MARGIN_DEG:.0f}) "
+         f"(empty~{closed_deg:.0f}, thresh<{closed_deg-margin_deg:.0f}) "
          f"-> holding={holding}")
     return holding
 
@@ -280,7 +310,6 @@ def run_motion(client, log, p, phase="full"):
     _log("  pick_and_place start (placo cart(DLS)/joint(arc) waypoint servo)")
     dbg = _dbg_open(phase, waypoints, pos_step, joint_step, rate)
     seq.start()
-    grip_close = p.get("grip_close", GRIPPER_CLOSE)
     holding = None            # hold decision (True/False/None). The caller treats None as success.
     probed = set()            # hold-check waypoint labels already measured (prevents duplicate measurement)
     aborted = False           # whether the sequence was aborted early due to failure
@@ -337,17 +366,19 @@ def run_motion(client, log, p, phase="full"):
         # over/place = was it dropped in transit (a prior True flipping to False means it fell, abort).
         lbl = seq.label
         if lbl in _HOLD_CHECK_WPS and lbl not in probed:
-            probed.add(lbl)
-            h = grip_holding(client, grip_close, _log)
+            h = grip_holding(client, p, _log)
             if h is None:
-                pass                      # no feedback -> defer the decision (keep the prior value)
+                pass                      # no feedback yet -- retry on a later tick at this same label
+                                           # (not marked probed: a transient gap must not be the final word)
             elif lbl == "lift":
+                probed.add(lbl)           # got a definitive reading -- done measuring this waypoint
                 holding = h
                 if not h:                 # empty hand -> grasp failure
                     _log("  [pick] empty hand at lift (grasp failure) detected -> aborting sequence")
                     aborted = True
                     seq.abort()
             else:                         # over / place - in transit
+                probed.add(lbl)
                 if holding and not h:     # was holding, then dropped -> fell
                     _log(f"  [pick] object dropped at {lbl} (transport failure) detected -> aborting sequence")
                     holding = False
@@ -400,14 +431,16 @@ def run_motion(client, log, p, phase="full"):
     return holding
 
 
-def pick_and_place(client, log, grasp_xy=None):
+def pick_and_place(client, log, grasp_xy=None, object_type=None):
     """Run pick-and-place once.
 
     If grasp_xy=(fwd, lat) is given, override the xy of the grasp/approach point with those values (the
     object's actual arm_base-frame position). Descent depth, transport, basket, and orientation keep
-    the default values.
+    the default values unless object_type selects a pnp_params.json override (see load_params()) --
+    e.g. Stage2Reveal.target_type, so a sunblock can use its own grasp_down/inner_fk_* instead of a
+    tumbler's.
     """
-    p = load_params()
+    p = load_params(object_type)
     if grasp_xy is not None:
         p["grasp_fwd"] = float(grasp_xy[0])
         p["grasp_lat"] = float(grasp_xy[1])
@@ -415,5 +448,5 @@ def pick_and_place(client, log, grasp_xy=None):
 
 
 # Backward-compatibility alias.
-def run_pick_sequence(client, log, grasp_xy=None):
-    return pick_and_place(client, log, grasp_xy)
+def run_pick_sequence(client, log, grasp_xy=None, object_type=None):
+    return pick_and_place(client, log, grasp_xy, object_type)

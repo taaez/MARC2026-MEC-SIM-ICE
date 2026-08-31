@@ -68,7 +68,47 @@ DEFAULT_RESOLUTION_M = 0.25
 # 먼 장애물을 통째로 놓친다.
 MIN_POINTS_PER_CELL = 2
 # 차단 셀 상한. 지면 오분류가 폭주해도 플래너를 마비시키지 않게 하는 안전장치다.
+#
+# **주의 -- 이건 개수지 면적이 아니다.** 의도는 면적 예산인데 셀 개수로 박혀 있어서
+# 해상도에 따라 뜻이 달라진다: 설계 기준 0.25m 에선 500m2 지만, 라이브 점유지도 해상도
+# 0.05m 에 동기화되면 같은 8000 셀이 **20m2** (4.5m x 4.5m) 밖에 안 된다. 아래 원거리
+# 컷과 롤링 윈도우가 들어오기 전에는 라이브에서 몇 초 만에 여기 닿았고, 닿는 순간
+# update() 가 새 셀을 통째로 버려서 (a) 눈앞의 진짜 장애물이 레이어에 못 들어오고
+# (b) new_blocked 가 항상 0 이라 participant_app 의 `if new_cells` 게이트 때문에
+# blocks_path() 재계획 트리거까지 영구히 죽었다 (라이브 실측: blocked_cells 가 정확히
+# 8000 에 고정된 채 로봇이 차 옆구리에 끼여 계속 비빔).
 MAX_BLOCKED_CELLS = 8000
+
+# 이 거리(m, 센서 프레임 수평거리) 밖의 리턴은 아예 안 본다.
+#
+# 지역 회피에 20m 밖 점은 필요 없는데, 단일 percentile 지면추정은 원거리에서 특히 크게
+# 틀린다 -- 지면 추정이 스윕 전체에 하나뿐이라 앞쪽이 오르막이면 그 지면이 밴드로 들어와
+# 유령 벽이 된다(모듈 docstring 의 알려진 한계). 라이브 실측(chungmu, 정지 상태 1스윕):
+# 장애물 밴드 4487점 중 15-25m 링이 3230점(72%)이고 그 z_rel 이 0.23 -> 1.80 으로 거리에
+# 따라 매끈하게 상승 -- 전형적인 경사 유령이다. 반면 0-6m 에는 사실상 아무것도 없었다.
+# 여기서 자르는 게 경사 강건 지면추정(Patchwork 류)을 제대로 구현하는 것보다 훨씬 싸고,
+# 무엇보다 **오프라인 하네스가 검증할 수 없는 정교함을 미리 넣지 않는다**는 원칙과 맞는다.
+#
+# 8.0 -> 5.0 (라이브 실측, 2차): 8m 컷만으로는 정지+제자리회전 구간에서 여전히 유령이
+# 자랐다 -- blocked_area 가 90초 동안 17.6m2 -> 69.3m2 로 4배. 라이다가 차체 고정이라
+# 회전할 때마다 다른 방위각의 지형을 새로 훑고, 지면 추정은 스윕 전체 단일 percentile
+# 이라 방위각별 오판이 그대로 쌓인다 -- 회전 자체가 유령 생성기가 된다. 같은 위치에서
+# 정상 주행(회전 아님) 중 실측한 스캔은 4-8m 구간이 244점(밴드의 3%)뿐이고 z_rel 도
+# 0.15~0.26 으로 정상 범위였다 -- 즉 8m 안쪽 근거리는 이미 대체로 깨끗했고, 문제는
+# 회전 중 스윕이 훑는 **면적**(파이 r^2) 자체였다. 5m 로 좁히면 면적이 61% 줄어
+# (pi*8^2 -> pi*5^2) 회전 중 유령 생성 기회도 같은 비율로 줄어든다. 근접 회피에는
+# 5m 로 충분하다(nav2 local costmap 관행도 이 정도 반경).
+MAX_RANGE_M = 5.0
+
+# 로봇에서 이 거리(m) 밖의 차단 셀은 버린다 -- 롤링 로컬 윈도우.
+#
+# 이 모듈 이름은 "**로컬** 장애물 레이어"인데 원래 구현은 삭제가 없는 전역 누적기였다.
+# 정적인 씬이라 지울 필요가 없다는 게 근거였지만, 지면 오분류가 섞이는 순간 그 가정은
+# "오분류도 영원히 남는다"가 된다. nav2 의 local costmap 과 같은 롤링 윈도우로 바꾸면
+# 상한(MAX_BLOCKED_CELLS)에 닿는 일 자체가 없어지고, 레이어 내용이 실제로 "지금 근처에
+# 있는 것"이 된다. 원거리 컷(MAX_RANGE_M)보다 넉넉하게 잡아, 잠깐 시야에서 벗어난
+# 장애물이 곧바로 지워지지는 않게 한다.
+LOCAL_WINDOW_M = 15.0
 
 # -- 경로 간섭 판정 --
 # 남은 경로에서 이 거리 안에 차단 셀이 있으면 재계획한다. 차체 반폭 + 여유.
@@ -188,6 +228,14 @@ class LidarObstacleLayer:
             return 0
         p = pts[keep]
 
+        # 1b) 원거리 컷 -- MAX_RANGE_M 참고. 지면추정 오차가 가장 크게 나타나는 구간을
+        # 통째로 빼는 것이라, 지면분리 자체를 정교하게 만들지 않고도 유령의 대부분을 없앤다.
+        rng = np.hypot(p[:, 0], p[:, 1])
+        near = rng <= MAX_RANGE_M
+        if not np.any(near):
+            return 0
+        p = p[near]
+
         # 2) 센서 -> 월드 (yaw 회전 + 로봇 위치). roll/pitch 는 다루지 않는다.
         x, y, yaw = pose
         cos_y, sin_y = math.cos(yaw), math.sin(yaw)
@@ -213,7 +261,29 @@ class LidarObstacleLayer:
                     continue
                 self._blocked[key] = ((c + 0.5) * self._res, (r + 0.5) * self._res)
                 new_blocked += 1
+
+        # 4) 롤링 로컬 윈도우 -- LOCAL_WINDOW_M 참고. 누적 전용이던 것을 "지금 근처"만
+        # 남기도록 바꾼다. _counts 도 같이 버린다: 남겨두면 셀이 윈도우에 재진입할 때
+        # 낡은 카운트만으로 즉시 다시 막혀서, 결국 지우지 않은 것과 같아진다.
+        self._evict_far((x, y))
         return new_blocked
+
+    def _evict_far(self, xy):
+        """로봇에서 LOCAL_WINDOW_M 밖 셀을 버린다."""
+        if not self._blocked:
+            return
+        keys = np.fromiter((k for kv in self._blocked.keys() for k in kv),
+                           dtype=np.int64, count=2 * len(self._blocked)).reshape(-1, 2)
+        cx = (keys[:, 1] + 0.5) * self._res - xy[0]
+        cy = (keys[:, 0] + 0.5) * self._res - xy[1]
+        far = (cx * cx + cy * cy) > (LOCAL_WINDOW_M * LOCAL_WINDOW_M)
+        if not np.any(far):
+            return
+        for r, c in map(tuple, keys[far].tolist()):
+            self._blocked.pop((r, c), None)
+            self._counts.pop((r, c), None)
+        # 윈도우가 다시 여유를 만들었으므로 상한 플래그도 현재 상태에 맞춘다.
+        self.capped = len(self._blocked) >= MAX_BLOCKED_CELLS
 
     # -- 출력 --
     def discs(self):
@@ -251,6 +321,40 @@ class LidarObstacleLayer:
         proj = a[None, :, :] + t[:, :, None] * d[None, :, :]
         dist = np.linalg.norm(cells[:, None, :] - proj, axis=2)
         return bool((dist.min() if dist.size else np.inf) < corridor_m)
+
+    def danger_ahead(self, pose, max_dist, cone_deg=70.0, goal=None, goal_exclude_m=0.0):
+        """차단 셀 중 로봇 전방 `cone_deg` 안, `max_dist` 이내에 있는 게 하나라도 있는가.
+
+        `blocks_path()`는 "남은 경로가 막혔나"를 보고 A* 재계획을 트리거한다 -- 재계획
+        사이클(격자 갱신 + A* + follower 교체) 한 바퀴만큼 항상 늦다. 이건 그 대신 매 틱
+        직접 속도를 깎는 반응형 제동용이라 계획을 전혀 참조하지 않는다 -- "지금 정면
+        가까이에 뭐가 있나"만 본다. 일단 멈추면 정체판정(STAGE2_STUCK_TIME_S)이 이어받아
+        우회를 만든다.
+
+        `goal`/`goal_exclude_m`: `_plan_obstacles`가 A* 에 넘기기 전 목표 근처 장애물을
+        빼는 것과 같은 이유로 여기서도 빼야 한다 -- 픽업 대상 자체가 라이다에는 그냥
+        장애물이라, 이 제외가 없으면 standoff 로 다가가는 정상 접근이 "장애물 코앞"으로
+        보여 영원히 제동만 걸리고 못 붙는다 (실측: rt02 가 이 누락으로 1800s 타임아웃).
+        """
+        if not self._blocked:
+            return False
+        x, y, yaw = pose
+        pts = np.asarray(list(self._blocked.values()), dtype=np.float64)   # (N, 2)
+        if goal is not None and goal_exclude_m > 0.0:
+            near_goal = np.linalg.norm(pts - np.array(goal, dtype=np.float64), axis=1) <= goal_exclude_m
+            pts = pts[~near_goal]
+            if pts.size == 0:
+                return False
+        d = pts - np.array([x, y])
+        dist = np.linalg.norm(d, axis=1) - self._res
+        close = dist <= max_dist
+        if not np.any(close):
+            return False
+        fwd = np.array([math.cos(yaw), math.sin(yaw)])
+        dn = d[close]
+        distn = np.maximum(np.linalg.norm(dn, axis=1), 1e-6)
+        cosang = (dn @ fwd) / distn
+        return bool(np.any(cosang >= math.cos(math.radians(cone_deg))))
 
     def stats(self):
         """로깅용 -- 오분류 폭주를 눈으로 잡기 위한 것."""
