@@ -1,0 +1,43 @@
+# 로컬 conda 환경 `MARC2026` (Python 3.10) 용 라이브러리 목록
+#
+# 용도: 코드 읽기·단위 테스트·YOLO 추론·학습·오프라인 채점(mec_sim_ice/score.py)을 PC에서 돌리기 위함.
+# 제출 컨테이너용 목록은 docker/requirements.txt 이고, 버전은 그쪽과 같게 맞췄다.
+#
+# ── 설치 순서 ─────────────────────────────────────────────────────────────
+#   conda create -n MARC2026 python=3.10
+#   conda activate MARC2026
+#
+#   # 1) PyTorch 는 PC 에 맞는 것 하나만 먼저 설치한다 (이 파일에는 넣지 않았다 --
+#   #    넣어두면 GPU PC 에서도 -r 설치 때 CPU 판으로 덮어써진다)
+#   #    GPU PC (제출 컨테이너와 같은 CUDA 12.8 빌드. RTX 50xx 는 cu128 이상 필요):
+#   pip install --index-url https://download.pytorch.org/whl/cu128 torch==2.7.1 torchvision==0.22.1
+#   #    GPU 없는 PC:
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchvision==0.22.1
+#
+#   # 2) 나머지
+#   pip install -r requirement.txt
+#
+#   # 3) 확인 (GPU PC 는 True 가 나와야 한다)
+#   python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+#
+# ── 제출 컨테이너와 다르게 뺀 것 ───────────────────────────────────────────
+#   - transformers / accelerate / huggingface_hub: Grounding DINO·텍스트 LM 폴백 전용인데
+#     팀에서 DINO 를 쓰지 않기로 했고(GPU 부족, 관계 이해 부족), 둘 다 기본 OFF 다.
+#     offline_score.py 는 transformers 가 없으면 폴백 계층을 알아서 건너뛴다.
+#   - ROS 2 Humble (rclpy, tf2_ros, sensor_msgs ...): pip 로 설치할 수 없다. 라이브 대회 실행
+#     (demo/participant_app.py 를 SDK 에 붙여 돌리는 것)에만 필요하고, 오프라인 도구는 없이 돈다.
+#   - Isaac Sim (pxr, omni): simulation-platform/patches 전용. 필요 없다.
+
+# 검출·학습 (3번 파트 핵심)
+ultralytics==8.3.170
+numpy<2.3
+opencv-python-headless>=4.9
+pillow>=10.0
+pyyaml
+
+# Stage 2 깊이 파지 보정 (participant_app._locate_object_by_depth)
+scipy
+
+# 로봇팔 기구학 (demo/arm_kin.py, manipulation/arm_kin.py). participant_app 과
+# Stage 2 오프라인 시뮬(validation/stage2_sim.py)이 import 한다.
+placo
