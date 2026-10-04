@@ -29,6 +29,13 @@
   폴백하므로 안전은 유지된다. 실측에서 자주 걸리면 그때 재귀적으로 확장한다.
 - 이미 지나간 웨이포인트(`follower.idx` 이전)는 건드리지 않는다 -- 회피는 항상 앞으로
   갈 구간에 대해서만.
+
+## [파일 출처 안내]
+이 파일도 MARC 2026 starter kit에는 없던 파일이다 -- 전체가 우리 팀이 새로 작성했다.
+starter kit의 `_navigate_to()`(mock_agent_navigation 기반)는 "A* 전체 재계획"과
+"매틱 제동" 두 갈래만 있었고, 이 모듈이 그 사이에 "국소 우회"라는 세 번째 갈래를
+더한다. `lidar_obstacles.LidarObstacleLayer.clusters()`가 만든 원을 입력으로 받아
+동작하며, 이 파일 자체는 라이다/점유지도를 전혀 모른다(순수 기하 계산).
 """
 
 from __future__ import annotations

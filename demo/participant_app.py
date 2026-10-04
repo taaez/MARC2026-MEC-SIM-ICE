@@ -30,6 +30,31 @@ Run:
 Precondition: the simulation platform must be running first.
 """
 
+# ============================================================================
+# [파일 출처 안내 -- starter kit 대비 무엇이 바뀌었나]
+# starter kit 원본 demo/participant_app.py는 443줄짜리 아주 단순한 데모였다
+# (Stage1: MockVLAGrounding 호출 -> submit, Stage2: standoff 접근 -> 직진 접근 ->
+#  1회 픽 시도 -> 배달 -> task_complete, 회피는 "8초 정체 시 A* 재계획" 단 하나뿐).
+# 이 파일은 그 골격(핸들러 등록 순서, _drive()의 큰 흐름, _standoff_goal 등)은
+# 유지하면서 아래 4가지 축으로 확장한 것이다. 아래에서부터는 각 함수/클래스 정의
+# 바로 위에 다음 3가지 중 하나로 표시해둔다.
+#   [스타터킷 원본]        -- 로직 변경 없음 (또는 극히 사소한 변경만)
+#   [스타터킷 골격 + 확장]  -- 원본 흐름은 유지하되 상당 부분을 팀이 추가/수정
+#   [팀 신규 추가]          -- starter kit에는 아예 없던 것
+#
+# 확장 축 4가지:
+#   1) 센서 기반 회피 (우리 팀 담당, 이번 대화의 핵심) -- lidar_obstacles /
+#      waypoint_avoid / depth_ground_veto 를 실제 tf/토픽에 연결하고, _navigate_to()
+#      안에 반응형 브레이크·정체 기억·후진 탈출까지 엮어 넣음.
+#   2) ElapsedClock -- now_s() 의 wall-clock/sim-time 전환 버그 수정.
+#   3) VLA grounding 교체 (MockVLAGrounding -> VLAGroundingAgent) + CCTV 워밍업 --
+#      Stage1 담당 팀원 쪽 작업.
+#   4) 픽업 재시도·뎁스 정밀 파지(_locate_object_by_depth)·바구니 확인 -- 매니퓰
+#      레이션 담당 팀원 쪽 작업.
+# 1)/2)가 이번에 설명한 "주행/회피" 범위이고, 3)/4)는 같은 파일 안에 있지만 다른
+# 담당 영역이라 간단히만 표시한다.
+# ============================================================================
+
 import json
 import logging
 import math
@@ -64,9 +89,17 @@ from waypoint_avoid import relocate
 # layer's own single-percentile estimate cannot avoid. See
 # mec_sim_ice/demo_agents/depth_ground_veto.py.
 import depth_ground_veto
+# [팀 추가] Shape-based grasp point / gripper yaw from the depth blob -- see demo/grasp_shape.py.
+import grasp_shape
 
 log = logging.getLogger("participant_app")
 
+# [스타터킷 원본] STAGE2_NAV_TIMEOUT_S ~ STAGE2_INFLATION_M, GOAL_TOLERANCE(아래)는
+# 원본 그대로. STAGE2_STUCK_TIME_S/STAGE2_STUCK_MOVE_M은 이름과 기본값은 같지만
+# "판정 방식"이 팀에 의해 틱 비교 -> 슬라이딩 윈도우로 바뀜(바로 아래 긴 주석 참고).
+# 이 섹션 이후 LIDAR_*/REACT_STOP_*/BRAKE_STALL_S/BLOCKAGE_*/RELOCATE_MARGIN_M/
+# DEPTH_EXPECT_WINDOW_M/ARM_REACH_FWD_M/MAX_PICK_ATTEMPTS/DEFAULT_HINT_RADIUS_M은
+# 전부 [팀 신규 추가] 상수다.
 # -- Stage 2 navigation parameters --
 # Demo-internal giveup so the drive loop cannot spin forever if a goal is unreachable. This is NOT
 # the competition timeout - the platform counts and enforces the real Stage 2 time limit.
@@ -76,7 +109,7 @@ STAGE2_NAV_DT = 1.0 / STAGE2_NAV_RATE_HZ
 STAGE2_INFLATION_M = 0.25      # erode free by the robot radius (avoids road<->grass step stalls)
 # Stall test: total displacement over a trailing STAGE2_STUCK_TIME_S-second window must
 # exceed STAGE2_STUCK_MOVE_M, or it is a stall. This used to compare consecutive ticks
-# (0.1s apart) instead of a window -- since GoalSeekController's decel is
+# (0.1s apart) instead of a window -- since GoalSeekController's decel was (before the sqrt profile)
 # linear=clamp(K_LINEAR*dist, ...) with K_LINEAR=0.5, speed drops under
 # STAGE2_STUCK_MOVE_M/STAGE2_NAV_DT = 0.5 m/s the moment dist < 1.0m, so *every* tick of a
 # normal, correctly-progressing final approach could fail that single-tick test and the
@@ -121,6 +154,15 @@ ROBOT_RADIUS_M = STAGE2_INFLATION_M      # the radius the planner already erodes
 # steer or replan by itself on purpose -- it only has to buy the time the deliberative
 # path needs, not solve avoidance itself.
 REACT_STOP_DIST_M = ROBOT_RADIUS_M + 0.35   # chassis radius + a few nav ticks of stopping slack
+# [팀 추가] 속도 비례 제동거리 -- REACT_STOP_DIST_M 은 저속용 하한으로 남기고, 그 위로
+#   d = 반경 + 여유 + v*t_react + v^2/(2*a_brake)
+# 를 쓴다. 0.6m 고정은 0.8 m/s 시절 값이라 1.1 m/s 에서는 반응 시간 동안 달리는 거리 +
+# 제동거리를 못 덮는다. v ~0.45 m/s 이하에서는 하한이 이겨서 저속 동작(좁은 통로에서
+# 넓은 브레이크가 데드락을 만든 실측 -- 아래 콘 각 주석)이 예전과 같다.
+# t_react = 내비 1틱 + 라이다 갱신 주기(2틱) / a_brake 는 섀시 실측이 없어 보수적 추정.
+REACT_T_REACT_S = 0.3
+REACT_BRAKE_DECEL = 1.0                     # m/s^2
+REACT_EXTRA_MARGIN_M = 0.10
 REACT_STOP_CONE_DEG = 40.0                  # narrow and close on purpose: A* already keeps its
                                              # own inflation clearance from known obstacles, so a
                                              # wide/generous cone here just re-questions routes A*
@@ -145,6 +187,13 @@ REACT_STOP_CONE_DEG = 40.0                  # narrow and close on purpose: A* al
 # sustained brake-hold as an immediate stall -- same _remember_blockage + replan path, just
 # triggered by the mechanism that actually caused the freeze instead of by its symptom.
 BRAKE_STALL_S = 1.5
+
+# [팀 추가] 종방향 가속도 제한 -- 전복 방지. MAX_LINEAR 가 1.1 로 오르면서 0 -> 최고속
+# 계단 명령이 상단 무거운 차체를 뒤로 젖힌다. 감속은 컨트롤러 프로파일(DECEL 0.5)이
+# 이미 계획하므로, 여기 감속 한도는 계획 밖 급정지(제자리 회전 전환 등)만 완화한다.
+# 반응형 브레이크는 이 제한을 거치지 않는다 -- 비상정지는 늦출 이유가 없다.
+STAGE2_ACCEL_MPS2 = 0.6
+STAGE2_DECEL_MPS2 = 1.0
 BLOCKAGE_RADIUS_M = 0.6                  # wider than the chassis, so A* must route around it
 BLOCKAGE_GROWTH_M = 0.4                  # stalled inside a known blockage -> it was too small
 BLOCKAGE_MAX_RADIUS_M = 2.0              # cap, so a bad mark cannot wall off the map
@@ -177,6 +226,12 @@ DEPTH_EXPECT_WINDOW_M = 0.5
 # grasp beyond it and the descend waypoint just times out "unreached" and the gripper
 # closes wherever the servo stalled (a silent air-grab). Clamp with a loud warning instead.
 ARM_REACH_FWD_M = 0.72
+# [팀 추가] 직진 접근 속도 = 남은 거리(fwd - target_fwd) 비례. 0.12 m/s 고정이던 것을
+# 멀 때는 빨리, 붙을수록 천천히. 하한 0.06 은 예전 "lat 크게 틀어졌을 때" 속도와 같고,
+# 10Hz 에서 정지 판정 밴드(-0.03~+0.02)를 한 틱에 건너뛰지 않는 속도다.
+APPROACH_K = 0.8
+APPROACH_V_MIN = 0.06
+APPROACH_V_MAX = 0.30
 
 # Retry budget for a failed pick (empty grasp, or grasped but missed the rear basket on place).
 MAX_PICK_ATTEMPTS = 3
@@ -197,6 +252,8 @@ MAX_PICK_ATTEMPTS = 3
 DEFAULT_HINT_RADIUS_M = 1.0
 
 
+# [팀 신규 추가] 클래스 전체가 starter kit에 없던 것 (starter kit은 그냥
+# `now_s() + budget`을 데드라인으로 썼음 -- 아래 docstring이 설명하는 버그의 원인).
 class ElapsedClock:
     """Monotonic elapsed-seconds accumulator over `client.now_s()`, immune to a backward jump.
 
@@ -242,6 +299,12 @@ class ElapsedClock:
 class DemoParticipant:
     """SDK-based demo participant -- connects the VLA/nav logic through handlers."""
 
+    # [스타터킷 골격 + 확장] self.client/self.vla와 목표 좌표 관련 속성
+    # (_collect_xy, _stage2_target_xy, _pickup_xy, _occ_logged)은 원본에 있던
+    # 것. 그 아래(_tf_buffer부터 _clock까지)는 전부 팀이 추가한 상태 -- 주행/회피
+    # 쪽은 _lidar_layer, _lidar_mount_xy, _cam_mount_R/_t, _lidar_fail_streak,
+    # _clock, _obstacles(원본엔 load_obstacles()로 채웠으나 실전용으로 빈 리스트로
+    # 바꿈)가 해당.
     def __init__(self):
         self.client = MARCClient.from_env()
         # Stage 1/2 grounding: vla_grounding pipeline (command_parser -> YOLO -> grounding
@@ -329,6 +392,7 @@ class DemoParticipant:
 
     # -- handler registration --
 
+    # [스타터킷 원본] 등록 순서/내용 모두 원본 그대로.
     def _register_handlers(self):
         c = self.client
         c.on_mission(self._on_mission)
@@ -341,6 +405,7 @@ class DemoParticipant:
 
     # -- Stage 1 --
 
+    # [팀 신규 추가] (Stage1 담당) -- CCTV 워밍업. starter kit에는 없던 메서드.
     def _ensure_cctv_warm(self, settle: float = 1.0, timeout: float = 20.0,
                           poll: float = 0.2) -> bool:
         """Wait until every discovered CCTV camera has delivered at least one frame.
@@ -384,6 +449,8 @@ class DemoParticipant:
                     timeout, self.client.list_cctv())
         return False
 
+    # [스타터킷 골격 + 확장] (Stage1 담당) -- 원본은 곧바로 self.vla.process()를
+    # 불렀고, CCTV 워밍업 전까지 워커 스레드로 미루는 분기는 팀이 추가.
     def _on_mission(self, mission):
         self._round_commands[mission.round] = mission.voice_command
         # Until CCTV is confirmed flowing, handle the round on a worker thread so this
@@ -396,6 +463,7 @@ class DemoParticipant:
             return
         self._handle_mission(mission)
 
+    # [팀 신규 추가] (Stage1 담당) -- 아래 두 메서드 모두 starter kit에 없던 것.
     def _handle_mission_deferred(self, mission):
         self._cctv_warm = self._ensure_cctv_warm()
         self._handle_mission(mission)
@@ -409,6 +477,8 @@ class DemoParticipant:
 
     # -- Stage 2: submit interpretation -> drive --
 
+    # [스타터킷 골격 + 확장] owner_position 읽기/grounding 제출 흐름은 원본과 동일.
+    # _stage2_submitted_target(리비전 로그용)만 팀이 추가.
     def _on_stage2_mission(self, mission):
         log.info("[Stage2] task: \"%s\" (limit %.0fs)",
                  mission.task_description, mission.time_limit)
@@ -429,6 +499,9 @@ class DemoParticipant:
         log.info("[Stage2] submitted grounding target=%s, delivery point=%s",
                  self._stage2_target_xy, self._pickup_xy)
 
+    # [스타터킷 골격 + 확장] hint_center(x,y)를 _collect_xy로 받는 부분은 원본과
+    # 동일. target_type/collect_z(지면 높이)/hint_radius 저장, reveal 로그 남기기는
+    # 전부 팀이 추가(주행 목표 정밀도를 높이기 위함).
     def _on_stage2_reveal(self, reveal):
         """Stage 2 post-grounding reveal (msg 411) -- adopt the approximate location/type as the pick goal.
 
@@ -457,6 +530,12 @@ class DemoParticipant:
             self._hint_radius = None
         self._append_reveal_log(reveal)
 
+    # [스타터킷 골격 + 확장] 큰 흐름(팔 접기 -> standoff 접근 -> 직진 접근 -> 픽 ->
+    # 배달 -> task_complete)은 원본과 동일. 팀이 확장한 부분(주행/회피 쪽):
+    #   - ElapsedClock 도입, lidar_layer/카메라 마운트 tf 셋업(_lidar_mount_offset,
+    #     _camera_mount_transform)을 매 런마다 새로 함
+    #   - _align_to_object() 호출 추가(standoff 도착 각도 보정)
+    # 그 외(픽 재시도 루프, 뎁스 정밀 파지, 바구니 확인)는 매니퓰레이션 담당 쪽 확장.
     def _drive(self):
         """Called once in a separate thread on entering STAGE2_RUN -- pick up the object then deliver it.
 
@@ -510,12 +589,10 @@ class DemoParticipant:
         # skipped even though _approach_straight also steers.
         self._align_to_object(collect_xy, deadline)
         # Final straight approach: drive straight at the object until arm_base fwd reaches grasp reach.
+        # _approach_straight ends with _halt(), which confirms the chassis has actually
+        # stopped (the driver keeps applying the last cmd_vel, so residual speed would
+        # overshoot the object) -- no separate fixed stop wait needed here.
         self._approach_straight(collect_xy, deadline, target_fwd=0.40)
-        # Stop! the chassis driver keeps applying the last cmd_vel, so emit 0 before the pick
-        # (otherwise residual speed overshoots the object).
-        for _ in range(5):
-            c.send_cmd_vel(0.0, 0.0)
-            c.sleep(0.1)
         log.info("[Stage2] standoff stop -- ready to pick")
 
         # Retry: is_grasping() (via run_pick_sequence's returned held) catches an empty-handed
@@ -573,9 +650,6 @@ class DemoParticipant:
                 log.info("[Stage2] retrying pick (attempt %d/%d)", attempt + 1, MAX_PICK_ATTEMPTS)
                 self._align_to_object(collect_xy, deadline)
                 self._approach_straight(collect_xy, deadline, target_fwd=0.40)
-                for _ in range(5):
-                    c.send_cmd_vel(0.0, 0.0)
-                    c.sleep(0.1)
         picked = picked and basket_ok
 
         # If the arm is left raised (front_high) without an object, driving the delivery leg with
@@ -602,6 +676,7 @@ class DemoParticipant:
         log.info("[Stage2] driving finished (delivery_reached=%s) -> task_complete", reached)
         c.task_complete()
 
+    # [스타터킷 원본] 로직 변경 없음.
     def _stow_arm(self):
         """Fold the arm to the HOME pose to lower the center of gravity -- tip-over prevention.
 
@@ -615,6 +690,7 @@ class DemoParticipant:
         except Exception as e:
             log.warning("[Stage2] arm stow failed: %s", e)
 
+    # [스타터킷 원본] 로직 변경 없음.
     def _standoff_goal(self, dest, standoff):
         """A point ``standoff`` metres in front of ``dest`` along the robot->dest line.
 
@@ -632,6 +708,9 @@ class DemoParticipant:
         f = (d - standoff) / d
         return (x + dx * f, y + dy * f)
 
+    # [스타터킷 골격 + 확장] 원본은 아래 pose-math 폴백 계산(ARM_BASE_FWD 가정)
+    # 하나뿐이었다. 팀이 tf2 기반 실측 경로(world->arm_base_link)를 앞에 추가하고,
+    # 그게 실패할 때만 원본 계산으로 떨어지도록 바꿨다.
     def _object_arm_xy(self, obj_xy):
         """Object world XY -> arm_base frame (fwd, lat).
 
@@ -668,6 +747,8 @@ class DemoParticipant:
         lat = -dx * ss + dy * cc           # car_base left (+Y)
         return (fwd - ARM_BASE_FWD - GRASP_FWD_BACKOFF, lat)
 
+    # [팀 신규 추가] 메서드 전체가 starter kit에 없던 것 -- standoff 도착 각도가
+    # 틀어졌을 때(A* 재계획/우회 후 등) 직진 접근 전에 먼저 제자리 회전으로 정렬.
     def _align_to_object(self, obj_xy, deadline, max_t=6.0, tol_rad=math.radians(8)):
         """Rotate in place to face ``obj_xy`` before the final straight approach.
 
@@ -709,12 +790,13 @@ class DemoParticipant:
             ang = max(-0.5, min(0.5, 1.5 * heading_err))
             c.send_cmd_vel(linear_x=0.0, angular_z=ang)
             c.sleep(STAGE2_NAV_DT)
-        for _ in range(5):
-            c.send_cmd_vel(0.0, 0.0)
-            c.sleep(0.05)
+        self._halt()
         gxy = self._object_arm_xy(obj_xy)
         log.info("[Stage2] align done -- object arm coords %s",
                  tuple(round(v, 3) for v in gxy) if gxy else None)
+    # [팀 신규 추가, 매니퓰레이션 담당 쪽 확장] 메서드 전체가 starter kit에 없던
+    # 것 -- 주행/회피와는 다른 목적(파지 정밀도)이지만 depth_ground_veto.py와
+    # 같은 좌표 변환 방식(핀홀 역투영 + tf 회전행렬)을 재사용한다.
     def _locate_object_by_depth(self, expected_xy=None):
         """Refine the pick point using the base camera's own depth (floor-height segmentation).
 
@@ -824,6 +906,18 @@ class DemoParticipant:
             near = candidate & ((fwd - ef) ** 2 + (lat - el) ** 2
                                 <= DEPTH_EXPECT_WINDOW_M ** 2)
             if int(np.sum(near)) >= 20:
+                # [팀 추가] Shape-based grasp (demo/grasp_shape.py): picks the blob nearest
+                # the nav estimate, corrects the near-side bias, and returns a gripper yaw
+                # that closes across a long object. Each part has its own switch there.
+                est = grasp_shape.estimate_grasp(
+                    fwd[near], lat[near], up[near], floor_z,
+                    expected_xy=(ef, el), reach_fwd=ARM_REACH_FWD_M)
+                if est is not None:
+                    log.info("[Stage2] depth grasp shape=%s fwd=%.3f lat=%.3f down=%.3f yaw=%s",
+                             est["shape"], est["fwd"], est["lat"], est["down"],
+                             "default" if est["yaw"] is None else "%.2f" % est["yaw"])
+                    out = (est["fwd"], est["lat"], est["down"])
+                    return out if est["yaw"] is None else out + (est["yaw"],)
                 # Measure the grasp HEIGHT too, not just (fwd, lat). grasp_down defaults
                 # are tuned per object family for a STANDING tumbler; a lying umbrella's
                 # shaft sits at floor level, so a fixed -0.28 closed the gripper ~5cm
@@ -849,6 +943,9 @@ class DemoParticipant:
 
         return (float(np.mean(fwd[blob_mask])), float(np.mean(lat[blob_mask])))
 
+    # [스타터킷 골격 + 확장] 직진 접근 + lat 중심맞춤 로직은 원본과 동일. 팀이
+    # 추가한 것: cap_angular() 적용(섀시 정지 방지), 그리고 reversing 로직(과주행
+    # 시 후진해서 파지 거리 복구 -- 아래 docstring의 rt01 실측 사례 참고).
     def _approach_straight(self, obj_xy, deadline, target_fwd=0.40, max_t=20.0):
         """Drive straight at the object until the arm_base forward distance reaches target_fwd.
 
@@ -891,20 +988,23 @@ class DemoParticipant:
                     continue
                 break
             ang = max(-0.4, min(0.4, 1.5 * lat))         # center the object (lat -> 0)
-            lin = 0.12 if abs(lat) < 0.15 else 0.06      # badly off -> creep slower while turning
+            # Speed proportional to the remaining depth (see APPROACH_K); badly off-center
+            # -> creep at the floor while turning, as before.
+            lin = max(APPROACH_V_MIN, min(APPROACH_V_MAX, APPROACH_K * (fwd - target_fwd)))
+            if abs(lat) >= 0.15:
+                lin = APPROACH_V_MIN
             # Same chassis validity cap the path controllers use: without it this leg emits
             # 2v <= w*T whenever |lat| >= 0.211, and the chassis silently stops -- it burned
             # the whole 20 s budget moving 6 mm, leaving the object out of arm reach.
             ang = cap_angular(lin, ang)
             c.send_cmd_vel(linear_x=lin, angular_z=ang)
             c.sleep(STAGE2_NAV_DT)
-        for _ in range(5):
-            c.send_cmd_vel(0.0, 0.0)
-            c.sleep(0.05)
+        self._halt()
         gxy = self._object_arm_xy(obj_xy)
         log.info("[Stage2] straight approach done -- object arm coords %s",
                  tuple(round(v, 3) for v in gxy) if gxy else None)
 
+    # [팀 신규 추가, 매니퓰레이션 담당 쪽] starter kit에 없던 메서드.
     def _wait_basket_state(self, timeout: float = 1.0):
         """Poll briefly for a settled is_basket_occupied() reading.
 
@@ -922,6 +1022,8 @@ class DemoParticipant:
             val = c.is_basket_occupied()
         return val
 
+    # [스타터킷 골격 + 확장] 폴링 로직은 원본과 동일, ElapsedClock으로 시간 기준만
+    # (now_s() 절대값 -> 경과시간) 교체.
     def _wait_for_collect_goal(self, timeout: float = 5.0):
         """Poll briefly until the reveal (msg 411) approximate position arrives, then return the pickup goal (x, y).
 
@@ -938,6 +1040,12 @@ class DemoParticipant:
                     timeout, self._stage2_target_xy)
         return self._stage2_target_xy
 
+    # ========================================================================
+    # [팀 신규 추가 구간] 여기서부터 _reverse_escape()까지 -- lidar_obstacles /
+    # depth_ground_veto / waypoint_avoid 를 실제 tf·토픽에 연결하고, 회피 관련
+    # 상태(장애물 원 목록, 정체 기억)를 만드는 메서드들. starter kit에는 전부
+    # 없던 것들이며, 이번 대화에서 설명한 "주행/회피" 로직의 핵심부.
+    # ========================================================================
     def _lidar_mount_offset(self):
         """Base_LiDAR -> chassis (dx, dy) from tf, or (0, 0) when tf cannot answer.
 
@@ -1190,6 +1298,67 @@ class DemoParticipant:
             c.sleep(STAGE2_NAV_DT)
         c.send_cmd_vel(0.0, 0.0)
 
+    # [팀 신규 추가] 고정 "0 명령 x 5회 + 대기"(0.25~0.5s, 접근 직후엔 두 번 겹쳐 0.75s)를
+    # 대체. 0 을 계속 보내면서 실제로 멈춘 게 pose 로 확인되는 즉시 돌아간다.
+    def _halt(self, max_s=0.5, min_s=0.1, still_m=0.003, still_rad=0.01):
+        """Command zero until the chassis is confirmed stopped, or ``max_s`` elapses.
+
+        The chassis driver keeps applying the last cmd_vel, so a stop must be commanded,
+        and residual speed must be gone before the arm commits to a grasp point. "Stopped"
+        = pose moved <= ``still_m`` and turned <= ``still_rad`` over 0.1s (~3 cm/s). Zero is
+        sent for at least ``min_s`` (more than one publish, in case one is lost), and
+        ``max_s`` equals the longest old fixed wait, so this is never slower than before.
+        Returns True if a stop was confirmed.
+        """
+        c = self.client
+        start = self._clock.elapsed
+        ref = None   # (elapsed, pose) the next stillness comparison is made against
+        while c.is_running:
+            c.send_cmd_vel(0.0, 0.0)
+            c.sleep(0.05)
+            t = self._clock.tick() - start
+            if t >= max_s:
+                break
+            pose = c.get_world_pose()
+            if pose is None:
+                continue
+            if ref is None:
+                ref = (t, pose)
+                continue
+            if t - ref[0] < 0.1 - 1e-6:
+                continue
+            moved = math.hypot(pose[0] - ref[1][0], pose[1] - ref[1][1])
+            dyaw = abs(math.atan2(math.sin(pose[2] - ref[1][2]), math.cos(pose[2] - ref[1][2])))
+            if t >= min_s and moved <= still_m and dyaw <= still_rad:
+                return True
+            ref = (t, pose)
+        c.send_cmd_vel(0.0, 0.0)
+        return False
+
+    # [팀 신규 추가] 속도 비례 반응형 제동거리 -- REACT_T_REACT_S 위 주석 참고.
+    @staticmethod
+    def _react_stop_dist(speed):
+        v = max(0.0, float(speed))
+        return max(REACT_STOP_DIST_M,
+                   ROBOT_RADIUS_M + REACT_EXTRA_MARGIN_M + v * REACT_T_REACT_S
+                   + v * v / (2.0 * REACT_BRAKE_DECEL))
+
+    # [팀 신규 추가] 종방향 가속도 제한 -- STAGE2_ACCEL_MPS2 위 주석 참고.
+    @staticmethod
+    def _limit_accel(linear, prev_linear, dt=STAGE2_NAV_DT):
+        """Rate-limit forward speed change per nav tick (accel / decel separately)."""
+        if linear > prev_linear:
+            return min(linear, prev_linear + STAGE2_ACCEL_MPS2 * dt)
+        return max(linear, prev_linear - STAGE2_DECEL_MPS2 * dt)
+
+    # [스타터킷 골격 + 대폭 확장] 이 메서드가 회피 로직이 실제로 조립되는 곳.
+    # 원본(starter kit)에 있던 것: A* 갱신 -> PathFollower 추종 -> follower 없으면
+    # GoalSeekController 직접 폴백 -> "8초간 못 움직이면 재계획" 단일 정체 판정.
+    # 팀이 새로 엮어 넣은 것(아래 while 루프 안에 순서대로): 라이다 레이어 갱신 +
+    # 회전 중 스킵 게이트, depth veto 갱신, blocks_path 감지 시 waypoint_avoid.
+    # relocate() 우선 시도 후 실패하면 전체 재계획, 8초 슬라이딩 윈도우 정체 판정
+    # (+ 같은 지점 연속 정체 시 _reverse_escape), 반응형 브레이크(danger_ahead)와
+    # 그 BRAKE_STALL_S 에스컬레이션. snap_m 파라미터화도 팀 추가.
     def _navigate_to(self, goal, deadline, tol=GOAL_TOLERANCE,
                      inflation_m=STAGE2_INFLATION_M, exclude_m=0.6, cruise=False,
                      snap_m=None):
@@ -1216,6 +1385,12 @@ class DemoParticipant:
         # fallback actually finishes the leg inside tol instead of declaring victory 0.7 m
         # out (see the follower-done handling below for the measured failure this caused).
         fallback_ctrl.GOAL_TOLERANCE = min(fallback_ctrl.GOAL_TOLERANCE, tol)
+        # NOTE: do NOT shadow the follower's controller the same way. When the goal cell is
+        # blocked the path ends short of the goal, and the follower's looser 0.7 m "done"
+        # is the hysteresis that keeps the fallback in charge once it takes over -- at
+        # 0.45 the follower flips done/not-done every few ticks, the two controllers aim
+        # in opposite directions, and the chassis spins in place until the stall detector
+        # fires (measured offline, rt01: leg1 30s -> 45s).
 
         # Obstacles for this leg -- lidar layer + stall memory, minus anything on the goal.
         leg_obstacles = self._plan_obstacles(goal, exclude_m)
@@ -1426,14 +1601,17 @@ class DemoParticipant:
             # available without waiting for LIDAR_UPDATE_EVERY_TICKS. Only clamps linear
             # (still free to turn) -- steering out of the way is the replan's job, this only
             # has to prevent contact before that replan lands.
+            # Stop distance scales with the speed the chassis was last told to hold (the
+            # accel limit keeps that close to its real speed) -- see REACT_T_REACT_S.
+            stop_dist = self._react_stop_dist(last_cmd[0])
             danger = self._lidar_layer is not None and self._lidar_layer.danger_ahead(
-                pose, REACT_STOP_DIST_M, REACT_STOP_CONE_DEG,
+                pose, stop_dist, REACT_STOP_CONE_DEG,
                 goal=goal, goal_exclude_m=exclude_m)
             blocked_by_brake = danger and linear > 0.0
             if blocked_by_brake:
                 if not braking:
-                    log.info("[Stage2] lidar: obstacle within %.2fm ahead -> braking",
-                             REACT_STOP_DIST_M)
+                    log.info("[Stage2] lidar: obstacle within %.2fm ahead (v=%.2f) -> braking",
+                             stop_dist, last_cmd[0])
                 linear = 0.0
                 # BRAKE_STALL_S escalation -- see the constant's comment. The follower keeps
                 # wanting to move (that is what blocked_by_brake means) while heading keeps
@@ -1458,6 +1636,17 @@ class DemoParticipant:
                     pos_history.append((c.now_s(), x, y))
             else:
                 brake_held_since = None
+                # Accel limit (not on a brake -- an emergency stop is never slowed down).
+                # Re-cap angular afterwards: a speed held lower than the controller asked
+                # for permits less turn (cap_angular), and one held higher while slowing
+                # must not exceed the lateral-accel limit (tip-over).
+                limited = self._limit_accel(linear, last_cmd[0])
+                if limited != linear:
+                    linear = limited
+                    angular = cap_angular(linear, angular)
+                    if linear > 1e-3:
+                        w_lat = GoalSeekController.MAX_LAT_ACCEL / linear
+                        angular = max(-w_lat, min(w_lat, angular))
             braking = danger
 
             c.send_cmd_vel(linear_x=linear, angular_z=angular)
@@ -1476,6 +1665,8 @@ class DemoParticipant:
 
     # -- notifications --
 
+    # [스타터킷 골격 + 확장] 로그 출력 두 줄은 원본과 동일, JSONL 파일 기록
+    # (self._append_score_log 호출)만 팀이 추가.
     def _on_score(self, score):
         if score.is_final:
             log.info("[FINAL] %s", score.scores)
@@ -1483,6 +1674,7 @@ class DemoParticipant:
             log.info("[Score] round %s: total=%s", score.round, score.total)
         self._append_score_log(score)
 
+    # [팀 신규 추가] starter kit에 없던 메서드.
     def _append_score_log(self, score):
         """Append one JSONL line per score event (round, its voice_command, full scores dict).
 
@@ -1502,6 +1694,7 @@ class DemoParticipant:
         except Exception as e:
             log.warning("[Score] JSONL logging failed: %s", e)
 
+    # [팀 신규 추가] starter kit에 없던 메서드.
     def _append_reveal_log(self, reveal):
         """Append one JSONL line per Stage 2 reveal (msg 411).
 
@@ -1530,6 +1723,7 @@ class DemoParticipant:
         except Exception as e:
             log.warning("[Stage2] reveal JSONL logging failed: %s", e)
 
+    # [스타터킷 원본] 아래 두 메서드 모두 로직 변경 없음.
     def _on_state_change(self, old, new):
         log.info("[STATE] %s -> %s", old, new)
 
@@ -1538,6 +1732,8 @@ class DemoParticipant:
 
     # -- run --
 
+    # [팀 신규 추가] starter kit에 없던 메서드 -- tf2 리스너(world->arm_base_link,
+    # 카메라/라이다 마운트 변환에 전부 필요) 셋업.
     def _setup_tf(self):
         """Create the tf listener -- must run after client.connect() (rclpy initialised).
 
@@ -1556,6 +1752,8 @@ class DemoParticipant:
                         "ARM_BASE_FWD pose math in _object_arm_xy", e)
             self._tf_buffer = self._tf_listener = None
 
+    # [스타터킷 골격 + 확장] connect()/run() 호출은 원본과 동일, self._setup_tf()
+    # 호출 한 줄만 팀이 추가(connect() 뒤여야 rclpy.init()이 끝나 있어서 안전).
     def run(self):
         if not self.client.connect():
             raise SystemExit("Registration failed -- check the runtime and the token.")
@@ -1563,6 +1761,7 @@ class DemoParticipant:
         self.client.run()
 
 
+# [스타터킷 원본] 로직 변경 없음.
 def main():
     logging.basicConfig(
         level=logging.INFO,
