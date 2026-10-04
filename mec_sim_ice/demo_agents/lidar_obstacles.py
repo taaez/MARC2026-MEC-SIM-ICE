@@ -40,6 +40,13 @@ z 성분도 필요 없고, 지형이 통째로 오르내려도 따라간다.
 빈 하나 안에서의 경사(22.5deg 섹터 x 2.5m 밴드 내 높이 변화)는 여전히 평면 취급이므로,
 그래도 오탐이 남으면 링 간 수직각 판정(LeGO-LOAM 계열)이나 섹터별 평면 적합(Patchwork
 계열)이 다음 단계다. 오탐 감시용으로 `stats()` 가 차단 셀 수를 돌려준다.
+
+## [파일 출처 안내]
+이 파일은 MARC 2026 starter kit에 존재하지 않는다 -- 전체가 우리 팀이 새로 작성한
+파일이다(개발자 가이드가 명시한 "점유지도에 없는 3D 장애물을 라이다/카메라로 직접
+감지" 요구사항 구현). starter kit은 `mock_demo_data.yaml`에서 미리 뽑아둔 장애물
+좌표를 읽어오는 `load_obstacles()`(mock_agent_navigation.py)만 제공했었고, 실전
+대회에서는 그 yaml이 없으므로 이 레이어가 그 자리를 대체한다.
 """
 
 from __future__ import annotations
