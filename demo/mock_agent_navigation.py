@@ -10,6 +10,23 @@ This module bundles the demo's navigation pieces (participants replace/extend th
     (pre-extracted by ``tools/mock_data_builder/gen_mock_demo_data.py``).
 """
 
+# ============================================================================
+# [파일 출처 안내]
+# 이 파일은 MARC 2026 starter kit이 제공한 demo/mock_agent_navigation.py가 원본이다.
+# GoalSeekController / PathFollower / OccupancyGridPlanner(A*)와 load_obstacles 계열
+# 함수는 전부 starter kit 원본 그대로이며(로직 변경 없음), 우리 팀이 실제로 추가한 건
+# 아래 3곳뿐이다 (각 위치에 [팀 추가] 표시):
+#   1) 모듈 레벨 STEERING_TRACK 상수 + cap_angular() 함수
+#      -- 원래는 GoalSeekController.compute() 안에 똑같은 로직이 인라인으로 박혀 있었는데,
+#         participant_app.py의 _approach_straight()에서도 같은 계산이 필요해져서 공용
+#         함수로 뽑아냄.
+#   2) OccupancyGridPlanner.is_free() 메서드 -- waypoint_avoid.relocate()가 우회 방향이
+#      도로 밖(잔디/벽)인지 확인할 때 씀.
+#   3) nearest_only_exclude() 함수 -- waypoint_avoid.relocate()용 장애물 원 목록을 만들 때,
+#      목표에 가장 가까운 원 하나만 제외하기 위함(obstacles_excluding_goal은 반경 안 전부를
+#      지워서 라이다 클러스터 회피용으로는 너무 거칠다).
+# ============================================================================
+
 import math
 
 
@@ -25,9 +42,12 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+# [팀 추가] 아래 STEERING_TRACK 상수 + cap_angular() 함수는 starter kit에 없던 것.
 # 4-wheel-steer track (m). Same value as the platform's chassis steering track.
 # The chassis STOPS (applies 0) on a command where 2*v <= w*T -- a turn too tight for the
 # speed. It reports no error and keeps the last command, so the robot simply stops moving.
+# (원래 GoalSeekController.compute() 안에 인라인으로만 있던 계산을, 다른 파일
+#  participant_app._approach_straight()에서도 재사용하려고 모듈 함수로 승격시켰다.)
 STEERING_TRACK = 0.38
 
 
@@ -64,22 +84,35 @@ class GoalSeekController:
 
     # Speed / turn caps. Large turns are handled in place (see HEADING_TOLERANCE), so forward
     # motion rarely needs a hard swerve; the Ackermann w-limit below guarantees a tight arc.
-    MAX_LINEAR = 0.8           # m/s
+    # [팀 수정] 0.8 -> 1.1. SDK 상한은 1.5 지만 상단 무거운 차체라 여유를 남긴다.
+    MAX_LINEAR = 1.1           # m/s
     MAX_ANGULAR = 1.2          # rad/s
-    K_LINEAR = 0.5
     K_ANGULAR = 0.8
+    # [팀 수정] 감속은 K_LINEAR*dist(비례) 대신 사다리꼴 프로파일 v = sqrt(2*a*d).
+    # 비례 감속은 1m 남은 지점에서 이미 0.5 m/s 로 떨어져 꼬리가 길었다. 여기서 d 는
+    # "정지 경계(GOAL_TOLERANCE)까지 남은 거리"라서 경계에 V_MIN 으로 들어선다.
+    # V_MIN 이 없으면 경계 직전에 속도가 0 으로 수렴해 영원히 도달하지 못한다.
+    DECEL = 0.5                # m/s^2 -- 계획 감속도 (1.1 m/s 에서 정지까지 ~1.2m)
+    V_MIN = 0.12               # m/s   -- 정지 경계 진입 속도
+    # [팀 추가] 횡가속도(v*w) 상한 -- 전복 방지. 1.0 은 예전 0.8 m/s x 1.2 rad/s 의
+    # 최악값(0.96)과 같은 수준이라, 선회 중 하중은 기존과 같고 직선만 빨라진다.
+    MAX_LAT_ACCEL = 1.0        # m/s^2
     # 4-wheel-steer track (m) -- see the module-level STEERING_TRACK / cap_angular().
     STEERING_TRACK = STEERING_TRACK
 
-    def compute(self, pose: tuple, goal: tuple, cruise: bool = False) -> tuple:
+    def compute(self, pose: tuple, goal: tuple, cruise: bool = False,
+                remaining: float = None) -> tuple:
         """Compute one step of commands from the current pose and goal.
 
         Args:
             pose: (x, y, yaw_radians) -- world coordinates (client.get_world_pose()).
             goal: (gx, gy)           -- target XY coordinates (m).
-            cruise: if True, skip the near-goal proportional deceleration (K_LINEAR*dist)
-                and cruise at MAX_LINEAR -- for intermediate pass-through waypoints; only
-                the final goal (cruise=False) decelerates on approach.
+            cruise: if True, skip the near-goal deceleration and cruise at MAX_LINEAR --
+                for pass-through goals that are not a stop point.
+            remaining: distance (m) left to the actual stop point, when it is further than
+                ``goal`` (PathFollower passes the remaining path length, so the profile
+                starts braking for the final stop and not for every intermediate
+                waypoint). None -> straight-line distance to ``goal``.
 
         Returns:
             (linear_x, angular_z, reached: bool)
@@ -103,7 +136,11 @@ class GoalSeekController:
         elif cruise:
             linear = self.MAX_LINEAR           # pass-through waypoint: no deceleration
         else:
-            linear = _clamp(self.K_LINEAR * dist, 0.0, self.MAX_LINEAR)  # decelerate near goal
+            to_stop = (dist if remaining is None else remaining) - self.GOAL_TOLERANCE
+            linear = _clamp(math.sqrt(2.0 * self.DECEL * max(0.0, to_stop)),
+                            self.V_MIN, self.MAX_LINEAR)
+        if linear > 0.0 and abs(angular) > 1e-6:
+            linear = min(linear, self.MAX_LAT_ACCEL / abs(angular))
 
         # Ackermann validity: a turn too tight for the speed (2v <= w*T) makes the chassis
         # stop. Cap w within 2v/T so even a goal behind the robot keeps moving in the
@@ -152,11 +189,16 @@ class PathFollower:
                 break
 
         wx, wy = self.path[self.idx]
-        # Intermediate waypoints cruise (full speed); the final point decelerates -- unless
-        # passthrough, where the final point also cruises.
         final = self.idx >= len(self.path) - 1
-        cruise = (not final) or self._passthrough
-        linear, angular, reached = self.ctrl.compute(pose, (wx, wy), cruise=cruise)
+        # [팀 수정] 중간 웨이포인트도 무조건 cruise 하지 않고, "남은 경로 길이" 기준
+        # 감속 프로파일을 따른다. 마지막 웨이포인트가 가까운 꺾인 경로에서 최고속으로
+        # 마지막 점에 들어서면 그 짧은 거리 안에 못 멈추기 때문이다. 멀리 있을 때는
+        # 프로파일이 MAX_LINEAR 로 포화되므로 예전 cruise 와 같다.
+        remaining = math.hypot(wx - x, wy - y)
+        for (ax, ay), (bx, by) in zip(self.path[self.idx:], self.path[self.idx + 1:]):
+            remaining += math.hypot(bx - ax, by - ay)
+        linear, angular, reached = self.ctrl.compute(
+            pose, (wx, wy), cruise=self._passthrough, remaining=remaining)
         done = final and reached
         info = {"idx": self.idx, "total": len(self.path), "waypoint": (wx, wy)}
         return linear, angular, done, info
@@ -323,6 +365,9 @@ class OccupancyGridPlanner:
 
     # -- internal helpers --
 
+    # [팀 추가] is_free()는 starter kit에 없던 메서드. waypoint_avoid.relocate()가
+    # 우회 경로 후보(원 둘레를 따라 도는 호)가 실제 도로 위인지, 잔디/벽 밖으로
+    # 새는지 확인하는 용도로만 쓴다.
     def is_free(self, x, y):
         """월드 점이 점유지도 상 자유공간(원시 셀값 0)인가.
 
@@ -515,6 +560,9 @@ def obstacles_excluding_goal(obstacles, goal_xy, exclude_m=0.6):
     return out
 
 
+# [팀 추가] 이 함수 전체가 starter kit에 없던 것. waypoint_avoid.relocate()에 넘길
+# "장애물 원" 목록을 만들 때, obstacles_excluding_goal()(반경 안 전부 제거)이 너무
+# 거칠어서 만든 정밀 버전이다.
 def nearest_only_exclude(obstacles, goal_xy, search_m):
     """목표 근방에서 가장 가까운 장애물 **하나만** 제외한다 (전부가 아니라).
 

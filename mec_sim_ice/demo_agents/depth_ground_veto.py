@@ -22,6 +22,13 @@
 유령은 여전히 1층 대책(원거리 컷, 롤링 윈도우, `LidarObstacleLayer` 자체)에
 의존한다. 시간적 기억도 없다 -- 매 프레임 다시 확인해서 지울 뿐이라, 로봇이
 고개를 돌리면(=회전하면) 그 순간부터는 다시 라이다 단독 판정으로 돌아간다.
+
+## [파일 출처 안내]
+이 파일도 lidar_obstacles.py와 마찬가지로 MARC 2026 starter kit에는 없던 파일이다
+-- 전체가 우리 팀이 새로 작성했다. `participant_app._locate_object_by_depth()`가
+같은 base 카메라의 depth로 "바닥 위로 솟은 것"(파지 대상)을 찾는 것과 정반대로,
+여기서는 "바닥 자체"를 찾아서 라이다의 오판을 지우는 데 쓴다 -- 좌표 변환 공식
+(quat_to_rotmat, 핀홀 역투영)은 그쪽 코드와 동일한 방식을 재사용한 것이다.
 """
 
 from __future__ import annotations

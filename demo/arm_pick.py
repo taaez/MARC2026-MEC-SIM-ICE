@@ -502,6 +502,16 @@ def pick_and_place(client, log, grasp_xy=None, object_type=None):
                 _log(f"  [grasp-z] no tuned constant for {object_type} -- using measured "
                      f"height {float(grasp_xy[2]):.3f} (default was {p['grasp_down']:.3f})")
                 p["grasp_down"] = float(grasp_xy[2])
+        # [팀 추가] 4th element = measured gripper yaw (grasp_shape.py: closes across a
+        # long object). Same precedence as grasp_down: an object's own tuned constant wins.
+        if len(grasp_xy) > 3 and grasp_xy[3] is not None:
+            if "grasp_yaw" in object_param_keys(object_type):
+                _log(f"  [grasp-yaw] keeping tuned {object_type} constant "
+                     f"{p['grasp_yaw']:.2f} (measured {float(grasp_xy[3]):.2f} ignored)")
+            else:
+                _log(f"  [grasp-yaw] measured {float(grasp_xy[3]):.2f} "
+                     f"(default was {p['grasp_yaw']:.2f})")
+                p["grasp_yaw"] = float(grasp_xy[3])
     return run_motion(client, log, p, "full")
 
 
