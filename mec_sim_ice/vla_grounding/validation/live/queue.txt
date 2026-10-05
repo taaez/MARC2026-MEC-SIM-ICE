@@ -1,0 +1,13 @@
+# problem tag ABL_OFF GRASP_OFF   (- = none)
+rt02_parking_umbrella  rt02_full_r1 - -
+rt02_parking_umbrella  rt02_base_r1 all all
+rt03_vending_umbrella  rt03_full_r1 - -
+rt03_vending_umbrella  rt03_base_r1 all all
+rt04_taxi_tumbler      rt04_full_r1 - -
+rt04_taxi_tumbler      rt04_base_r1 all all
+rt04b_taxi_umbrella    rt04b_full_r1 - -
+rt04b_taxi_umbrella    rt04b_base_r1 all all
+rtC2_fallenbike_pencil rtC2_full_r1 - -
+rtC2_fallenbike_pencil rtC2_base_r1 all all
+rt01_parking_tumbler   rt01_full_r2 - -
+rt01_parking_tumbler   rt01_base_r2 all all

@@ -128,7 +128,45 @@ def _make_js(arm_q, grip):
     return js
 
 
-def build_waypoints(p, phase="full"):
+# [팀 추가] Long-object transport. With the gripper orientation held fixed in the arm_base
+# frame (the original design), the ~180deg base rotation from the grasp to the basket makes
+# the wrist roll 180deg relative to the arm, so mid-arc a long object (lying umbrella ~0.9m)
+# lies RADIAL and its inner end sweeps through the arm column / lidar housing (offline FK:
+# 2deg from radial, 8cm from the lidar; live rt02 2026-10-04: the 'over' arc took 55s instead
+# of ~8s and the umbrella slipped out before 'place'). For an object at least this long the
+# transport instead (1) rolls the wrist in place at lift height so the object lies
+# TANGENTIAL to the arc, then (2) keeps that pose relative to the arm through the arc
+# (target orientation = base rotation * orient pose -> no wrist roll during the arc), and
+# (3) uses the "long_object" layer of pnp_params.json (higher carry, slower arc).
+LONG_OBJECT_MIN_M = 0.25
+
+
+def _wrap_pi(a):
+    return (a + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def _wrap_half_pi(a):
+    return (a + np.pi / 2.0) % np.pi - np.pi / 2.0
+
+
+def long_transport_quats(base_quat, grasp_yaw, lift, over):
+    """(orient_quat, over_quat, orient_yaw) for the long-object transport.
+
+    grasp_yaw is also the object's axis angle in the arm_base frame (finger closing axis =
+    90deg + grasp_yaw, measured on the URDF). The orient yaw is the smallest roll that turns
+    the axis tangential at the lift azimuth -- rolling toward tangential always moves the
+    object's inner end away from the arm column, never through it.
+    """
+    az_lift = float(np.arctan2(lift[1], lift[0]))
+    az_over = float(np.arctan2(over[1], over[0]))
+    yaw_t = grasp_yaw + _wrap_half_pi(az_lift + np.pi / 2.0 - grasp_yaw)
+    q_orient = arm_kin.quat_mul(base_quat, arm_kin.rotvec_to_quat(np.array([0.0, 0.0, yaw_t])))
+    dpsi = _wrap_pi(az_over - az_lift)     # same direction ik_solve/unwrap turn joint_1
+    q_over = arm_kin.quat_mul(arm_kin.rotvec_to_quat(np.array([0.0, 0.0, dpsi])), q_orient)
+    return (q_orient / np.linalg.norm(q_orient), q_over / np.linalg.norm(q_over), yaw_t)
+
+
+def build_waypoints(p, phase="full", long_quats=None):
     """pick-and-place waypoint table - format (label, ee[arm_base], grip, hold, mode).
 
     Tune by reading and editing this table directly. mode "cart" = straight-line EE tracking (vertically
@@ -140,6 +178,8 @@ def build_waypoints(p, phase="full"):
       -> over (rotate to above the basket, joint arc) -> place (descend to basket) -> release (open)
       -> up (straight up) -> back (rotate back to the front, joint arc).
     phase="pick": up to lift. phase="full": up to place.
+    long_quats: (orient_quat, over_quat) -> long-object transport: an extra in-place "orient"
+    roll after lift, and over/place/release/up held at over_quat (see long_transport_quats).
     """
     g = [p["grasp_fwd"], p["grasp_lat"], p["grasp_down"]]
     pre = [g[0], g[1], g[2] + p["pre_up"]]
@@ -163,6 +203,11 @@ def build_waypoints(p, phase="full"):
         ("up",      over,         op,   0.2,  "cart"),   # straight up again
         ("back",    front_high,   op,   0.2,  "joint"),  # rotate back to the front (arc)
     ]
+    if long_quats is not None:
+        q_orient, q_over = long_quats
+        place_wps = ([("orient", lift, cl, 0.3, "joint", q_orient)]
+                     + [wp + (q_over,) if wp[0] in ("over", "place", "release", "up") else wp
+                        for wp in place_wps])
     return pick if phase == "pick" else pick + place_wps
 
 
@@ -228,6 +273,9 @@ def _read_arm_q(client):
     except ValueError:
         return None
     return np.array([st.position[i] for i in idx], dtype=np.float64)
+
+
+SEQ_TIMEOUT_S = 60.0   # [팀 추가] one pick_and_place sequence, sim s (a normal one takes ~15-25)
 
 
 def _sleep(client, seconds):
@@ -326,7 +374,15 @@ def run_motion(client, log, p, phase="full"):
     if n > 0:
         hold_quat = hold_quat / n
 
-    waypoints = build_waypoints(p, phase)  # (label, ee, grip, hold, mode)
+    long_quats = None
+    if p.get("long_object") and phase == "full":
+        g = build_waypoints(p, phase)
+        wp = {w[0]: w[1] for w in g}
+        q_orient, q_over, yaw_t = long_transport_quats(base_quat, gy, wp["lift"], wp["over"])
+        long_quats = (q_orient, q_over)
+        _log(f"  [long-object] transport: roll to tangential yaw {yaw_t:.2f} at lift, "
+             f"carry_up={p['carry_up']:.2f} carry_speed={p['carry_speed']:.2f}")
+    waypoints = build_waypoints(p, phase, long_quats)  # (label, ee, grip, hold, mode[, quat])
 
     rate, dt = 20.0, 1.0 / 20.0
     # Scale the base cart step (0.006 m/tick @20Hz) by move_speed. 0.35 -> ~0.006.
@@ -349,11 +405,25 @@ def run_motion(client, log, p, phase="full"):
     prev_q = None
     prev_t = time.monotonic()
     prev_label = None
+    cur_quat = hold_quat      # orientation of the waypoint in progress (abort recovery holds it)
     wp_t0 = prev_t
     tick_i = 0
     stale = 0
     no_fb = 0
+    loops = 0
     while seq.active:
+        # [팀 추가] Whole-sequence cap. Live rt01_ab_legacy 2026-10-05: attempt 2 sat in
+        # settle_start (arm never back within SETTLE_TOL of the default pose) with no log for
+        # the rest of Stage 2 -- leg 2 never ran. Each loop sleeps dt of SIM time, so this is
+        # SEQ_TIMEOUT_S sim seconds regardless of the real-time factor.
+        loops += 1
+        if loops * dt > SEQ_TIMEOUT_S:
+            _log(f"  [pick] sequence timeout ({SEQ_TIMEOUT_S:.0f}s sim, phase={seq._phase}, "
+                 f"label='{seq.label}', no_fb={no_fb}) -> aborting")
+            holding = False
+            aborted = True
+            seq.abort()
+            break
         arm_q = _read_arm_q(client)
         if arm_q is None:
             no_fb += 1
@@ -361,6 +431,8 @@ def run_motion(client, log, p, phase="full"):
                 dbg.write(f"  [wait] no arm_state x{no_fb}\n"); dbg.flush()
             _sleep(client, dt)
             continue
+        if seq.label:
+            cur_quat = seq.quat
         cmd = seq.tick(arm_q)
         if cmd is not None:
             q, grip = cmd   # grip = gripper command value (0.0 open ~ grip_close)
@@ -440,7 +512,7 @@ def run_motion(client, log, p, phase="full"):
                 d = tgt - tpos
                 dn = float(np.linalg.norm(d))
                 tpos = tgt if dn <= pos_step else tpos + d / dn * pos_step
-                q = arm_kin.dls_solve(kin, aq, tpos, hold_quat)
+                q = arm_kin.dls_solve(kin, aq, tpos, cur_quat)
                 client.send_arm_command(_make_js(q, GRIPPER_OPEN))
                 _sleep(client, dt)
                 if float(np.linalg.norm(kin.fk(aq)[:3, 3] - tgt)) < 0.02:
@@ -512,7 +584,26 @@ def pick_and_place(client, log, grasp_xy=None, object_type=None):
                 _log(f"  [grasp-yaw] measured {float(grasp_xy[3]):.2f} "
                      f"(default was {p['grasp_yaw']:.2f})")
                 p["grasp_yaw"] = float(grasp_xy[3])
+        # [팀 추가] 5th element = visible length of a lying object (grasp_shape.py) ->
+        # long-object transport (see LONG_OBJECT_MIN_M). Only with a measured yaw: the
+        # transport pose is derived from the object's axis.
+        if (len(grasp_xy) > 4 and grasp_xy[4] is not None and len(grasp_xy) > 3
+                and grasp_xy[3] is not None and float(grasp_xy[4]) >= LONG_OBJECT_MIN_M):
+            p.update(load_long_layer())
+            p["long_object"] = True
+            _log(f"  [long-object] visible length {float(grasp_xy[4]):.2f}m >= "
+                 f"{LONG_OBJECT_MIN_M:.2f}m")
     return run_motion(client, log, p, "full")
+
+
+def load_long_layer():
+    """Numeric keys of pnp_params.json "long_object" (applied over the object's own layer)."""
+    try:
+        with open(_PARAMS_FILE) as f:
+            layer = json.load(f).get("long_object", {})
+    except Exception:
+        layer = {}
+    return {k: float(v) for k, v in layer.items() if isinstance(v, (int, float))}
 
 
 # Backward-compatibility alias.
