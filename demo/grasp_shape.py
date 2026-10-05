@@ -146,7 +146,9 @@ def _estimate_grasp(fwd, lat, up, floor_z, expected_xy=None, reach_fwd=None):
         reach_fwd: arm forward reach cap -- a lying object's grasp slides along its axis
             to stay inside it.
 
-    Returns dict(fwd, lat, down, yaw, shape) -- yaw None = keep the tuned default; shape
+    Returns dict(fwd, lat, down, yaw, shape, length) -- length = visible extent along the
+    axis for a lying object (None otherwise; arm_pick uses it to pick the long-object
+    transport); yaw None = keep the tuned default; shape
     "mean" = no shape rule applied (plain mean of the selected blob, i.e. the old answer
     when clustering is off) -- or None when there are too few points.
     """
@@ -160,7 +162,7 @@ def _estimate_grasp(fwd, lat, up, floor_z, expected_xy=None, reach_fwd=None):
     mean_xy = xy.mean(axis=0)
     old_down = max(float(up.mean()) - 0.01, floor_z + FLOOR_CLEARANCE_M)
     fallback = {"fwd": float(mean_xy[0]), "lat": float(mean_xy[1]), "down": old_down,
-                "yaw": None, "shape": "mean"}
+                "yaw": None, "shape": "mean", "length": None}
 
     top = float(np.percentile(up, 95))
     h = max(top - floor_z, 0.005)
@@ -172,6 +174,7 @@ def _estimate_grasp(fwd, lat, up, floor_z, expected_xy=None, reach_fwd=None):
              and sd[0] / sd[1] > LYING_MIN_ANISOTROPY)
 
     yaw = None
+    length = None
     shift_dir = None          # lying: only the cross-axis shift is checked (see below)
     if lying:
         # Axis from the ridge: on a lying cylinder the upper strip runs along the axis
@@ -193,6 +196,7 @@ def _estimate_grasp(fwd, lat, up, floor_z, expected_xy=None, reach_fwd=None):
         if USE_YAW:
             yaw = wrap_half_pi(math.atan2(re1[1], re1[0]))
         shape = "lying"
+        length = float(s_hi - s_lo)
         shift_dir = re2
     else:
         center = mean_xy
@@ -219,4 +223,4 @@ def _estimate_grasp(fwd, lat, up, floor_z, expected_xy=None, reach_fwd=None):
     if shift > MAX_SHIFT_M:
         return fallback
     return {"fwd": float(center[0]), "lat": float(center[1]), "down": float(down),
-            "yaw": yaw, "shape": shape}
+            "yaw": yaw, "shape": shape, "length": length}

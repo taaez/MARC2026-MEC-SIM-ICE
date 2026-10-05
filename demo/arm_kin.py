@@ -197,7 +197,7 @@ def unwrap(q: np.ndarray, ref: np.ndarray) -> np.ndarray:
 class WaypointSequence:
     """State machine that traverses a labeled waypoint list once, on demand.
 
-    Each waypoint uses the format ``(label, ee_pos[arm_base], grip, hold_sec, mode)``:
+    Each waypoint uses the format ``(label, ee_pos[arm_base], grip, hold_sec, mode[, quat])``:
         label - name for progress display / hold detection
         ee    - EE target position in the arm_base frame (orientation stays at default_quat)
         grip  - gripper command value (0.0 open ~ grip_close). latched when the waypoint is reached
@@ -205,6 +205,9 @@ class WaypointSequence:
         mode  - "cart": DLS straight-line EE tracking (closed-loop, vertically precise).
                 "joint": solve target joint angles via IK and do joint-space interpolation
                          (base-rotation arc, singularity avoidance - prevents dropping during transport).
+        quat  - [팀 추가] optional EE orientation for this waypoint (arm_base frame). Omitted =
+                default_quat. arm_pick uses it to keep a long object's pose relative to the arm
+                through the transport arc (see arm_pick.long_transport_quats).
 
     Phases:
         ``settle_start`` - command the default pose, wait for the arm to settle
@@ -221,13 +224,16 @@ class WaypointSequence:
         self._pos_step = float(pos_step)      # m/tick (cart)
         self._joint_step = float(joint_step)  # rad/tick (joint)
         self._log = logger
-        # normalize: (label, ee_array, grip_val, hold_sec, mode)
+        # normalize: (label, ee_array, grip_val, hold_sec, mode); per-waypoint quats kept apart
         self._waypoints = []
+        self._quats = []
         for wp in waypoints:
-            label, ee, grip, hold, mode = wp
+            label, ee, grip, hold, mode = wp[:5]
             self._waypoints.append(
                 (str(label), np.asarray(ee, dtype=np.float64),
                  float(grip), float(hold), str(mode)))
+            self._quats.append(self._default_quat if len(wp) < 6 or wp[5] is None
+                               else np.asarray(wp[5], dtype=np.float64))
 
         self._phase: str | None = None
         self._idx = 0
@@ -250,6 +256,13 @@ class WaypointSequence:
         if self._phase in (None, "settle_start", "settle_end"):
             return ""
         return self._waypoints[self._idx][0]
+
+    @property
+    def quat(self) -> np.ndarray:
+        """EE orientation the current waypoint holds (default_quat when idle)."""
+        if self._phase in (None, "settle_start", "settle_end"):
+            return self._default_quat
+        return self._quats[self._idx]
 
     def start(self) -> None:
         """Begin the sequence (no-op if it is already running)."""
@@ -295,7 +308,7 @@ class WaypointSequence:
             # During dwell, hold the last command (target angles for joint, the target-position solution for cart).
             if self._joint_cmd is not None:
                 return self._joint_cmd, self._grip
-            new_q = dls_solve(self._kin, arm_q, self._target_pos, self._default_quat)
+            new_q = dls_solve(self._kin, arm_q, self._target_pos, self._quats[self._idx])
             return new_q, self._grip
 
         # move phase
@@ -335,7 +348,7 @@ class WaypointSequence:
             self._target_pos = wp_pos.copy()
         if reached or timed_out:
             self._reach(now)
-        new_q = dls_solve(self._kin, arm_q, self._target_pos, self._default_quat)
+        new_q = dls_solve(self._kin, arm_q, self._target_pos, self._quats[self._idx])
         return new_q, self._grip
 
     def _enter_move(self, arm_q: np.ndarray, now: float) -> None:
@@ -354,7 +367,7 @@ class WaypointSequence:
                 # Outgoing arc: seed joint_1 toward the target's horizontal direction -> base arc, shortest unwrap.
                 seed = self._default_arm_q.copy()
                 seed[0] = float(np.arctan2(wp_pos[1], wp_pos[0]))
-                tq = ik_solve(self._kin, wp_pos, self._default_quat, seed)
+                tq = ik_solve(self._kin, wp_pos, self._quats[self._idx], seed)
                 self._joint_target = unwrap(tq, arm_q)
                 self._retrace_q = self._joint_cmd.copy()   # start configuration to retrace on return
             else:

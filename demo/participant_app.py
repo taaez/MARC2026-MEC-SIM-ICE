@@ -70,7 +70,7 @@ from marc_sdk import MARCClient
 from vla_grounding_agent import VLAGroundingAgent
 from mock_agent_navigation import (
     OccupancyGridPlanner, PathFollower, GoalSeekController,
-    cap_angular, obstacles_excluding_goal, nearest_only_exclude,
+    cap_angular, obstacles_excluding_goal, nearest_only_exclude, STEERING_TRACK,
 )
 # Closed-loop placo pick from the manipulation kit (arm_pick.py): grasp_yaw wrist-roll +
 # DLS servo, targeting the object position. Requires placo (installed in the demo image).
@@ -81,6 +81,38 @@ from manipulation import transform_via_tf2
 # Lidar obstacle layer -- the occupancy map holds static road only, so parked vehicles and
 # the like have to be sensed. See mec_sim_ice/demo_agents/lidar_obstacles.py.
 from lidar_obstacles import LidarObstacleLayer
+from lidar_accumulator import LidarSliceAccumulator, imu_roll_pitch   # [팀 추가] 조각 누적
+# [팀 추가] 지역 내비게이션 함수 + MPPI (MARC_LOCAL_PLANNER=mppi). 모듈 docstring 참고.
+from nav_field import NavField
+from mppi import MPPI
+LOCAL_PLANNER = os.environ.get("MARC_LOCAL_PLANNER", "legacy").strip().lower()
+NAVFIELD_REBUILD_S = 1.0       # sim s between cost-to-go rebuilds triggered by new lidar cells
+MPPI_GOAL_CLEAR_M = 0.6        # lidar/stall discs dropped this close to the goal (pick target)
+MPPI_ACCEPT_NEAR_M = 1.0       # tight legs: a stall this close to the goal counts as arrival
+# Tilt guard: live rt01 2026-10-05 the chassis climbed onto off-road terrain and rolled over
+# (roll 55 deg, pitch -54 deg). Normal driving stays within ~2 deg; kerb wedges reach ~10 deg.
+TILT_GUARD_DEG = 12.0
+MPPI_OBJECT_RADIUS_M = 0.2     # pick target footprint kept in the navfield on the approach leg
+# Pinned = driving forward but not moving. Live rt01_mppi_r4: v=1.1 commanded for 80 s against
+# something below the lidar band while the yaw twisted -10 -> -45 deg, which the 8 s stall
+# rule counted as "turning in place" progress. This catches it in PIN_WINDOW_S.
+MPPI_PIN_WINDOW_S = 1.5
+MPPI_PIN_CMD_V = 0.3           # mean commanded forward speed over the window
+MPPI_PIN_MOVE_M = 0.08         # displacement below this over the window = pinned
+MPPI_SPIN_CMD_V = 0.15         # stall-rule turning exemption only when commanding a spin
+MPPI_ALL_HIT_FRAC = 0.98       # this share of rollouts colliding -> stop instead of MPPI output
+# Goal unreachable in the navfield (live rt01_ab_mppi 2026-10-05: 2058 accumulated lidar discs,
+# ghost walls included, cut the road; the old fallback then opened ALL off-road and the robot
+# hung on a kerb). Escalation, each step only for THIS build -- the lidar layer itself keeps
+# every cell (the reactive brake still sees them):
+#   1) lidar cells not re-observed for MPPI_DISC_STALE_S are left out (a real obstacle in
+#      view is re-hit every sweep; a ghost from a past rotation is not), except within
+#      MPPI_DISC_NEAR_M of the robot (too close for the lidar to re-hit)
+#   2) only lidar cells within MPPI_DISC_NEAR_M of the robot
+#   3) last resort: all off-road passable (the old fallback)
+# Stall-memory discs (physical contact) are kept in every step.
+MPPI_DISC_STALE_S = 10.0
+MPPI_DISC_NEAR_M = 2.0
 # Waypoint-circle reroute -- bends only the path segments an obstacle circle actually
 # crosses, in place, no A*/follower cycle. See mec_sim_ice/demo_agents/waypoint_avoid.py.
 from waypoint_avoid import relocate
@@ -366,6 +398,7 @@ class DemoParticipant:
         # bumps into is usually on leg 2's way back too). Set to None once the environment
         # turns out to have no lidar, so a missing sensor costs one attempt, not one per tick.
         self._lidar_layer = None
+        self._lidar_acc = None        # LidarSliceAccumulator, built once on the first run
         # Base_LiDAR -> chassis mount offset (dx, dy). Static, so tf is asked once per run;
         # (0, 0) (sensor above the chassis origin) when tf cannot supply it.
         self._lidar_mount_xy = (0.0, 0.0)
@@ -568,6 +601,7 @@ class DemoParticipant:
         # Fresh obstacle layer per run -- the scene is re-posed between rounds, so evidence
         # from the previous round is not evidence about this one.
         self._lidar_layer = LidarObstacleLayer()
+        self._lidar_acc = self._lidar_accumulator()
         self._lidar_mount_xy = self._lidar_mount_offset()
         self._cam_mount_R, self._cam_mount_t = self._camera_mount_transform()
 
@@ -575,16 +609,23 @@ class DemoParticipant:
         self._stow_arm()
 
         picked = False
-        # -- leg 1: approach the object front standoff, then straight-approach into arm reach, then pick --
-        approach = self._standoff_goal(collect_xy, TUMBLER_STANDOFF_M)
-        log.info("[Stage2] leg1 -> object %s front standoff %s",
-                 tuple(round(v, 2) for v in collect_xy), tuple(round(v, 2) for v in approach))
+        # -- leg 1: drive at the object itself and stop the moment it is TUMBLER_STANDOFF_M away,
+        # then straight-approach into arm reach, then pick --
+        # [팀 수정] The goal used to be a standoff point fixed up front: TUMBLER_STANDOFF_M short
+        # of the object on the straight start->object line, blind to what is around it. In rt01
+        # that line crosses an SUV (object 1.68 m from it), so the goal landed inside the car
+        # body. Now the planner routes to the object (the path arrives from whichever side is
+        # free) and the leg ends when the object is TUMBLER_STANDOFF_M away (tol below).
+        log.info("[Stage2] leg1 -> object %s, stop at %.2fm from it",
+                 tuple(round(v, 2) for v in collect_xy), TUMBLER_STANDOFF_M)
         # Aggressive planner tuning for the tight pick approach (low inflation + goal-exclusion
         # and snap sized by the stated hint uncertainty rather than by this scene's spacing).
-        self._navigate_to(approach, deadline, tol=0.45, inflation_m=0.10,
-                          exclude_m=max(0.6, hint_r), snap_m=max(1.0, hint_r))
+        self._navigate_to(collect_xy, deadline, tol=TUMBLER_STANDOFF_M, inflation_m=0.10,
+                          exclude_m=max(0.6, hint_r), snap_m=max(1.0, hint_r),
+                          avoid_xy=collect_xy, offroad_r=hint_r)
         if not c.is_running:
             return
+        self._halt()
         # Square up before creeping in -- see _align_to_object for why this can't be
         # skipped even though _approach_straight also steers.
         self._align_to_object(collect_xy, deadline)
@@ -913,11 +954,15 @@ class DemoParticipant:
                     fwd[near], lat[near], up[near], floor_z,
                     expected_xy=(ef, el), reach_fwd=ARM_REACH_FWD_M)
                 if est is not None:
-                    log.info("[Stage2] depth grasp shape=%s fwd=%.3f lat=%.3f down=%.3f yaw=%s",
+                    log.info("[Stage2] depth grasp shape=%s fwd=%.3f lat=%.3f down=%.3f yaw=%s len=%s",
                              est["shape"], est["fwd"], est["lat"], est["down"],
-                             "default" if est["yaw"] is None else "%.2f" % est["yaw"])
+                             "default" if est["yaw"] is None else "%.2f" % est["yaw"],
+                             "-" if est.get("length") is None else "%.2f" % est["length"])
                     out = (est["fwd"], est["lat"], est["down"])
-                    return out if est["yaw"] is None else out + (est["yaw"],)
+                    if est["yaw"] is None:
+                        return out
+                    # 5th element = visible length -> arm_pick's long-object transport
+                    return out + (est["yaw"], est["length"]) if est.get("length") else out + (est["yaw"],)
                 # Measure the grasp HEIGHT too, not just (fwd, lat). grasp_down defaults
                 # are tuned per object family for a STANDING tumbler; a lying umbrella's
                 # shaft sits at floor level, so a fixed -0.28 closed the gripper ~5cm
@@ -1077,6 +1122,28 @@ class DemoParticipant:
             log.info("[Stage2] lidar mount offset unavailable (%s) -- assuming (0, 0)", e)
             return (0.0, 0.0)
 
+    # [팀 신규 추가] Isaac Sim 라이다는 ~70도 조각을 따로 발행한다 -- lidar_accumulator.py.
+    def _lidar_accumulator(self):
+        """The slice accumulator (subscribed once per process; drained at each run start),
+        or None when this client cannot subscribe (offline harness -> get_lidar() path)."""
+        acc = getattr(self, "_lidar_acc", None)
+        if acc is None:
+            try:
+                from sensor_msgs.msg import PointCloud2
+                from marc_sdk import protocol as P
+                c = self.client
+                acc = LidarSliceAccumulator(c, c.topics.robot("lidar/points"), PointCloud2,
+                                            P.QOS_IMAGE)
+            except Exception as e:
+                log.info("[Stage2] lidar slice accumulator unavailable (%s) -- "
+                         "using get_lidar() latest slice", e)
+                return None
+            if not acc.ok:
+                return None
+            log.info("[Stage2] lidar slice accumulator on (all slices merged per update)")
+        acc.take_merged((0.0, 0.0, 0.0))     # drop slices queued before this run
+        return acc
+
     def _update_lidar_layer(self, pose):
         """Fold one lidar sweep into the obstacle layer. Returns newly blocked cell count.
 
@@ -1093,8 +1160,12 @@ class DemoParticipant:
         if self._lidar_layer is None:
             return 0
         try:
-            n = self._lidar_layer.update(self.client.get_lidar(), pose,
-                                         self._lidar_mount_xy)
+            msg = None
+            if self._lidar_acc is not None:
+                msg = self._lidar_acc.take_merged(pose, self._lidar_mount_xy)
+            if msg is None:
+                msg = self.client.get_lidar()
+            n = self._lidar_layer.update(msg, pose, self._lidar_mount_xy)
             self._lidar_fail_streak = 0
             return n
         except Exception as e:
@@ -1177,17 +1248,18 @@ class DemoParticipant:
             h, w = depth_msg.height, depth_msg.width
             depth = np.frombuffer(depth_msg.data, dtype=np.float32).reshape(h, w)
             K = np.array(info.k, dtype=np.float64).reshape(3, 3)
-            pts = depth_ground_veto.confirmed_floor_world_xy(
+            pts, obst = depth_ground_veto.floor_and_obstacle_world_xy(
                 depth, K, self._cam_mount_R, self._cam_mount_t, pose)
         except Exception as e:
             log.warning("[Stage2] depth ghost-veto frame failed: %s: %s", type(e).__name__, e)
             return 0
-        cleared = self._lidar_layer.veto_free(pts)
+        cleared = self._lidar_layer.veto_free(pts, keep=obst)
         if cleared:
             log.info("[Stage2] depth ghost-veto: cleared %d cell(s)", cleared)
         return cleared
 
-    def _plan_obstacles(self, goal, exclude_m):
+    def _plan_obstacles(self, goal, exclude_m, lidar_max_age_scans=None, near_xy=None,
+                        near_m=0.0):
         """Everything the planner should route around on this leg.
 
         Two sources, excluded near the goal by two DIFFERENT radii -- they are not the same
@@ -1213,7 +1285,8 @@ class DemoParticipant:
           docstring names for exactly this case (kerbs/low steps/wheel traps the lidar
           height-band cannot see) was firing correctly and then being discarded downstream.
         """
-        lidar_discs = list(self._lidar_layer.discs()) if self._lidar_layer is not None else []
+        lidar_discs = (list(self._lidar_layer.discs(lidar_max_age_scans, near_xy, near_m))
+                       if self._lidar_layer is not None else [])
         lidar_discs = obstacles_excluding_goal(lidar_discs, goal, exclude_m=exclude_m)
         memory = obstacles_excluding_goal(self._obstacles, goal, exclude_m=BLOCKAGE_RADIUS_M)
         return lidar_discs + memory
@@ -1361,7 +1434,7 @@ class DemoParticipant:
     # 그 BRAKE_STALL_S 에스컬레이션. snap_m 파라미터화도 팀 추가.
     def _navigate_to(self, goal, deadline, tol=GOAL_TOLERANCE,
                      inflation_m=STAGE2_INFLATION_M, exclude_m=0.6, cruise=False,
-                     snap_m=None):
+                     snap_m=None, avoid_xy=None, offroad_r=DEFAULT_HINT_RADIUS_M):
         """Drive to a single goal (x, y) by following occupancy A*. True if reached, False on timeout.
 
         Args:
@@ -1376,6 +1449,10 @@ class DemoParticipant:
         `deadline` is elapsed seconds on self._clock (see ElapsedClock) since _drive() started,
         shared across all Stage 2 legs -- not an absolute now_s() value.
         """
+        if LOCAL_PLANNER == "mppi":
+            return self._navigate_mppi(goal, deadline, tol=tol, inflation_m=inflation_m,
+                                       exclude_m=exclude_m, avoid_xy=avoid_xy,
+                                       offroad_r=offroad_r)
         c = self.client
         planner = OccupancyGridPlanner()
         follower = None
@@ -1415,6 +1492,9 @@ class DemoParticipant:
                 continue
             x, y, yaw = pose
             tick += 1
+            if self._lidar_acc is not None:
+                # slice deskew + IMU leveling history (lidar_accumulator.py)
+                self._lidar_acc.record_pose(c.now_s(), pose, c.get_imu())
             # Sense before hitting anything. The stall path below only reacts after contact.
             new_cells = 0
             if tick % LIDAR_UPDATE_EVERY_TICKS == 0:
@@ -1429,6 +1509,8 @@ class DemoParticipant:
                 spinning = last_cmd[0] < 0.05 and abs(last_cmd[1]) > 0.3
                 if not spinning:
                     new_cells = self._update_lidar_layer(pose)
+                elif self._lidar_acc is not None:
+                    self._lidar_acc.take_merged(pose)   # gate holds: spin-time slices dropped
                 self._update_depth_veto(pose)
 
             dist = math.hypot(goal[0] - x, goal[1] - y)
@@ -1662,6 +1744,229 @@ class DemoParticipant:
             c.sleep(STAGE2_NAV_DT)
 
         return reached_goal
+
+    # [팀 신규 추가] 지역 내비게이션 함수(nav_field.py) + MPPI(mppi.py) 주행 루프.
+    # _navigate_to 의 감지/복구 장치(라이다 레이어, depth veto, 정체 판정 + 정체 기억 +
+    # 후진 탈출, 반응형 브레이크)는 그대로 쓰고, 경로 추종(PathFollower + P 제어)과 원호
+    # 우회(relocate)를 "cost-to-go 장 위의 MPPI" 하나로 바꾼다.
+    def _navigate_mppi(self, goal, deadline, tol=GOAL_TOLERANCE, inflation_m=STAGE2_INFLATION_M,
+                       exclude_m=0.6, avoid_xy=None, offroad_r=DEFAULT_HINT_RADIUS_M):
+        c = self.client
+        planner = OccupancyGridPlanner()
+        tight = tol < GOAL_TOLERANCE                  # pick approach leg
+        inscribed = 0.22 if tight else 0.30
+        clear_m = min(float(exclude_m), MPPI_GOAL_CLEAR_M)
+        # off-road (map unknown = beyond the kerb) is lethal except within offroad_r of the
+        # goal / pick object -- see nav_field.py docstring
+        offroad_ok = [(goal[0], goal[1], float(offroad_r))]
+        if avoid_xy and math.hypot(avoid_xy[0] - goal[0], avoid_xy[1] - goal[1]) < 1e-3:
+            # the goal IS the object (leg 1 stops tol short of it): a keep disc there would
+            # make the goal lethal and snap it to an arbitrary side -- the tol stop already
+            # keeps the chassis off the object
+            avoid_xy = None
+        if avoid_xy:
+            offroad_ok.append((avoid_xy[0], avoid_xy[1], float(offroad_r)))
+        field, ctrl = None, None
+        field_dirty, built_at = True, -1e9
+        pos_history = deque()        # (t, x, y, yaw, commanded v)
+        pin_history = deque()        # same, over MPPI_PIN_WINDOW_S
+        v_history = deque()          # (t, V(robot)) -- tight legs: no V progress near goal = arrived
+        last_cmd = (0.0, 0.0)
+        all_hit = False
+        last_stall_xy = None
+        braking = False
+        last_log_t = 0.0
+        tick = 0
+        while c.is_running and self._clock.tick() < deadline:
+            pose = c.get_world_pose()
+            if pose is None:
+                c.sleep(STAGE2_NAV_DT)
+                continue
+            x, y, yaw = pose
+            tick += 1
+            if self._lidar_acc is not None:
+                self._lidar_acc.record_pose(c.now_s(), pose, c.get_imu())
+            if tick % LIDAR_UPDATE_EVERY_TICKS == 0:
+                spinning = last_cmd[0] < 0.05 and abs(last_cmd[1]) > 0.3
+                if not spinning:
+                    if self._update_lidar_layer(pose):
+                        field_dirty = True
+                elif self._lidar_acc is not None:
+                    self._lidar_acc.take_merged(pose)
+                self._update_depth_veto(pose)
+
+            dist = math.hypot(goal[0] - x, goal[1] - y)
+            if dist < tol:
+                log.info("[STAGE2] reached goal at (%.2f, %.2f)", x, y)
+                return True
+            if not planner.ready:
+                occ = c.get_occupancy_map()
+                if occ is None:
+                    c.send_cmd_vel(0.0, 0.0)
+                    c.sleep(STAGE2_NAV_DT)
+                    continue
+                planner.update_from_msg(occ)
+
+            now_t = c.now_s()
+            if field is None or (field_dirty and now_t - built_at >= NAVFIELD_REBUILD_S):
+                t0 = time.monotonic()
+
+                def build(discs, ok):
+                    return NavField(inscribed_m=inscribed).build(
+                        planner._grid, (planner._ox, planner._oy), planner._res, (x, y), goal,
+                        discs=discs, goal_clear_m=clear_m,
+                        keep_discs=([(avoid_xy[0], avoid_xy[1], MPPI_OBJECT_RADIUS_M)]
+                                    if avoid_xy else ()),
+                        free_xy=(x, y), offroad_ok=ok)
+
+                discs = self._plan_obstacles(goal, clear_m)
+                field = build(discs, offroad_ok)
+                # goal unreachable -> escalate (see MPPI_DISC_STALE_S)
+                n_all = len(discs)
+                scans_per_s = STAGE2_NAV_RATE_HZ / LIDAR_UPDATE_EVERY_TICKS
+                for stage, max_age in (("fresh+near", MPPI_DISC_STALE_S * scans_per_s),
+                                       ("near-only", 0)):
+                    if math.isfinite(field.value(x, y)):
+                        break
+                    discs = self._plan_obstacles(goal, clear_m, lidar_max_age_scans=max_age,
+                                                 near_xy=(x, y), near_m=MPPI_DISC_NEAR_M)
+                    field = build(discs, offroad_ok)
+                    log.warning("[Stage2] navfield: goal unreachable -> rebuilt with %s "
+                                "lidar cells only (%d -> %d discs): V(robot)=%.1f", stage, n_all,
+                                len(discs), field.value(x, y))
+                if not math.isfinite(field.value(x, y)) and field.offroad.any():
+                    log.warning("[Stage2] navfield: goal still unreachable -- last resort, "
+                                "all off-road passable")
+                    field = build(discs, None)
+                if ctrl is None:
+                    ctrl = MPPI(field, steering_track=STEERING_TRACK)
+                else:
+                    ctrl.set_field(field)
+                field_dirty, built_at = False, now_t
+                log.info("[Stage2] navfield %dx%d built in %.0f ms (%d discs, %d off-road "
+                         "cells, ok r=%s) V(robot)=%.1f goal%s=(%.2f, %.2f)", field.w, field.h,
+                         1000 * (time.monotonic() - t0), len(discs), int(field.offroad.sum()),
+                         "/".join("%.1f" % c[2] for c in getattr(field, "offroad_ok_eff", ())) or "-",
+                         field.value(x, y),
+                         " SNAPPED" if field.goal_snapped else "", field.goal[0], field.goal[1])
+            if field.goal_snapped and math.hypot(field.goal[0] - x, field.goal[1] - y) < tol:
+                log.info("[STAGE2] reached snapped goal (%.2f, %.2f) -- original %.2fm away",
+                         field.goal[0], field.goal[1], dist)
+                return True
+
+            rp = imu_roll_pitch(c.get_imu())
+            if rp is not None and max(abs(rp[0]), abs(rp[1])) > math.radians(TILT_GUARD_DEG):
+                log.warning("[Stage2] tilt guard: roll %.1f pitch %.1f deg -> stop, back off, "
+                            "mark the spot", math.degrees(rp[0]), math.degrees(rp[1]))
+                c.send_cmd_vel(0.0, 0.0)
+                self._reverse_escape()
+                ahead = (x + 0.6 * math.cos(yaw), y + 0.6 * math.sin(yaw), yaw)
+                self._remember_blockage(ahead, goal)
+                field_dirty, built_at = True, -1e9
+                ctrl.reset()
+                last_cmd = (0.0, 0.0)
+                continue
+            # roll out from the last command, not odom: odom speed jitters ~0.1 m/s at a
+            # standstill, which kept the decel limit from ever reaching a pure spin
+            linear, angular = ctrl.step(pose, last_cmd[0], goal_tol=0.8 * tol)
+            # Every rollout collides (stop included -- rolled out from the last command, a
+            # stop from 1.1 m/s still travels ~0.6 m): the weighted update is noise, and in
+            # r4 that noise was v=1.1 into the obstacle. Stop; next tick rolls out from rest,
+            # where stopping/spinning/reversing are collision-free again.
+            hit_frac = ctrl.last_info.get("collide_frac", 0.0)
+            if hit_frac >= MPPI_ALL_HIT_FRAC:
+                if not all_hit:
+                    log.info("[Stage2] mppi: %.0f%% of rollouts collide -> stopping",
+                             100 * hit_frac)
+                linear, angular = 0.0, 0.0
+                ctrl.reset()
+            all_hit = hit_frac >= MPPI_ALL_HIT_FRAC
+
+            if tight and dist < MPPI_ACCEPT_NEAR_M:
+                v_history.append((now_t, field.value(x, y)))
+                while len(v_history) >= 2 and now_t - v_history[1][0] >= STAGE2_STUCK_TIME_S:
+                    v_history.popleft()
+                if (now_t - v_history[0][0] >= STAGE2_STUCK_TIME_S
+                        and v_history[0][1] - v_history[-1][1] < 0.1):
+                    log.info("[STAGE2] no cost-to-go progress for %.0fs %.2fm from the pick "
+                             "standoff -- accepting", STAGE2_STUCK_TIME_S, dist)
+                    return True
+            else:
+                v_history.clear()
+            # Two stall rules over (t, x, y, yaw, commanded v) windows:
+            # - pinned (MPPI_PIN_WINDOW_S): commanding forward, not moving -> in contact with
+            #   something the field does not hold. Back off at once, then mark it.
+            # - stall (STAGE2_STUCK_TIME_S): same rule as _navigate_to, except that turning
+            #   in place is progress (MPPI spins to face downhill) -- but only while a spin
+            #   is what was commanded; a yaw twisting while pushing forward is not progress.
+            stalled = None
+            for hist, span in ((pin_history, MPPI_PIN_WINDOW_S),
+                               (pos_history, STAGE2_STUCK_TIME_S)):
+                hist.append((now_t, x, y, yaw, last_cmd[0]))
+                while len(hist) >= 2 and now_t - hist[1][0] >= span:
+                    hist.popleft()
+            if now_t - pin_history[0][0] >= MPPI_PIN_WINDOW_S:
+                moved = math.hypot(x - pin_history[0][1], y - pin_history[0][2])
+                cmd_v = sum(h[4] for h in pin_history) / len(pin_history)
+                if cmd_v >= MPPI_PIN_CMD_V and moved < MPPI_PIN_MOVE_M:
+                    stalled = "pinned"
+                    log.info("[Stage2] pinned: v_cmd=%.2f but moved %.3fm over %.1fs",
+                             cmd_v, moved, now_t - pin_history[0][0])
+            if stalled is None and now_t - pos_history[0][0] >= STAGE2_STUCK_TIME_S:
+                moved = math.hypot(x - pos_history[0][1], y - pos_history[0][2])
+                turned = abs(math.atan2(math.sin(yaw - pos_history[0][3]),
+                                        math.cos(yaw - pos_history[0][3])))
+                spin_cmd = (sum(abs(h[4]) for h in pos_history) / len(pos_history)
+                            < MPPI_SPIN_CMD_V)
+                if moved <= STAGE2_STUCK_MOVE_M and not (spin_cmd and turned >= 0.5):
+                    stalled = "stall"
+                    log.info("[Stage2] stall detected (%.3fm over %.1fs) -> replanning",
+                             moved, now_t - pos_history[0][0])
+            if stalled is not None:
+                if tight and dist < MPPI_ACCEPT_NEAR_M:
+                    log.info("[STAGE2] stalled %.2fm from the pick standoff -- accepting "
+                             "(align + straight approach take it from here)", dist)
+                    return True
+                if stalled == "pinned" or (
+                        last_stall_xy is not None
+                        and math.hypot(x - last_stall_xy[0], y - last_stall_xy[1]) < 0.15):
+                    log.info("[Stage2] chassis wedged (%s), reversing to escape", stalled)
+                    self._reverse_escape()
+                last_stall_xy = (x, y)
+                # mark from the contact pose (before the reverse), so the disc sits on
+                # what was hit; NavField(free_xy=) keeps it off the robot's new spot
+                self._remember_blockage((x, y, yaw), goal)
+                field_dirty, built_at = True, -1e9
+                ctrl.reset()
+                last_cmd = (0.0, 0.0)
+                pin_history.clear()
+                pos_history.clear()
+                c.sleep(STAGE2_NAV_DT)
+                continue
+
+            # reactive brake (kept until the CBF safety filter replaces it)
+            stop_dist = self._react_stop_dist(max(last_cmd[0], 0.0))
+            danger = self._lidar_layer is not None and self._lidar_layer.danger_ahead(
+                pose, stop_dist, REACT_STOP_CONE_DEG, goal=goal, goal_exclude_m=clear_m)
+            if danger and linear > 0.0:
+                if not braking:
+                    log.info("[Stage2] lidar: obstacle within %.2fm ahead (v=%.2f) -> braking",
+                             stop_dist, last_cmd[0])
+                linear = 0.0
+            braking = danger
+            angular = cap_angular(linear, angular)
+            c.send_cmd_vel(linear_x=linear, angular_z=angular)
+            last_cmd = (linear, angular)
+
+            if now_t - last_log_t >= 1.0:
+                info = ctrl.last_info
+                log.info("[STAGE2] mppi pose=(%.2f, %.2f, yaw=%.0fdeg) dist=%.2fm V=%.1f "
+                         "v=%.2f w=%+.2f collide=%.0f%%", x, y, math.degrees(yaw), dist,
+                         field.value(x, y), linear, angular, 100 * info.get("collide_frac", 0))
+                last_log_t = now_t
+            c.sleep(STAGE2_NAV_DT)
+        c.send_cmd_vel(0.0, 0.0)
+        return False
 
     # -- notifications --
 
