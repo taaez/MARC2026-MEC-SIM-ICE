@@ -1,0 +1,14 @@
+# planner A/B (2026-10-05): same working tree, only MARC_LOCAL_PLANNER differs
+# problem tag ABL_OFF GRASP_OFF planner
+rt01_parking_tumbler   rt01_ab_legacy  - - legacy
+rt01_parking_tumbler   rt01_ab_mppi    - - mppi
+rt02_parking_umbrella  rt02_ab_legacy  - - legacy
+rt02_parking_umbrella  rt02_ab_mppi    - - mppi
+rt03_vending_umbrella  rt03_ab_legacy  - - legacy
+rt03_vending_umbrella  rt03_ab_mppi    - - mppi
+rt04_taxi_tumbler      rt04_ab_legacy  - - legacy
+rt04_taxi_tumbler      rt04_ab_mppi    - - mppi
+rt04b_taxi_umbrella    rt04b_ab_legacy - - legacy
+rt04b_taxi_umbrella    rt04b_ab_mppi   - - mppi
+rtC2_fallenbike_pencil rtC2_ab_legacy  - - legacy
+rtC2_fallenbike_pencil rtC2_ab_mppi    - - mppi

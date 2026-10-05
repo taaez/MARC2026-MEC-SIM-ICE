@@ -215,6 +215,10 @@ class LidarObstacleLayer:
         self._res = float(resolution)
         self._counts = {}                  # (row, col) -> 누적 점 수
         self._blocked = {}                 # (row, col) -> (world_x, world_y)
+        # [팀 추가] (row, col) -> 이 셀에 마지막으로 점이 찍힌 스윕 번호(self.scans). 칸을
+        # 지우는 데는 쓰지 않는다 -- discs(max_age_scans=) 로 "최근에 다시 관측되지 않은"
+        # 칸을 계획에서만 빼 볼 때 쓴다 (participant_app._navigate_mppi 의 도달 불가 처리).
+        self._last_hit = {}
         self.scans = 0
         self.last_ground_z = None
         self.capped = False
@@ -228,6 +232,7 @@ class LidarObstacleLayer:
         self._res = resolution
         self._counts.clear()
         self._blocked.clear()
+        self._last_hit.clear()
 
     @property
     def resolution(self):
@@ -304,6 +309,7 @@ class LidarObstacleLayer:
             key = (r, c)
             n = self._counts.get(key, 0) + hits
             self._counts[key] = n
+            self._last_hit[key] = self.scans
             if n >= MIN_POINTS_PER_CELL and key not in self._blocked:
                 if len(self._blocked) >= MAX_BLOCKED_CELLS:
                     self.capped = True
@@ -331,10 +337,11 @@ class LidarObstacleLayer:
         for r, c in map(tuple, keys[far].tolist()):
             self._blocked.pop((r, c), None)
             self._counts.pop((r, c), None)
+            self._last_hit.pop((r, c), None)
         # 윈도우가 다시 여유를 만들었으므로 상한 플래그도 현재 상태에 맞춘다.
         self.capped = len(self._blocked) >= MAX_BLOCKED_CELLS
 
-    def veto_free(self, points_world):
+    def veto_free(self, points_world, keep=None):
         """`depth_ground_veto` 가 이번 프레임 카메라로 바닥 확인한 지점들의 셀 차단을 해제한다.
 
         회전 유령벽(모듈 docstring "경사면" 한계 참고)의 실전 보정 채널. `_counts`
@@ -345,6 +352,8 @@ class LidarObstacleLayer:
         Args:
             points_world: `(N, 2)` ndarray 또는 `[(x, y), ...]` -- 카메라가 바닥으로
                 확인한 세계좌표 점들.
+            keep: [팀 추가] 같은 프레임에서 카메라가 장애물로 본 세계좌표 점들 -- 이 점이
+                든 셀은 바닥 점이 있어도 지우지 않는다 (차체 바로 아래 바닥 등).
 
         Returns:
             차단이 풀린 셀 수.
@@ -354,18 +363,28 @@ class LidarObstacleLayer:
         pts = np.asarray(points_world, dtype=np.float64)
         cols = np.floor(pts[:, 0] / self._res).astype(np.int64)
         rows = np.floor(pts[:, 1] / self._res).astype(np.int64)
+        cells = set(zip(rows.tolist(), cols.tolist()))
+        if keep is not None and len(keep):
+            kp = np.asarray(keep, dtype=np.float64)
+            cells -= set(zip(np.floor(kp[:, 1] / self._res).astype(np.int64).tolist(),
+                             np.floor(kp[:, 0] / self._res).astype(np.int64).tolist()))
         cleared = 0
-        for r, c in set(zip(rows.tolist(), cols.tolist())):
+        for r, c in cells:
             key = (r, c)
             if key in self._blocked:
                 del self._blocked[key]
                 self._counts.pop(key, None)
+                self._last_hit.pop(key, None)
                 cleared += 1
         return cleared
 
     # -- 출력 --
-    def discs(self):
+    def discs(self, max_age_scans=None, near_xy=None, near_m=0.0):
         """플래너용 `[(x, y, r), ...]`.
+
+        [팀 추가] max_age_scans 를 주면 마지막 관측이 그보다 오래된 칸은 뺀다(단 near_xy 에서
+        near_m 안의 칸은 나이와 상관없이 남긴다 -- 너무 가까워 라이다가 다시 못 찍는 칸).
+        레이어 자체에서는 아무것도 지우지 않는다.
 
         셀 하나당 반경 = 해상도인 작은 원판을 낸다. `OccupancyGridPlanner._block_obstacles`
         가 원판을 격자에 칠하므로, 이렇게 하면 결과가 격자 오버레이와 같아지면서 **플래너를
@@ -373,7 +392,14 @@ class LidarObstacleLayer:
         문제도 함께 피한다.
         """
         r = self._res
-        return [(wx, wy, r) for (wx, wy) in self._blocked.values()]
+        if max_age_scans is None:
+            return [(wx, wy, r) for (wx, wy) in self._blocked.values()]
+        oldest = self.scans - int(max_age_scans)
+        nx, ny = near_xy if near_xy is not None else (0.0, 0.0)
+        n2 = near_m * near_m if near_xy is not None else -1.0
+        return [(wx, wy, r) for k, (wx, wy) in self._blocked.items()
+                if self._last_hit.get(k, -1) >= oldest
+                or (wx - nx) ** 2 + (wy - ny) ** 2 <= n2]
 
     def blocks_path(self, path, corridor_m=PATH_CORRIDOR_M, start_xy=None):
         """남은 경로의 회랑 안에 차단 셀이 있는가 -- 재계획 트리거.
