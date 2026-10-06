@@ -1,0 +1,1 @@
+{"sim_time": 3.3000000490000003, "task_description": "Pick up the umbrella on the road next to the taxi and bring it to the owner.", "grounding_score": 25.0, "target_type": "umbrella", "hint_center": [-85.60271, 108.66516, 15.53514], "hint_radius": 2.0, "submitted_target_coord": [-61.260243202235365, 136.17186327184922, 16.399999618530273]}

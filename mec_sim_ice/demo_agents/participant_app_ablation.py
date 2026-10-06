@@ -21,6 +21,14 @@ participant_app.py 와 완전히 같고, 조합 설정에 따라 아래만 런�
     python3 mec_sim_ice/demo_agents/participant_app_ablation.py --summarize results_ablation
 
 G4 / C5 (= 현재 코드) 는 매 라운드 원본 grounding.resolve 와 결과를 대조해 불일치 횟수를 남긴다.
+
+반복 측정 (같은 조합을 여러 번):
+    MARC_ABLATION_CONFIG=G4 MARC_ABLATION_RUN=2 MARC_ENTRYPOINT=participant_app_ablation.py \
+    ./launch.sh <team_id>
+  - MARC_ABLATION_RUN 이 없으면 파일 이름은 <ID>.* (1회차), 있으면 <ID>_r<N>.* 이다.
+  - 로그 경로(MARC_SCORE_LOG 등)를 따로 주지 않아도 results_ablation/ 에 저장한다.
+  - 같은 이름의 로그가 이미 있으면 이어붙이지 않고 시작 전에 멈춘다 (실행이 섞이는 것을 막음).
+  - 여러 실행을 합친 표: --aggregate results_ablation  (문항별 최빈값 + 평균/범위)
 """
 
 import json
@@ -135,21 +143,51 @@ def main() -> None:
     name = os.environ.get("MARC_ABLATION_CONFIG", "")
     if name not in CONFIGS:
         raise SystemExit(f"MARC_ABLATION_CONFIG 는 {list(CONFIGS)} 중 하나여야 합니다 (받은 값: {name!r})")
-    score_log = os.environ.get("MARC_SCORE_LOG", "./results/scores.jsonl")
+    run = os.environ.get("MARC_ABLATION_RUN", "").strip()
+    stem = f"{name}_r{run}" if run else name
+    out_dir = os.environ.get("MARC_ABLATION_DIR") or os.path.join(
+        os.path.dirname(os.path.dirname(_HERE)), "results_ablation")
+    os.makedirs(out_dir, exist_ok=True)
+    # participant_app 이 생성 시점에 환경변수를 읽으므로 여기서 먼저 정해 둔다.
+    score_log = os.environ.setdefault("MARC_SCORE_LOG", os.path.join(out_dir, f"{stem}.scores.jsonl"))
+    os.environ.setdefault("MARC_REVEAL_LOG", os.path.join(out_dir, f"{stem}.reveals.jsonl"))
     side_path = os.environ.get(
         "MARC_ABLATION_SIDE_LOG",
-        os.path.join(os.path.dirname(score_log) or ".", f"{name}.side.jsonl"))
+        os.path.join(os.path.dirname(score_log) or ".", f"{stem}.side.jsonl"))
     os.makedirs(os.path.dirname(side_path) or ".", exist_ok=True)
+    # 로그는 추가 모드로 쓰이므로, 이미 내용이 있으면 실행이 섞인다. 시작 전에 막는다.
+    for path in (score_log, side_path):
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            raise SystemExit(f"이미 로그가 있습니다: {path}\n"
+                             f"다른 실행 번호(MARC_ABLATION_RUN)를 쓰거나 파일을 옮긴 뒤 다시 실행하세요.")
+    try:
+        import socket
+        import subprocess
+        import time
+        git = subprocess.run(["git", "-C", _HERE, "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        with open(os.path.join(out_dir, f"{stem}.meta.json"), "w", encoding="utf-8") as f:
+            json.dump({"config": name, "run": run or "1", "host": socket.gethostname(),
+                       "git": git, "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+                       "settings": CONFIGS[name]}, f, ensure_ascii=False, indent=2)
+    except Exception as e:  # noqa: BLE001  -- 메타 기록 실패가 실험을 막으면 안 된다
+        log.warning("[entry] meta 기록 실패: %s", e)
 
     import participant_app
     _install(name, side_path)
     log.info("[entry] Stage 1 ablation %s (%s) -- %s", name, LABELS[name], CONFIGS[name])
-    log.info("[entry] score log=%s  side log=%s  pose_disabled_env=%s", score_log, side_path,
-             os.environ.get("MARC_DISABLE_POSE_KEYPOINTS", ""))
+    log.info("[entry] run=%s score log=%s  side log=%s  pose_disabled_env=%s", run or "1",
+             score_log, side_path, os.environ.get("MARC_DISABLE_POSE_KEYPOINTS", ""))
     participant_app.DemoParticipant().run()
 
 
+
+
 # ── 표 정리 (라이브 점수 로그 + side 로그) ───────────────────────────────────
+N_ROUNDS = 33          # Stage 1 문항 수. 이보다 적게 끝난 실행은 집계에서 뺀다.
+POOL = {"G4": "FULL", "C5": "FULL"}   # G4 와 C5 는 설정이 같다 (stage1_ablation.CONFIGS)
+
+
 def _load(path):
     if not os.path.exists(path):
         return []
@@ -169,12 +207,13 @@ def _med(xs):
     return statistics.median(xs) if xs else float("nan")
 
 
-def summarize_config(out_dir: str, name: str):
-    scores = [r for r in _load(os.path.join(out_dir, f"{name}.scores.jsonl"))
+def _load_rows(out_dir: str, stem: str):
+    """한 실행의 Stage 1 라운드별 기록. (rows, side 줄 수). 점수 로그가 없으면 (None, 0)."""
+    scores = [r for r in _load(os.path.join(out_dir, f"{stem}.scores.jsonl"))
               if r.get("stage") == 1]
-    side = _load(os.path.join(out_dir, f"{name}.side.jsonl"))
+    side = _load(os.path.join(out_dir, f"{stem}.side.jsonl"))
     if not scores:
-        return None
+        return None, 0
     rows = []
     for i, r in enumerate(scores):
         s = r["scores"]
@@ -188,6 +227,9 @@ def summarize_config(out_dir: str, name: str):
             "text_relation": ab.get("text_relation"),
             "total": s.get("total", 0.0),
             "camera": s.get("camera", 0.0),
+            "object_type": s.get("object_type", 0.0),
+            "landmark": s.get("landmark", 0.0),
+            "relation": s.get("relation", 0.0),
             "anchor": s.get("anchor", 0.0),
             "target": s.get("target", 0.0),
             "anchor_err": _err(sub, exp, "anchor_coord"),
@@ -198,6 +240,10 @@ def summarize_config(out_dir: str, name: str):
                         and exp.get("camera_id") not in gc,
             "matches_original": ab.get("matches_original"),
         })
+    return rows, len(side)
+
+
+def _metrics(rows):
     obj = [r for r in rows if not r["is_person"]]
     per = [r for r in rows if r["is_person"]]
     on = [r for r in rows if r["text_relation"] == "on"]
@@ -208,25 +254,34 @@ def summarize_config(out_dir: str, name: str):
     def avg(rs):
         return sum(r["total"] for r in rs) / len(rs) if rs else float("nan")
 
+    cc = [r for r in obj if r["camera"] >= 1.0]
     return {
-        "config": name, "label": LABELS[name], "n": len(rows), "n_side": len(side),
-        "n_obj": len(obj), "n_person": len(per), "n_on": len(on),
+        "n": len(rows), "n_obj": len(obj), "n_person": len(per), "n_on": len(on),
         "cam_acc": pct(rows), "cam_obj": pct(obj), "cam_per": pct(per),
         "stage1": avg(rows), "object": avg(obj), "person": avg(per), "on_subset": avg(on),
         "anchor_med_obj": _med([r["anchor_err"] for r in obj]),
         "target_med_obj": _med([r["target_err"] for r in obj]),
         "target_med_person": _med([r["target_err"] for r in per]),
-        # 사물 target 오차는 0.3~2m 군과 10m+ 군(카메라/인스턴스 오답)으로 갈려 중앙값이
-        # 군 사이에 걸리면 한 문항으로 크게 뛴다. 카메라 정답 라운드만 본 값을 함께 둔다.
-        "anchor_med_obj_cc": _med([r["anchor_err"] for r in obj if r["camera"] >= 1.0]),
-        "target_med_obj_cc": _med([r["target_err"] for r in obj if r["camera"] >= 1.0]),
+        # 사물 오차는 0.3~2m 군과 10m+ 군(카메라/인스턴스 오답)으로 갈려 중앙값이 군 사이에 걸리면
+        # 한 문항으로 크게 뛴다. 카메라 정답 라운드만 본 값을 함께 둔다.
+        "anchor_med_obj_cc": _med([r["anchor_err"] for r in cc]),
+        "target_med_obj_cc": _med([r["target_err"] for r in cc]),
         "target_hit_obj": sum(1 for r in obj if r["target"] >= 0.5),
         "target_hit_person": sum(1 for r in per if r["target"] >= 0.5),
         "gated": sum(r["gate_applied"] for r in rows),
         "excluded": [r["problem_id"] for r in rows if r["excluded"]],
         "mismatch": sum(1 for r in rows if r["matches_original"] is False),
-        "rows": rows,
     }
+
+
+def summarize_config(out_dir: str, name: str, stem: str = None):
+    """한 실행(기본: 1회차 <ID>.*)의 요약. 표 A·B 단일 실행 출력과 외부 호출용."""
+    rows, n_side = _load_rows(out_dir, stem or name)
+    if rows is None:
+        return None
+    s = _metrics(rows)
+    s.update({"config": name, "label": LABELS[name], "n_side": n_side, "rows": rows})
+    return s
 
 
 def _notes(s, name):
@@ -242,7 +297,7 @@ def _notes(s, name):
 
 
 def summarize(out_dir: str) -> None:
-    a = ["## 표 A. Camera gating (live)", "",
+    a = ["## 표 A. Camera gating (live, 1회차)", "",
          "| ID | Configuration | Cam acc. (%) | Cam acc. obj / person (%) | Stage1 | Object"
          " | Person | Gated rounds | GT cam excluded |",
          "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
@@ -257,7 +312,7 @@ def summarize(out_dir: str) -> None:
             f" | {s['gated']}/{s['n']} | {len(s['excluded'])} |")
         a += [f"|  | ↳ {n} | | | | | | | |" for n in _notes(s, name)]
 
-    b = ["## 표 B. Coordinate correction (live)", "",
+    b = ["## 표 B. Coordinate correction (live, 1회차)", "",
          "| ID | Configuration | Stage1 | 'on' subset | Person | Anchor err obj (m)"
          " | Target err obj (m) | Anchor / Target err obj, cam-correct (m)"
          " | Target err person (m) | Target hit obj / person | Cam acc. (%) |",
@@ -284,8 +339,175 @@ def summarize(out_dir: str) -> None:
         f.write(text + "\n")
 
 
+# ── 여러 번 실행한 결과 합치기 ───────────────────────────────────────────────
+def _stems(out_dir: str, name: str):
+    """<ID> (1회차)와 <ID>_r<N> 실행의 stem 목록."""
+    found = []
+    if os.path.exists(os.path.join(out_dir, f"{name}.scores.jsonl")):
+        found.append(name)
+    pre = f"{name}_r"
+    for fn in sorted(os.listdir(out_dir)):
+        if fn.startswith(pre) and fn.endswith(".scores.jsonl"):
+            tail = fn[len(pre):-len(".scores.jsonl")]
+            if tail.isdigit():
+                found.append(f"{name}_r{tail}")
+    return sorted(found, key=lambda x: (len(x), x))
+
+
+def _outcome_key(r):
+    """문항 한 번의 결과를 이산 묶음으로 본다: 카메라·유형·랜드마크·관계 정답 여부 + target 득점 여부."""
+    return (r["camera"] >= 1.0, r["object_type"] >= 1.0, r["landmark"] >= 1.0,
+            r["relation"] >= 1.0, r["target"] >= 0.5)
+
+
+def _modal_rows(runs):
+    """문항별 최빈 결과 묶음을 골라, 그 묶음 안에서 총점이 중앙인 실제 기록 한 줄을 대표로 쓴다.
+    동률이면 묶음 안 총점 중앙값이 낮은 쪽(보수적)을 고른다. (대표 행들, 동률 문항 목록, 뒤집힌 문항 정보)"""
+    rep, ties, flips = [], [], []
+    for i in range(N_ROUNDS):
+        cands = [run[i] for run in runs]
+        groups = {}
+        for r in cands:
+            groups.setdefault(_outcome_key(r), []).append(r)
+        best = max(len(g) for g in groups.values())
+        top = [g for g in groups.values() if len(g) == best]
+        if len(top) > 1:
+            ties.append(cands[0]["problem_id"])
+        g = min(top, key=lambda g: statistics.median(r["total"] for r in g))
+        totals = sorted(r["total"] for r in g)
+        mid = totals[(len(totals) - 1) // 2]
+        rep.append(next(r for r in g if r["total"] == mid))
+        if len(groups) > 1:
+            flips.append((cands[0]["problem_id"], len(runs),
+                          sorted(((k, len(v)) for k, v in groups.items()), key=lambda kv: -kv[1])))
+    return rep, ties, flips
+
+
+def _stat(vals, d=2, pct=False):
+    vals = [v for v in vals if v == v]   # NaN 제외
+    if not vals:
+        return "–"
+    m = statistics.mean(vals)
+    if len(vals) == 1:
+        return f"{m:.{d}f}"
+    sd = statistics.stdev(vals)
+    return f"{m:.{d}f} ± {sd:.{d}f} [{min(vals):.{d}f}–{max(vals):.{d}f}]"
+
+
+def aggregate(out_dir: str, pool: bool = True) -> None:
+    """여러 실행을 합쳐 (가) 문항별 최빈값 기준 표, (나) 실행 간 평균 ± 표준편차 [범위] 표를 만든다.
+    G4 와 C5 는 설정이 같아 pool=True 면 두 이름의 실행을 합쳐 양쪽 표에 같은 값을 쓴다."""
+    data = {}
+    for name in GATING + COORD:
+        names = [n for n in (GATING + COORD) if POOL.get(n) == POOL.get(name)] \
+            if (pool and name in POOL) else [name]
+        stems, seen = [], set()
+        for n in names:
+            for st in _stems(out_dir, n):
+                if st not in seen:
+                    seen.add(st)
+                    stems.append(st)
+        runs, used, skipped = [], [], []
+        for st in stems:
+            rows, _ = _load_rows(out_dir, st)
+            if rows is None or len(rows) < N_ROUNDS:
+                skipped.append(f"{st}({0 if rows is None else len(rows)}줄)")
+                continue
+            runs.append(rows[:N_ROUNDS])
+            used.append(st)
+        data[name] = (runs, used, skipped)
+
+    out = ["# Stage 1 ablation: 반복 실행 집계 (live)", "",
+           "- **최빈값 표**: 문항마다 (카메라·유형·랜드마크·관계 정답 여부, target 득점 여부)가 가장 자주 나온 "
+           "결과 묶음을 고르고, 그 묶음 안에서 총점이 중앙인 실제 기록 한 줄을 대표로 써서 표를 만든다. "
+           "동률이면 총점 중앙값이 낮은 쪽을 쓴다. 한 번도 실제로 나오지 않은 조합일 수 있다.",
+           "- **평균 표**: 실행마다 지표를 따로 계산한 뒤 `평균 ± 표준편차 [최소–최대]`로 적는다.",
+           f"- G4와 C5는 설정이 같아 {'실행을 합쳐서' if pool else '따로'} 집계한다.", ""]
+
+    def runs_of(n):
+        return data[n][0]
+
+    def table_mode(title, names, cols):
+        out.append(f"## {title}")
+        out.append("")
+        out.append("| ID | Configuration | N | " + " | ".join(c[0] for c in cols) + " | 동률 문항 수 |")
+        out.append("|---|---|---:|" + "---:|" * len(cols) + "---:|")
+        for n in names:
+            runs, used, skipped = data[n]
+            if not runs:
+                out.append(f"| {n} | {LABELS[n]} | 0 | " + " | ".join("–" for _ in cols) + " | – |")
+                continue
+            rep, ties, _ = _modal_rows(runs)
+            m = _metrics(rep)
+            out.append(f"| {n} | {LABELS[n]} | {len(runs)} | "
+                       + " | ".join(c[1](m) for c in cols) + f" | {len(ties)} |")
+        out.append("")
+
+    def table_mean(title, names, cols):
+        out.append(f"## {title}")
+        out.append("")
+        out.append("| ID | Configuration | N | " + " | ".join(c[0] for c in cols) + " |")
+        out.append("|---|---|---:|" + "---:|" * len(cols))
+        for n in names:
+            runs = runs_of(n)
+            if not runs:
+                out.append(f"| {n} | {LABELS[n]} | 0 | " + " | ".join("–" for _ in cols) + " |")
+                continue
+            ms = [_metrics(r) for r in runs]
+            out.append(f"| {n} | {LABELS[n]} | {len(runs)} | "
+                       + " | ".join(_stat([m[c[2]] for m in ms], c[3]) for c in cols) + " |")
+        out.append("")
+
+    f1 = lambda k: (lambda m: f"{m[k]:.1f}")
+    f2 = lambda k: (lambda m: f"{m[k]:.2f}")
+    colsA = [("Cam acc. (%)", f1("cam_acc"), "cam_acc", 1), ("Stage1", f2("stage1"), "stage1", 2),
+             ("Object", f2("object"), "object", 2), ("Person", f2("person"), "person", 2)]
+    colsB = [("Stage1", f2("stage1"), "stage1", 2), ("'on' subset", f2("on_subset"), "on_subset", 2),
+             ("Person", f2("person"), "person", 2),
+             ("Anchor err obj, cam-correct (m)", f2("anchor_med_obj_cc"), "anchor_med_obj_cc", 2),
+             ("Target err obj, cam-correct (m)", f2("target_med_obj_cc"), "target_med_obj_cc", 2),
+             ("Target err person (m)", f2("target_med_person"), "target_med_person", 2),
+             ("Cam acc. (%)", f1("cam_acc"), "cam_acc", 1)]
+    table_mode("표 A (최빈값 기준)", GATING, colsA)
+    table_mean("표 A (평균 ± 표준편차 [범위])", GATING, colsA)
+    table_mode("표 B (최빈값 기준)", COORD, colsB)
+    table_mean("표 B (평균 ± 표준편차 [범위])", COORD, colsB)
+
+    out += ["## 구성별 실행 목록과 결과가 뒤집힌 문항", ""]
+    seen_pool = set()
+    for n in GATING + COORD:
+        key = POOL.get(n) if (pool and n in POOL) else n
+        if key in seen_pool:
+            continue
+        seen_pool.add(key)
+        runs, used, skipped = data[n]
+        label = "G4 = C5" if (pool and n in POOL) else n
+        out.append(f"### {label}: {len(runs)}회 ({', '.join(used) or '없음'})"
+                   + (f" -- 제외: {', '.join(skipped)}" if skipped else ""))
+        if len(runs) < 2:
+            out += ["", "- 반복이 없어 뒤집힘을 알 수 없음", ""]
+            continue
+        _, ties, flips = _modal_rows(runs)
+        out.append("")
+        if not flips:
+            out += ["- 모든 문항이 모든 실행에서 같은 결과 묶음", ""]
+            continue
+        out.append("| 문항 | 결과 묶음 분포 (카메라/유형/랜드마크/관계/target 득점 → 횟수) |")
+        out.append("|---|---|")
+        for pid, nr, groups in flips:
+            desc = ", ".join("".join("O" if x else "x" for x in k) + f"×{c}" for k, c in groups)
+            out.append(f"| {pid} | {desc} |")
+        out.append("")
+    text = "\n".join(out)
+    print(text)
+    with open(os.path.join(out_dir, "tables_live_agg.md"), "w", encoding="utf-8") as f:
+        f.write(text + "\n")
+
+
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--summarize":
+    if len(sys.argv) >= 3 and sys.argv[1] == "--summarize":
         summarize(sys.argv[2])
+    elif len(sys.argv) >= 3 and sys.argv[1] == "--aggregate":
+        aggregate(sys.argv[2], pool="--no-pool" not in sys.argv[3:])
     else:
         main()

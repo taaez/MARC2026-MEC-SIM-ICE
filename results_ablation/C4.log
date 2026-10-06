@@ -298,3 +298,4 @@
 [17:29:11] participant_app INFO: [STATE] STAGE2_RUN -> FINISHING
 [INFO] [1791188951.982504697] [marc_participant]: [STATE] FINISHING -> FINISHED
 [17:29:11] participant_app INFO: [STATE] FINISHING -> FINISHED
+[INFO] [1791189394.623957282] [marc_participant]: [SHUTDOWN] done
