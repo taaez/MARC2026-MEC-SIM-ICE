@@ -116,8 +116,10 @@ def summarize(d):
     s["reverse_escape"] = _count(ev, r"consecutive stall at the same spot|chassis wedged \(")
     s["pinned"] = _count(ev, r"\] pinned:")
     s["mppi_all_hit"] = _count(ev, r"rollouts collide -> stopping")
-    s["navfield_unreachable"] = _count(ev, r"navfield: goal unreachable")
-    s["navfield_last_resort"] = _count(ev, r"all off-road passable")
+    s["navfield_unreachable"] = _count(ev, r"navfield: goal unreachable|navfield: stage ")
+    s["navfield_last_resort"] = _count(ev, r"all off-road passable|stage last-resort")
+    s["navfield_tight_ok"] = _count(ev, r"stage tight .*V\(robot\)=[0-9]")
+    s["navfield_hold"] = _count(ev, r"holding stage")
     s["pick_attempts"] = _count(ev, r"object pick sequence attempt")
     s["pick_results"] = [e["msg"] for e in ev if re.search(r"pick attempt \d+ (ok|failed) \(grip", e["msg"])]
     s["grasp_shape"] = [e["msg"].split("] ", 1)[1] for e in ev if "depth grasp shape" in e["msg"]]

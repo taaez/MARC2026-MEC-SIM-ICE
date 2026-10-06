@@ -1,0 +1,5 @@
+# 2026-10-06: MPPI rerun after tight-radius stage + stage hold (legacy unaffected -> not rerun)
+# problem tag ABL_OFF GRASP_OFF planner
+rt04_taxi_tumbler      rt04_ab2_mppi  - - mppi
+rt04b_taxi_umbrella    rt04b_ab2_mppi - - mppi
+rtC2_fallenbike_pencil rtC2_ab2_mppi  - - mppi

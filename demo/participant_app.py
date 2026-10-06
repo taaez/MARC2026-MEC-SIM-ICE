@@ -105,14 +105,25 @@ MPPI_ALL_HIT_FRAC = 0.98       # this share of rollouts colliding -> stop instea
 # ghost walls included, cut the road; the old fallback then opened ALL off-road and the robot
 # hung on a kerb). Escalation, each step only for THIS build -- the lidar layer itself keeps
 # every cell (the reactive brake still sees them):
-#   1) lidar cells not re-observed for MPPI_DISC_STALE_S are left out (a real obstacle in
-#      view is re-hit every sweep; a ghost from a past rotation is not), except within
-#      MPPI_DISC_NEAR_M of the robot (too close for the lidar to re-hit)
-#   2) only lidar cells within MPPI_DISC_NEAR_M of the robot
-#   3) last resort: all off-road passable (the old fallback)
-# Stall-memory discs (physical contact) are kept in every step.
+#   1) tight: chassis radius MPPI_TIGHT_INSCRIBED_M, all obstacles kept. Squeezing closer to
+#      obstacles is less risky than ignoring some. Live rt04b_ab_mppi 2026-10-06: the pick
+#      approach (radius 0.22) got in between kick scooters / trash can, then leg 2 (0.30)
+#      found the gap it came through closed -> V(robot)=inf in every step, 15 min stuck.
+#   2) fresh+near: lidar cells not re-observed for MPPI_DISC_STALE_S are left out (a real
+#      obstacle in view is re-hit every sweep; a ghost from a past rotation is not), except
+#      within MPPI_DISC_NEAR_M of the robot (too close for the lidar to re-hit)
+#   3) near-only: only lidar cells within MPPI_DISC_NEAR_M of the robot
+#   4) last resort: all off-road passable (the old fallback)
+# Stall-memory discs (physical contact) are kept in every step. Steps 2-4 also use the tight
+# radius.
+# Stage hold: once a build needed step k, the next builds start at step k for
+# MPPI_STAGE_HOLD_S. Live rt04_ab_mppi 2026-10-06: next to the target (kick scooters around
+# it) builds alternated unreachable / near-only-reachable, V jumped 8 -> 17 -> 10 and the
+# robot spun and backed up for minutes 4-6 m from the object.
 MPPI_DISC_STALE_S = 10.0
 MPPI_DISC_NEAR_M = 2.0
+MPPI_TIGHT_INSCRIBED_M = 0.22
+MPPI_STAGE_HOLD_S = 15.0
 # Waypoint-circle reroute -- bends only the path segments an obstacle circle actually
 # crosses, in place, no A*/follower cycle. See mec_sim_ice/demo_agents/waypoint_avoid.py.
 from waypoint_avoid import relocate
@@ -1768,6 +1779,7 @@ class DemoParticipant:
             offroad_ok.append((avoid_xy[0], avoid_xy[1], float(offroad_r)))
         field, ctrl = None, None
         field_dirty, built_at = True, -1e9
+        hold_stage, hold_until = 0, -1e9      # stage hold -- see MPPI_STAGE_HOLD_S
         pos_history = deque()        # (t, x, y, yaw, commanded v)
         pin_history = deque()        # same, over MPPI_PIN_WINDOW_S
         v_history = deque()          # (t, V(robot)) -- tight legs: no V progress near goal = arrived
@@ -1811,33 +1823,47 @@ class DemoParticipant:
             if field is None or (field_dirty and now_t - built_at >= NAVFIELD_REBUILD_S):
                 t0 = time.monotonic()
 
-                def build(discs, ok):
-                    return NavField(inscribed_m=inscribed).build(
+                def build(discs, ok, r=inscribed):
+                    return NavField(inscribed_m=r).build(
                         planner._grid, (planner._ox, planner._oy), planner._res, (x, y), goal,
                         discs=discs, goal_clear_m=clear_m,
                         keep_discs=([(avoid_xy[0], avoid_xy[1], MPPI_OBJECT_RADIUS_M)]
                                     if avoid_xy else ()),
                         free_xy=(x, y), offroad_ok=ok)
 
-                discs = self._plan_obstacles(goal, clear_m)
-                field = build(discs, offroad_ok)
-                # goal unreachable -> escalate (see MPPI_DISC_STALE_S)
-                n_all = len(discs)
+                # goal unreachable -> escalate (see MPPI_DISC_STALE_S / MPPI_STAGE_HOLD_S)
                 scans_per_s = STAGE2_NAV_RATE_HZ / LIDAR_UPDATE_EVERY_TICKS
-                for stage, max_age in (("fresh+near", MPPI_DISC_STALE_S * scans_per_s),
-                                       ("near-only", 0)):
-                    if math.isfinite(field.value(x, y)):
+                rt = min(inscribed, MPPI_TIGHT_INSCRIBED_M)
+                stages = [  # (name, lidar max age in scans or None = all, radius, off-road ok)
+                    ("normal", None, inscribed, offroad_ok),
+                    ("tight", None, rt, offroad_ok),
+                    ("fresh+near", MPPI_DISC_STALE_S * scans_per_s, rt, offroad_ok),
+                    ("near-only", 0, rt, offroad_ok),
+                    ("last-resort", 0, rt, None),
+                ]
+                start = hold_stage if now_t < hold_until else 0
+                n_all = None
+                for k in range(start, len(stages)):
+                    name, max_age, r_k, ok_k = stages[k]
+                    if max_age is None:
+                        discs = self._plan_obstacles(goal, clear_m)
+                    else:
+                        discs = self._plan_obstacles(goal, clear_m, lidar_max_age_scans=max_age,
+                                                     near_xy=(x, y), near_m=MPPI_DISC_NEAR_M)
+                    if n_all is None:
+                        n_all = len(discs)
+                    field = build(discs, ok_k, r_k)
+                    reach = math.isfinite(field.value(x, y))
+                    if k > 0:
+                        log.warning("[Stage2] navfield: stage %s (r=%.2f, %d/%d discs%s) "
+                                    "V(robot)=%.1f", name, r_k, len(discs), n_all,
+                                    ", off-road open" if ok_k is None else "", field.value(x, y))
+                    if reach:
                         break
-                    discs = self._plan_obstacles(goal, clear_m, lidar_max_age_scans=max_age,
-                                                 near_xy=(x, y), near_m=MPPI_DISC_NEAR_M)
-                    field = build(discs, offroad_ok)
-                    log.warning("[Stage2] navfield: goal unreachable -> rebuilt with %s "
-                                "lidar cells only (%d -> %d discs): V(robot)=%.1f", stage, n_all,
-                                len(discs), field.value(x, y))
-                if not math.isfinite(field.value(x, y)) and field.offroad.any():
-                    log.warning("[Stage2] navfield: goal still unreachable -- last resort, "
-                                "all off-road passable")
-                    field = build(discs, None)
+                if k > 0 and (k != hold_stage or now_t >= hold_until):
+                    hold_stage, hold_until = k, now_t + MPPI_STAGE_HOLD_S
+                    log.info("[Stage2] navfield: holding stage %s for %.0fs", stages[k][0],
+                             MPPI_STAGE_HOLD_S)
                 if ctrl is None:
                     ctrl = MPPI(field, steering_track=STEERING_TRACK)
                 else:
