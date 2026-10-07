@@ -1,0 +1,12 @@
+# 4th round (2026-10-07): + retry re-localization (current view, -30, +30 deg) + tumbler slow/high transport (both planners)
+# problem tag ABL_OFF GRASP_OFF planner
+rt01_parking_tumbler   rt01_r4_legacy  - - legacy
+rt01_parking_tumbler   rt01_r4_mppi    - - mppi
+rt02_parking_umbrella  rt02_r4_legacy  - - legacy
+rt02_parking_umbrella  rt02_r4_mppi    - - mppi
+rt03_vending_umbrella  rt03_r4_legacy  - - legacy
+rt03_vending_umbrella  rt03_r4_mppi    - - mppi
+rt04_taxi_tumbler      rt04_r4_legacy  - - legacy
+rt04_taxi_tumbler      rt04_r4_mppi    - - mppi
+rt04b_taxi_umbrella    rt04b_r4_legacy - - legacy
+rt04b_taxi_umbrella    rt04b_r4_mppi   - - mppi

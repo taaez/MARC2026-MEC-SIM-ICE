@@ -86,7 +86,7 @@ from curb_layer import CurbLayer, lidar_world
 from lidar_accumulator import LidarSliceAccumulator, imu_roll_pitch   # [팀 추가] 조각 누적
 # [팀 추가] 지역 내비게이션 함수 + MPPI (MARC_LOCAL_PLANNER=mppi). 모듈 docstring 참고.
 from nav_field import NavField
-from mppi import MPPI, V_MAX as V_MAX_MPPI
+from mppi import MPPI, V_MAX as V_MAX_MPPI, W_MAX as MPPI_W_MAX
 LOCAL_PLANNER = os.environ.get("MARC_LOCAL_PLANNER", "legacy").strip().lower()
 NAVFIELD_REBUILD_S = 1.0       # sim s between cost-to-go rebuilds triggered by new lidar cells
 MPPI_GOAL_CLEAR_M = 0.6        # lidar/stall discs dropped this close to the goal (pick target)
@@ -147,6 +147,21 @@ MPPI_STEP_GOAL_CLEAR_M = 0.9
 # last-resort stage (off-road open, only sensed steps block): slower, so a kerb / drop the
 # lidar first sees 1.2-5 m ahead is in the field before the robot gets there
 MPPI_LAST_RESORT_V = 0.6
+# [팀 추가 2026-10-07] Slow zone near kerbs / ledges / the road edge: MPPI top speed and turn
+# rate are lowered while the robot is within MPPI_SLOW_HAZARD_M of a sensed kerb/ledge line
+# (curb_layer hazard) or within MPPI_SLOW_EDGE_M of the map's road edge; released past the
+# *_OFF distances (hysteresis). The limits are the controller's own (MPPI.v_max / w_max), so the
+# rollouts plan with them instead of the command being clipped afterwards. Live round 4: the
+# same 1.1 m/s / 1.2 rad/s limits as legacy, but MPPI turns while moving -- rt02 rolled over at
+# a kerb next to the spawn (2.8 rad/s spin at 1.5-1.76 m/s, 7 earlier passes there were fine)
+# and rt04 drove off the road ledge at (-70, 123) at 1.3 m/s.
+MPPI_SLOW_V = 0.5
+MPPI_SLOW_W = 0.6
+MPPI_SLOW_HAZARD_M, MPPI_SLOW_HAZARD_OFF_M = 1.5, 2.0
+# Road-edge distance was 1.0 / 1.5 m: the round-4 MPPI paths spent 3-68 % (rt03) of their
+# samples within 1.0 m of the map's road edge, and rt01_r5_mppi crawled at 0.5 m/s from the spawn
+# on. 0.5 / 1.0 m keeps the zone to the edge strip itself; sensed kerbs keep 1.5 / 2.0 m.
+MPPI_SLOW_EDGE_M, MPPI_SLOW_EDGE_OFF_M = 0.5, 1.0
 # last-resort stage with the curb layer: off-road open, but the strip of off-road along the
 # road (this wide) only where it was observed flat -- leave the road only at a sensed flat entry
 MPPI_EDGE_BAND_M = 0.0   # off: offline (survey_rtC2_p1) the band left the goal unreachable,
@@ -329,15 +344,22 @@ GRASP_NEAR_END_MIN_M = 0.25
 # the same 0.72 came back after every re-approach (rt03_r3_mppi). The final clamp to the true
 # reach (ARM_REACH_FWD_M) below is unchanged.
 GRASP_SLIDE_FWD_M = 0.62
-# [팀 추가 2026-10-07] Retry re-localization. A failed attempt either never lifted the object
-# (it is still about where it was) or dropped it in transport (it moved). Before, every retry
-# re-aligned to the ORIGINAL hint and, with nothing raised in the camera window, grasped the nav
-# estimate blind -- rt04_r3_mppi: attempts 2 and 3 "empty hand at lift" with no depth at all.
-# Now: look in the current view, then RETRY_SEARCH_DEG to either side, around the last known
-# object position with a slightly wider window (a rt04 distractor umbrella sits 0.38 m from the
-# tumbler, so the window stays small); not found -> skip the remaining attempts, go deliver.
-RETRY_SEARCH_DEG = 30.0
+# [팀 추가 2026-10-07] Retry: before, every retry re-aligned to the ORIGINAL hint and, with
+# nothing raised in the camera window, grasped the nav estimate blind -- rt04_r3_mppi: attempts 2
+# and 3 "empty hand at lift" with no depth at all. Now: fold the arm (it must not block the base
+# camera), re-align and approach the last known object position, measure with a slightly wider
+# window (a rt04 distractor umbrella sits 0.38 m from the tumbler, so it stays small); nothing
+# there -> skip the remaining attempts and go deliver. (Round 4 also searched +-30 deg in place
+# first; removed -- see PICK_SPIN_*.)
 RETRY_WINDOW_M = 0.6
+# Small pure-rotation commands do not reliably spin this chassis in the pick phase: the robot
+# slid sideways instead (rt03_r4_mppi: 1.8 m during the re-approach turn, 2.9 m during the
+# -30 deg re-localization turn with +8 deg of yaw; a +10 deg view turn slid 0.8 m in 6 s with
+# the yaw unchanged -- the depth views confirmed the slide). The one remaining pick-phase turn
+# (re-approach) uses a constant PICK_SPIN_W and stops as soon as the chassis centre has moved
+# PICK_SPIN_MAX_SHIFT_M; the grasp point is then re-framed via world xy.
+PICK_SPIN_W = 0.5
+PICK_SPIN_MAX_SHIFT_M = 0.05
 
 # -- Stage 2 goals --
 # The Stage 2 task drives to the target object and then delivers it to the owner zone.
@@ -778,11 +800,19 @@ class DemoParticipant:
                 break
             if attempt < MAX_PICK_ATTEMPTS:
                 log.info("[Stage2] retrying pick (attempt %d/%d)", attempt + 1, MAX_PICK_ATTEMPTS)
-                where = self._relocate_object(last_obj_world, deadline)
+                self._stow_arm()      # the arm must not block the base camera
+                self._align_to_object(last_obj_world, deadline)
+                self._approach_straight(last_obj_world, deadline, target_fwd=0.40)
+                exp = self._object_arm_xy(last_obj_world)
+                found = (self._locate_object_by_depth(expected_xy=exp, window_m=RETRY_WINDOW_M)
+                         if exp is not None and exp[0] > 0.0 else None)
+                where = self._arm_to_world(found[0], found[1]) if found is not None else None
                 if where is None:
-                    log.warning("[Stage2] object not seen in the current view nor at +-%.0f deg "
-                                "-> skipping the remaining pick attempts", RETRY_SEARCH_DEG)
+                    log.warning("[Stage2] retry: nothing within %.1f m of the last known object "
+                                "position -> skipping the remaining pick attempts", RETRY_WINDOW_M)
                     break
+                log.info("[Stage2] retry: object at (%.2f, %.2f) (last seen (%.2f, %.2f))",
+                         where[0], where[1], last_obj_world[0], last_obj_world[1])
                 collect_xy = where
                 last_obj_world = where
                 self._align_to_object(collect_xy, deadline)
@@ -1156,53 +1186,54 @@ class DemoParticipant:
         return (x + f * math.cos(yaw) - float(lat) * math.sin(yaw),
                 y + f * math.sin(yaw) + float(lat) * math.cos(yaw))
 
-    def _turn_in_place(self, angle, max_t=6.0):
+    @staticmethod
+    def _arm_pose_to_world(pose, fwd, lat):
+        """Pose-math arm (fwd, lat) -> world xy for a given chassis pose (see _arm_to_world)."""
+        x, y, yaw = pose
+        f = float(fwd) + ARM_BASE_FWD + GRASP_FWD_BACKOFF
+        return (x + f * math.cos(yaw) - float(lat) * math.sin(yaw),
+                y + f * math.sin(yaw) + float(lat) * math.cos(yaw))
+
+    @staticmethod
+    def _world_to_arm_pose(pose, wx, wy):
+        """Inverse of _arm_pose_to_world."""
+        x, y, yaw = pose
+        dx, dy = wx - x, wy - y
+        f = dx * math.cos(yaw) + dy * math.sin(yaw)
+        lat = -dx * math.sin(yaw) + dy * math.cos(yaw)
+        return (f - ARM_BASE_FWD - GRASP_FWD_BACKOFF, lat)
+
+    # [팀 신규 추가 2026-10-07] PICK_SPIN_* 위 주석 참고.
+    def _spin_checked(self, angle, max_t=6.0):
+        """Turn in place by `angle` at a constant PICK_SPIN_W; stop early if the chassis centre
+        moves more than PICK_SPIN_MAX_SHIFT_M. True = turned without sliding."""
         c = self.client
         p0 = c.get_world_pose()
         if p0 is None:
-            return
+            return False
         target = p0[2] + angle
+        ok = False
         t_end = self._clock.elapsed + max_t
         while c.is_running and self._clock.tick() < t_end:
             p = c.get_world_pose()
             if p is None:
                 c.sleep(STAGE2_NAV_DT)
                 continue
+            shift = math.hypot(p[0] - p0[0], p[1] - p0[1])
+            if shift > PICK_SPIN_MAX_SHIFT_M:
+                log.warning("[Stage2] spin: chassis slid %.2f m during a %.0f deg turn (yaw %.1f "
+                            "deg done) -> stop", shift, math.degrees(angle), math.degrees(
+                                math.atan2(math.sin(p[2] - p0[2]), math.cos(p[2] - p0[2]))))
+                break
             err = math.atan2(math.sin(target - p[2]), math.cos(target - p[2]))
             if abs(err) < math.radians(2):
+                ok = True
                 break
-            c.send_cmd_vel(0.0, max(-0.5, min(0.5, 1.5 * err)))
+            c.send_cmd_vel(0.0, math.copysign(PICK_SPIN_W, err))
             c.sleep(STAGE2_NAV_DT)
         self._halt()
-
-    # [팀 신규 추가 2026-10-07] RETRY_* 위 주석 참고.
-    def _relocate_object(self, last_world, deadline):
-        """Find the object again before a retry: current view, then -RETRY_SEARCH_DEG, then
-        +RETRY_SEARCH_DEG (relative to the start heading). World xy of the object, or None."""
-        self._stow_arm()      # the arm must not block the base camera
-        p0 = self.client.get_world_pose()
-        for step, label in ((0.0, "current view"), (-RETRY_SEARCH_DEG, "-%.0f deg" % RETRY_SEARCH_DEG),
-                            (2 * RETRY_SEARCH_DEG, "+%.0f deg" % RETRY_SEARCH_DEG)):
-            if self._clock.tick() >= deadline:
-                return None
-            if step:
-                self._turn_in_place(math.radians(step))
-            exp = self._object_arm_xy(last_world)
-            found = (self._locate_object_by_depth(expected_xy=exp, window_m=RETRY_WINDOW_M)
-                     if exp is not None and exp[0] > 0.0 else None)
-            if found is not None:
-                w = self._arm_to_world(found[0], found[1])
-                log.info("[Stage2] re-localized the object (%s) at %s (was %s)", label,
-                         None if w is None else tuple(round(v, 2) for v in w),
-                         tuple(round(v, 2) for v in last_world))
-                if w is not None:
-                    return w
-            else:
-                log.info("[Stage2] re-localize: nothing at %s", label)
-        if p0 is not None:
-            self._turn_in_place(math.atan2(math.sin(p0[2] - (self.client.get_world_pose() or p0)[2]),
-                                           math.cos(p0[2] - (self.client.get_world_pose() or p0)[2])))
-        return None
+        p = c.get_world_pose()
+        return ok and p is not None and math.hypot(p[0] - p0[0], p[1] - p0[1]) <= PICK_SPIN_MAX_SHIFT_M
 
     # [팀 신규 추가 2026-10-07] GRASP_REAPPROACH_* 위 주석 참고.
     def _reapproach_for_grasp(self, grasp):
@@ -1224,26 +1255,16 @@ class DemoParticipant:
         # 1) turn about the chassis centre (arm base is ARM_BASE_FWD ahead of it) to face the point
         cx_, cy_ = fwd + ARM_BASE_FWD, lat
         turn = max(-math.radians(35), min(math.radians(35), math.atan2(cy_, cx_)))
+        pw = self._arm_pose_to_world(p0, fwd, lat)     # the point in world xy
+        p0_turn = p0
         if abs(turn) > math.radians(4):
-            target_yaw = p0[2] + turn
-            t_end = self._clock.elapsed + 6.0
-            while c.is_running and self._clock.tick() < t_end:
-                p = c.get_world_pose()
-                if p is None:
-                    c.sleep(STAGE2_NAV_DT)
-                    continue
-                err = math.atan2(math.sin(target_yaw - p[2]), math.cos(target_yaw - p[2]))
-                if abs(err) < math.radians(2):
-                    break
-                c.send_cmd_vel(0.0, max(-0.5, min(0.5, 1.5 * err)))
-                c.sleep(STAGE2_NAV_DT)
-            self._halt()
-            p1 = c.get_world_pose() or p0
-            turn = math.atan2(math.sin(p1[2] - p0[2]), math.cos(p1[2] - p0[2]))
-        # point in the arm frame after the turn
-        rx = cx_ * math.cos(-turn) - cy_ * math.sin(-turn)
-        ry = cx_ * math.sin(-turn) + cy_ * math.cos(-turn)
-        fwd, lat = rx - ARM_BASE_FWD, ry
+            # slide-guarded (see PICK_SPIN_W): rt03_r4_mppi's turn slid the chassis 1.8 m
+            # sideways and turned only 9 of the 20 deg
+            self._spin_checked(turn)
+        p1 = c.get_world_pose() or p0
+        turn = math.atan2(math.sin(p1[2] - p0[2]), math.cos(p1[2] - p0[2]))
+        # point in the arm frame after the turn (via world xy: also right if the chassis slid)
+        fwd, lat = self._world_to_arm_pose(p1, *pw)
         want = min(fwd - GRASP_REAPPROACH_TARGET_M, GRASP_REAPPROACH_MAX_M)
         if len(grasp) >= 5 and grasp[4]:
             # lying object: keep its near end clear of the chassis front (axis yaw is relative
@@ -1268,9 +1289,10 @@ class DemoParticipant:
             p = c.get_world_pose()
             if p is not None:
                 moved = math.hypot(p[0] - p0[0], p[1] - p0[1])
-        if abs(turn) < math.radians(4) and moved < 0.05:
+        if abs(turn) < math.radians(4) and moved < 0.05 and math.hypot(p1[0] - p0_turn[0], p1[1] - p0_turn[1]) < 0.02:
             return 0.0, None
-        return max(moved, 1e-3), (fwd - moved, lat)
+        p = c.get_world_pose()
+        return max(moved, 1e-3), (self._world_to_arm_pose(p, *pw) if p is not None else (fwd - moved, lat))
 
     # [팀 신규 추가, 매니퓰레이션 담당 쪽] starter kit에 없던 메서드.
     def _wait_basket_state(self, timeout: float = 1.0):
@@ -1493,15 +1515,19 @@ class DemoParticipant:
 
     # [팀 신규 추가] curb_layer.hazard_xy 의 near_edge: 지도 도로 경계 MPPI_CURB_EDGE_M 안이면 True.
     @staticmethod
-    def _road_edge_zone(planner):
+    def _road_edge_zone(planner, radii=None):
+        """near_edge(xy[, r]) -> bool array: within r (default MPPI_CURB_EDGE_M) of the map's
+        road edge. One distance transform per leg (~0.5 s); r must be one of `radii`."""
         from scipy import ndimage
         g, res = planner._grid, planner._res
         road, unk = g == 0, g < 0
         edge = road & ndimage.binary_dilation(unk)
-        zone = ndimage.distance_transform_edt(~edge) * res <= MPPI_CURB_EDGE_M
+        dist = ndimage.distance_transform_edt(~edge) * res
+        zones = {r: dist <= r for r in set(radii or ()) | {MPPI_CURB_EDGE_M}}
         ox, oy = planner._ox, planner._oy
 
-        def near_edge(xy):
+        def near_edge(xy, r=MPPI_CURB_EDGE_M):
+            zone = zones[r]
             j = np.floor((xy[:, 0] - ox) / res).astype(np.int64)
             i = np.floor((xy[:, 1] - oy) / res).astype(np.int64)
             ok = (i >= 0) & (i < zone.shape[0]) & (j >= 0) & (j < zone.shape[1])
@@ -2022,7 +2048,10 @@ class DemoParticipant:
         field_dirty, built_at = True, -1e9
         hold_stage, hold_until = 0, -1e9      # stage hold -- see MPPI_STAGE_HOLD_S
         tilt_last = None                      # (x, y, tilt deg) of the last tilt-guard trigger
+        last_resort = False                   # current build's stage is last-resort
         edge_zone = None                      # map road-edge test for curb_layer.hazard_xy
+        hazard_all = np.zeros((0, 2))         # kerb/ledge lines from the last build (slow zone)
+        slow = False                          # inside the kerb / road-edge slow zone
         pos_history = deque()        # (t, x, y, yaw, commanded v)
         pin_history = deque()        # same, over MPPI_PIN_WINDOW_S
         v_history = deque()          # (t, V(robot)) -- tight legs: no V progress near goal = arrived
@@ -2071,8 +2100,10 @@ class DemoParticipant:
                 step_discs, flat_xy, hazard_xy = (), None, None
                 if self._curb is not None:
                     if edge_zone is None:
-                        edge_zone = self._road_edge_zone(planner)
+                        edge_zone = self._road_edge_zone(
+                            planner, radii=(MPPI_SLOW_EDGE_M, MPPI_SLOW_EDGE_OFF_M))
                     hz = self._curb.hazard_xy(near_edge=edge_zone)
+                    hazard_all = hz
                     if len(hz):
                         keep_ = ((np.hypot(hz[:, 0] - goal[0], hz[:, 1] - goal[1]) >= MPPI_STEP_GOAL_CLEAR_M)
                                  & (np.hypot(hz[:, 0] - x, hz[:, 1] - y) >= MPPI_STEP_NEAR_M))
@@ -2126,7 +2157,7 @@ class DemoParticipant:
                     ctrl = MPPI(field, steering_track=STEERING_TRACK)
                 else:
                     ctrl.set_field(field)
-                ctrl.v_max = MPPI_LAST_RESORT_V if stages[k][0] == "last-resort" else V_MAX_MPPI
+                last_resort = stages[k][0] == "last-resort"
                 field_dirty, built_at = False, now_t
                 log.info("[Stage2] navfield %dx%d built in %.0f ms (%d discs, %d hazard cells, %d off-road "
                          "cells, ok r=%s) V(robot)=%.1f goal%s=(%.2f, %.2f)",
@@ -2166,6 +2197,26 @@ class DemoParticipant:
                 ctrl.reset()
                 last_cmd = (0.0, 0.0)
                 continue
+            # slow zone (MPPI_SLOW_*): near a sensed kerb/ledge line or the map's road edge
+            if self._curb is not None and edge_zone is not None:
+                d_hz = (float(np.min(np.hypot(hazard_all[:, 0] - x, hazard_all[:, 1] - y)))
+                        if len(hazard_all) else 1e9)
+                here = np.array([[x, y]])
+                if slow:
+                    slow = (d_hz < MPPI_SLOW_HAZARD_OFF_M
+                            or bool(edge_zone(here, MPPI_SLOW_EDGE_OFF_M)[0]))
+                else:
+                    slow = d_hz < MPPI_SLOW_HAZARD_M or bool(edge_zone(here, MPPI_SLOW_EDGE_M)[0])
+                    if slow:
+                        log.info("[Stage2] slow zone: kerb/ledge %.1f m away or road edge -> "
+                                 "v<=%.1f w<=%.1f", d_hz, MPPI_SLOW_V, MPPI_SLOW_W)
+            v_cap = V_MAX_MPPI
+            if last_resort:
+                v_cap = min(v_cap, MPPI_LAST_RESORT_V)
+            if slow:
+                v_cap = min(v_cap, MPPI_SLOW_V)
+            ctrl.v_max = v_cap
+            ctrl.w_max = MPPI_SLOW_W if slow else MPPI_W_MAX
             # roll out from the last command, not odom: odom speed jitters ~0.1 m/s at a
             # standstill, which kept the decel limit from ever reaching a pure spin
             linear, angular = ctrl.step(pose, last_cmd[0], goal_tol=0.8 * tol)
