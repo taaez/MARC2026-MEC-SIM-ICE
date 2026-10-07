@@ -1,0 +1,12 @@
+# 5th round (2026-10-07): + MPPI slow zone (kerb 1.5/2.0 m, road edge 0.5/1.0 m; v<=0.5, moving w<=0.6); retry = fold arm, re-align + approach the last known position, measure, nothing -> skip (round-4 +-30 deg search removed); re-approach turn at constant 0.5 rad/s with a 5 cm slide guard. Run under gnome-session-inhibit (screen lock dropped RTF 0.18 -> 0.033)
+# problem tag ABL_OFF GRASP_OFF planner
+rt01_parking_tumbler   rt01_r5_legacy  - - legacy
+rt01_parking_tumbler   rt01_r5_mppi    - - mppi
+rt02_parking_umbrella  rt02_r5_legacy  - - legacy
+rt02_parking_umbrella  rt02_r5_mppi    - - mppi
+rt03_vending_umbrella  rt03_r5_legacy  - - legacy
+rt03_vending_umbrella  rt03_r5_mppi    - - mppi
+rt04_taxi_tumbler      rt04_r5_legacy  - - legacy
+rt04_taxi_tumbler      rt04_r5_mppi    - - mppi
+rt04b_taxi_umbrella    rt04b_r5_legacy - - legacy
+rt04b_taxi_umbrella    rt04b_r5_mppi   - - mppi
