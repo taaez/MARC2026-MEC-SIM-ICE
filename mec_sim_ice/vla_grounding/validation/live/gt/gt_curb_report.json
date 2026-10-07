@@ -1,0 +1,174 @@
+{
+ "boundary_cells": 6324,
+ "boundary_with_gt": 4388,
+ "boundary_classes": {
+  "flush": 2348,
+  "low": 861,
+  "high": 707,
+  "drop": 472,
+  "nogt": 1936
+ },
+ "boundary_up": {
+  "n": 1568,
+  "mean": 0.1066,
+  "median": 0.0911,
+  "p10": 0.0488,
+  "p90": 0.1809,
+  "max": 0.6319,
+  "min": 0.031
+ },
+ "boundary_drop": {
+  "n": 472,
+  "mean": -0.1944,
+  "median": -0.2057,
+  "p10": -0.2861,
+  "p90": -0.0899,
+  "max": -0.0367,
+  "min": -0.3688
+ },
+ "boundary_abs_all": {
+  "n": 4388,
+  "mean": 0.0647,
+  "median": 0.0208,
+  "p10": 0.0039,
+  "p90": 0.1846,
+  "max": 0.6319,
+  "min": 0.0001
+ },
+ "kind_steps": {
+  "CarRoad->other (z_other - z_CarRoad)": {
+   "n": 6254,
+   "mean": 0.1419,
+   "median": 0.1463,
+   "p10": 0.0624,
+   "p90": 0.2274,
+   "max": 0.2611,
+   "min": 0.0106
+  },
+  "SideWalk->other (z_other - z_SideWalk)": {
+   "n": 7102,
+   "mean": 0.0745,
+   "median": 0.071,
+   "p10": 0.0087,
+   "p90": 0.1434,
+   "max": 1.7288,
+   "min": -0.2474
+  },
+  "Grass->other (z_other - z_Grass)": {
+   "n": 6828,
+   "mean": 0.261,
+   "median": 0.127,
+   "p10": 0.0089,
+   "p90": 0.4754,
+   "max": 2.7337,
+   "min": -0.1843
+  },
+  "SideWalk->Grass (z_Grass - z_SideWalk)": {
+   "n": 3169,
+   "mean": -0.266,
+   "median": -0.0855,
+   "p10": -1.1398,
+   "p90": 0.0157,
+   "max": 0.2241,
+   "min": -2.6393
+  },
+  "CarRoad->SideWalk (z_SideWalk - z_CarRoad)": {
+   "n": 43,
+   "mean": 0.0797,
+   "median": 0.0779,
+   "p10": 0.0574,
+   "p90": 0.1196,
+   "max": 0.1331,
+   "min": -0.0139
+  },
+  "CarRoad->Grass (z_Grass - z_CarRoad)": {
+   "n": 339,
+   "mean": 0.0354,
+   "median": 0.0531,
+   "p10": -0.0421,
+   "p90": 0.0686,
+   "max": 0.0823,
+   "min": -0.067
+  }
+ },
+ "curb_free_reach_from_spawn": {
+  "max_step_0.03": {
+   "area_m2": 4290.3,
+   "rtC2_object": true,
+   "owner_zone": true
+  },
+  "max_step_0.06": {
+   "area_m2": 6833.4,
+   "rtC2_object": true,
+   "owner_zone": true
+  },
+  "max_step_0.10": {
+   "area_m2": 7200.4,
+   "rtC2_object": true,
+   "owner_zone": true
+  }
+ },
+ "curb_free_offroad_areas": [
+  {
+   "area_m2": 1010.6,
+   "entry_xy": [
+    -63.68,
+    117.51
+   ],
+   "entry_width_m": 49.5,
+   "kinds": {
+    "CarRoad": 3.8,
+    "SideWalk": 193.7,
+    "Grass": 800.2,
+    "other": 12.9
+   }
+  },
+  {
+   "area_m2": 59.9,
+   "entry_xy": [
+    -139.9,
+    160.25
+   ],
+   "entry_width_m": 37.8,
+   "kinds": {
+    "CarRoad": 59.9
+   }
+  },
+  {
+   "area_m2": 55.8,
+   "entry_xy": [
+    -139.96,
+    146.6
+   ],
+   "entry_width_m": 187.1,
+   "kinds": {
+    "CarRoad": 55.8
+   }
+  },
+  {
+   "area_m2": 49.6,
+   "entry_xy": [
+    -134.21,
+    166.63
+   ],
+   "entry_width_m": 88.6,
+   "kinds": {
+    "CarRoad": 49.6
+   }
+  }
+ ],
+ "sensor_vs_gt_lidar": {
+  "n": 1740,
+  "bias_m": 0.0204,
+  "mae_m": 0.0656,
+  "corr": 0.183,
+  "class_agree": 0.936
+ },
+ "sensor_vs_gt_depth": {
+  "n": 488,
+  "bias_m": 0.0132,
+  "mae_m": 0.0508,
+  "corr": 0.398,
+  "class_agree": 0.887
+ }
+}

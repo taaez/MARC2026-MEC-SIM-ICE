@@ -80,11 +80,13 @@ from arm_pick import run_pick_sequence
 from manipulation import transform_via_tf2
 # Lidar obstacle layer -- the occupancy map holds static road only, so parked vehicles and
 # the like have to be sensed. See mec_sim_ice/demo_agents/lidar_obstacles.py.
-from lidar_obstacles import LidarObstacleLayer
+from lidar_obstacles import LidarObstacleLayer, lidar_xyz
+# [팀 추가] 연석·단차 레이어 (MPPI 모드의 NavField 에만 반영). 모듈 docstring 참고.
+from curb_layer import CurbLayer, lidar_world
 from lidar_accumulator import LidarSliceAccumulator, imu_roll_pitch   # [팀 추가] 조각 누적
 # [팀 추가] 지역 내비게이션 함수 + MPPI (MARC_LOCAL_PLANNER=mppi). 모듈 docstring 참고.
 from nav_field import NavField
-from mppi import MPPI
+from mppi import MPPI, V_MAX as V_MAX_MPPI
 LOCAL_PLANNER = os.environ.get("MARC_LOCAL_PLANNER", "legacy").strip().lower()
 NAVFIELD_REBUILD_S = 1.0       # sim s between cost-to-go rebuilds triggered by new lidar cells
 MPPI_GOAL_CLEAR_M = 0.6        # lidar/stall discs dropped this close to the goal (pick target)
@@ -92,6 +94,14 @@ MPPI_ACCEPT_NEAR_M = 1.0       # tight legs: a stall this close to the goal coun
 # Tilt guard: live rt01 2026-10-05 the chassis climbed onto off-road terrain and rolled over
 # (roll 55 deg, pitch -54 deg). Normal driving stays within ~2 deg; kerb wedges reach ~10 deg.
 TILT_GUARD_DEG = 12.0
+# [팀 수정 2026-10-07] tilt guard: stop and settle first, back off slowly only if still tilted,
+# and do not re-fire at the same spot unless the tilt got worse. Before: an immediate reverse on
+# every tick the IMU read > 12 deg -- a robot resting tilted on a kerb re-fired every 8 s
+# (rt01_ab_mppi 98 times, survey run 212 times, ending on its side at roll 101 deg).
+TILT_SETTLE_S = 0.6            # stop, then re-read the tilt after this
+TILT_REVERSE_V = 0.15          # slower than _reverse_escape's default 0.2
+TILT_REPEAT_M = 0.5            # same spot = within this of the last trigger
+TILT_REPEAT_DEG = 3.0          # ... re-fire there only if the tilt grew by this much
 MPPI_OBJECT_RADIUS_M = 0.2     # pick target footprint kept in the navfield on the approach leg
 # Pinned = driving forward but not moving. Live rt01_mppi_r4: v=1.1 commanded for 80 s against
 # something below the lidar band while the yaw twisted -10 -> -45 deg, which the 8 s stall
@@ -124,6 +134,31 @@ MPPI_DISC_STALE_S = 10.0
 MPPI_DISC_NEAR_M = 2.0
 MPPI_TIGHT_INSCRIBED_M = 0.22
 MPPI_STAGE_HOLD_S = 15.0
+# Kerb / step layer (curb_layer.py) in the navfield. Step cells within MPPI_STEP_NEAR_M of the
+# robot (its footprint) are dropped -- the robot is standing there, and a stale band around a
+# kerb right beside it (the spawn) boxed it in.
+MPPI_STEP_NEAR_M = 0.6
+# (was 1.0 m kept only within +-35 deg ahead -- heading-dependent, so the field changed as the
+#  robot turned and MPPI spun in place: live rt04b/rtC2_curb2_mppi, V(robot) 7.6 -> 11.0 per turn)
+# step cells this close to the goal are left out: the pick target itself (a lying umbrella, a
+# tumbler) and what it lies against are low height jumps (live rt04b_curb_mppi: goal cell made
+# lethal and snapped away, object never reached). The leg stops 0.58 m short anyway.
+MPPI_STEP_GOAL_CLEAR_M = 0.9
+# last-resort stage (off-road open, only sensed steps block): slower, so a kerb / drop the
+# lidar first sees 1.2-5 m ahead is in the field before the robot gets there
+MPPI_LAST_RESORT_V = 0.6
+# last-resort stage with the curb layer: off-road open, but the strip of off-road along the
+# road (this wide) only where it was observed flat -- leave the road only at a sensed flat entry
+MPPI_EDGE_BAND_M = 0.0   # off: offline (survey_rtC2_p1) the band left the goal unreachable,
+                         # while all-open + sensed steps found a 33 m path crossing at most 1.8 cm
+# with the curb layer the last-resort stage is held longer: live rtC2_curb_mppi flipped between
+# normal and last-resort every 15 s, each pointing elsewhere, and the robot danced 10 m short
+MPPI_LAST_RESORT_HOLD_S = 15.0   # (60 s while kerbs were in the path planning; back to 15 s)
+# Kerbs are NOT in the path planning (live rt04b/rtC2_curb*_mppi: false steps from objects and
+# low kerbs walled the way, rt04b 91 -> stuck 3-5 m short in 3 of 3 runs). They are a rollout
+# safety check only (NavField hazard_xy): lines near the map road edge (MPPI_CURB_EDGE_M) from
+# curb_layer.CURB_M, lines elsewhere from LEDGE_M, blobs never.
+MPPI_CURB_EDGE_M = 1.5
 # Waypoint-circle reroute -- bends only the path segments an obstacle circle actually
 # crosses, in place, no A*/follower cycle. See mec_sim_ice/demo_agents/waypoint_avoid.py.
 from waypoint_avoid import relocate
@@ -278,6 +313,31 @@ APPROACH_V_MAX = 0.30
 
 # Retry budget for a failed pick (empty grasp, or grasped but missed the rear basket on place).
 MAX_PICK_ATTEMPTS = 3
+# [팀 추가 2026-10-07] Re-approach when the depth grasp point is near the arm's reach limit.
+# rt03 mppi (1st and 2nd run): the robot stopped where legacy did (9 cm apart) but with another
+# heading, the lying umbrella's grasp point came out at fwd 0.70 m (reach 0.72) and it slipped
+# out during transport 3/3; legacy's was 0.38 m and held. Creep straight ahead until the point
+# is at GRASP_REAPPROACH_TARGET_M and measure again -- but never so far that the near end of a
+# lying object (grasp point - length/2 along the axis) comes closer than GRASP_NEAR_END_MIN_M
+# to the arm base (the chassis front would drive onto it).
+GRASP_REAPPROACH_FWD_M = 0.60
+GRASP_REAPPROACH_TARGET_M = 0.47
+GRASP_REAPPROACH_MAX_M = 0.35
+GRASP_NEAR_END_MIN_M = 0.25
+# Lying objects: grasp_shape slides the grasp along the object's axis to stay within this
+# forward distance. Was ARM_REACH_FWD_M (0.72) -> the slide stopped right AT the reach limit and
+# the same 0.72 came back after every re-approach (rt03_r3_mppi). The final clamp to the true
+# reach (ARM_REACH_FWD_M) below is unchanged.
+GRASP_SLIDE_FWD_M = 0.62
+# [팀 추가 2026-10-07] Retry re-localization. A failed attempt either never lifted the object
+# (it is still about where it was) or dropped it in transport (it moved). Before, every retry
+# re-aligned to the ORIGINAL hint and, with nothing raised in the camera window, grasped the nav
+# estimate blind -- rt04_r3_mppi: attempts 2 and 3 "empty hand at lift" with no depth at all.
+# Now: look in the current view, then RETRY_SEARCH_DEG to either side, around the last known
+# object position with a slightly wider window (a rt04 distractor umbrella sits 0.38 m from the
+# tumbler, so the window stays small); not found -> skip the remaining attempts, go deliver.
+RETRY_SEARCH_DEG = 30.0
+RETRY_WINDOW_M = 0.6
 
 # -- Stage 2 goals --
 # The Stage 2 task drives to the target object and then delivers it to the owner zone.
@@ -410,6 +470,7 @@ class DemoParticipant:
         # turns out to have no lidar, so a missing sensor costs one attempt, not one per tick.
         self._lidar_layer = None
         self._lidar_acc = None        # LidarSliceAccumulator, built once on the first run
+        self._curb = None             # CurbLayer, fresh per run (curb_layer.py)
         # Base_LiDAR -> chassis mount offset (dx, dy). Static, so tf is asked once per run;
         # (0, 0) (sensor above the chassis origin) when tf cannot supply it.
         self._lidar_mount_xy = (0.0, 0.0)
@@ -613,6 +674,7 @@ class DemoParticipant:
         # from the previous round is not evidence about this one.
         self._lidar_layer = LidarObstacleLayer()
         self._lidar_acc = self._lidar_accumulator()
+        self._curb = CurbLayer() if LOCAL_PLANNER == "mppi" else None
         self._lidar_mount_xy = self._lidar_mount_offset()
         self._cam_mount_R, self._cam_mount_t = self._camera_mount_transform()
 
@@ -652,6 +714,8 @@ class DemoParticipant:
         # basket on place (grip alone would miss this, since the arm sequence has already
         # released the gripper by the time it returns).
         basket_ok = False
+        reapproached = 0.0      # total chassis creep for re-approach this pick (once, <= MAX)
+        last_obj_world = tuple(collect_xy)   # last place the object was seen (world xy)
         for attempt in range(1, MAX_PICK_ATTEMPTS + 1):
             if not c.is_running or self._clock.tick() >= deadline:
                 log.warning("[Stage2] pick retry budget exhausted (run stopped or deadline hit) "
@@ -667,6 +731,20 @@ class DemoParticipant:
                              tuple(round(v, 3) for v in depth_xy),
                              tuple(round(v, 3) for v in grasp_xy) if grasp_xy else None)
                     grasp_xy = depth_xy
+                    moved, expect = ((self._reapproach_for_grasp(depth_xy) if reapproached == 0.0
+                                      else (0.0, None)))
+                    if moved:
+                        reapproached = moved
+                        # anchor = the grasp point just measured, moved by the turn + creep (the
+                        # nav estimate of the object centre fell out of the camera window once
+                        # the chassis was 0.25 m closer: rt03_r3_mppi re-measured None 3/3)
+                        shifted = tuple(expect) + tuple(depth_xy[2:])
+                        again = self._locate_object_by_depth(expected_xy=shifted[:2])
+                        log.info("[Stage2] re-measured after re-approach: %s",
+                                 tuple(round(v, 3) for v in again) if again else None)
+                        # never fall back to the pre-creep point (it is now `moved` too far)
+                        grasp_xy = again if again is not None else shifted
+                    last_obj_world = self._arm_to_world(grasp_xy[0], grasp_xy[1]) or last_obj_world
                 if grasp_xy is not None and grasp_xy[0] > ARM_REACH_FWD_M:
                     # Beyond reach the descend waypoint just times out "unreached" and the
                     # gripper closes mid-air wherever the servo stalled -- surface it loudly.
@@ -700,6 +778,13 @@ class DemoParticipant:
                 break
             if attempt < MAX_PICK_ATTEMPTS:
                 log.info("[Stage2] retrying pick (attempt %d/%d)", attempt + 1, MAX_PICK_ATTEMPTS)
+                where = self._relocate_object(last_obj_world, deadline)
+                if where is None:
+                    log.warning("[Stage2] object not seen in the current view nor at +-%.0f deg "
+                                "-> skipping the remaining pick attempts", RETRY_SEARCH_DEG)
+                    break
+                collect_xy = where
+                last_obj_world = where
                 self._align_to_object(collect_xy, deadline)
                 self._approach_straight(collect_xy, deadline, target_fwd=0.40)
         picked = picked and basket_ok
@@ -849,7 +934,7 @@ class DemoParticipant:
     # [팀 신규 추가, 매니퓰레이션 담당 쪽 확장] 메서드 전체가 starter kit에 없던
     # 것 -- 주행/회피와는 다른 목적(파지 정밀도)이지만 depth_ground_veto.py와
     # 같은 좌표 변환 방식(핀홀 역투영 + tf 회전행렬)을 재사용한다.
-    def _locate_object_by_depth(self, expected_xy=None):
+    def _locate_object_by_depth(self, expected_xy=None, window_m=None):
         """Refine the pick point using the base camera's own depth (floor-height segmentation).
 
         expected_xy: nav-estimated (fwd, lat) of the object in the arm_base frame. When
@@ -955,15 +1040,15 @@ class DemoParticipant:
             # objects, not be precise. Nothing near the estimate -> None (callers keep
             # the nav estimate), never a polluted average.
             ef, el = float(expected_xy[0]), float(expected_xy[1])
-            near = candidate & ((fwd - ef) ** 2 + (lat - el) ** 2
-                                <= DEPTH_EXPECT_WINDOW_M ** 2)
+            win = DEPTH_EXPECT_WINDOW_M if window_m is None else float(window_m)
+            near = candidate & ((fwd - ef) ** 2 + (lat - el) ** 2 <= win ** 2)
             if int(np.sum(near)) >= 20:
                 # [팀 추가] Shape-based grasp (demo/grasp_shape.py): picks the blob nearest
                 # the nav estimate, corrects the near-side bias, and returns a gripper yaw
                 # that closes across a long object. Each part has its own switch there.
                 est = grasp_shape.estimate_grasp(
                     fwd[near], lat[near], up[near], floor_z,
-                    expected_xy=(ef, el), reach_fwd=ARM_REACH_FWD_M)
+                    expected_xy=(ef, el), reach_fwd=GRASP_SLIDE_FWD_M)
                 if est is not None:
                     log.info("[Stage2] depth grasp shape=%s fwd=%.3f lat=%.3f down=%.3f yaw=%s len=%s",
                              est["shape"], est["fwd"], est["lat"], est["down"],
@@ -986,7 +1071,7 @@ class DemoParticipant:
                 return (float(np.mean(fwd[near])), float(np.mean(lat[near])), down)
             log.info("[Stage2] depth refinement: no raised blob within %.2fm of the nav "
                      "estimate (%d raised px elsewhere in frame) -- keeping the nav "
-                     "estimate", DEPTH_EXPECT_WINDOW_M, n_cand)
+                     "estimate", win, n_cand)
             return None
 
         try:
@@ -1059,6 +1144,133 @@ class DemoParticipant:
         gxy = self._object_arm_xy(obj_xy)
         log.info("[Stage2] straight approach done -- object arm coords %s",
                  tuple(round(v, 3) for v in gxy) if gxy else None)
+
+    # [팀 신규 추가 2026-10-07] arm_base (fwd, lat) -> world xy, inverse of _object_arm_xy's
+    # pose-math fallback (same ARM_BASE_FWD assumption). None without a pose.
+    def _arm_to_world(self, fwd, lat):
+        pose = self.client.get_world_pose()
+        if pose is None:
+            return None
+        x, y, yaw = pose
+        f = float(fwd) + ARM_BASE_FWD + GRASP_FWD_BACKOFF
+        return (x + f * math.cos(yaw) - float(lat) * math.sin(yaw),
+                y + f * math.sin(yaw) + float(lat) * math.cos(yaw))
+
+    def _turn_in_place(self, angle, max_t=6.0):
+        c = self.client
+        p0 = c.get_world_pose()
+        if p0 is None:
+            return
+        target = p0[2] + angle
+        t_end = self._clock.elapsed + max_t
+        while c.is_running and self._clock.tick() < t_end:
+            p = c.get_world_pose()
+            if p is None:
+                c.sleep(STAGE2_NAV_DT)
+                continue
+            err = math.atan2(math.sin(target - p[2]), math.cos(target - p[2]))
+            if abs(err) < math.radians(2):
+                break
+            c.send_cmd_vel(0.0, max(-0.5, min(0.5, 1.5 * err)))
+            c.sleep(STAGE2_NAV_DT)
+        self._halt()
+
+    # [팀 신규 추가 2026-10-07] RETRY_* 위 주석 참고.
+    def _relocate_object(self, last_world, deadline):
+        """Find the object again before a retry: current view, then -RETRY_SEARCH_DEG, then
+        +RETRY_SEARCH_DEG (relative to the start heading). World xy of the object, or None."""
+        self._stow_arm()      # the arm must not block the base camera
+        p0 = self.client.get_world_pose()
+        for step, label in ((0.0, "current view"), (-RETRY_SEARCH_DEG, "-%.0f deg" % RETRY_SEARCH_DEG),
+                            (2 * RETRY_SEARCH_DEG, "+%.0f deg" % RETRY_SEARCH_DEG)):
+            if self._clock.tick() >= deadline:
+                return None
+            if step:
+                self._turn_in_place(math.radians(step))
+            exp = self._object_arm_xy(last_world)
+            found = (self._locate_object_by_depth(expected_xy=exp, window_m=RETRY_WINDOW_M)
+                     if exp is not None and exp[0] > 0.0 else None)
+            if found is not None:
+                w = self._arm_to_world(found[0], found[1])
+                log.info("[Stage2] re-localized the object (%s) at %s (was %s)", label,
+                         None if w is None else tuple(round(v, 2) for v in w),
+                         tuple(round(v, 2) for v in last_world))
+                if w is not None:
+                    return w
+            else:
+                log.info("[Stage2] re-localize: nothing at %s", label)
+        if p0 is not None:
+            self._turn_in_place(math.atan2(math.sin(p0[2] - (self.client.get_world_pose() or p0)[2]),
+                                           math.cos(p0[2] - (self.client.get_world_pose() or p0)[2])))
+        return None
+
+    # [팀 신규 추가 2026-10-07] GRASP_REAPPROACH_* 위 주석 참고.
+    def _reapproach_for_grasp(self, grasp):
+        """Grasp point near the reach limit: turn to face it, then creep straight in.
+
+        Returns (moved_m, expected_after) -- expected_after = the grasp point's predicted
+        (fwd, lat) in the arm frame after the turn and the creep (anchor for re-measuring), or
+        (0.0, None) when nothing was done. Turning first matters: rt03_r3_mppi had the point at
+        fwd 0.73 / lat -0.34 with the umbrella lying across the robot -- a straight creep left it
+        0.34 m to the side and the re-measure locked onto another object.
+        """
+        fwd, lat = float(grasp[0]), float(grasp[1])
+        if fwd <= GRASP_REAPPROACH_FWD_M:
+            return 0.0, None
+        c = self.client
+        p0 = c.get_world_pose()
+        if p0 is None:
+            return 0.0, None
+        # 1) turn about the chassis centre (arm base is ARM_BASE_FWD ahead of it) to face the point
+        cx_, cy_ = fwd + ARM_BASE_FWD, lat
+        turn = max(-math.radians(35), min(math.radians(35), math.atan2(cy_, cx_)))
+        if abs(turn) > math.radians(4):
+            target_yaw = p0[2] + turn
+            t_end = self._clock.elapsed + 6.0
+            while c.is_running and self._clock.tick() < t_end:
+                p = c.get_world_pose()
+                if p is None:
+                    c.sleep(STAGE2_NAV_DT)
+                    continue
+                err = math.atan2(math.sin(target_yaw - p[2]), math.cos(target_yaw - p[2]))
+                if abs(err) < math.radians(2):
+                    break
+                c.send_cmd_vel(0.0, max(-0.5, min(0.5, 1.5 * err)))
+                c.sleep(STAGE2_NAV_DT)
+            self._halt()
+            p1 = c.get_world_pose() or p0
+            turn = math.atan2(math.sin(p1[2] - p0[2]), math.cos(p1[2] - p0[2]))
+        # point in the arm frame after the turn
+        rx = cx_ * math.cos(-turn) - cy_ * math.sin(-turn)
+        ry = cx_ * math.sin(-turn) + cy_ * math.cos(-turn)
+        fwd, lat = rx - ARM_BASE_FWD, ry
+        want = min(fwd - GRASP_REAPPROACH_TARGET_M, GRASP_REAPPROACH_MAX_M)
+        if len(grasp) >= 5 and grasp[4]:
+            # lying object: keep its near end clear of the chassis front (axis yaw is relative
+            # to the arm frame, so it turns with the chassis)
+            near_end = fwd - 0.5 * float(grasp[4]) * abs(math.cos(float(grasp[3]) - turn))
+            want = min(want, near_end - GRASP_NEAR_END_MIN_M)
+        log.info("[Stage2] grasp near reach -> turned %.0f deg, point now fwd %.2f lat %.2f, "
+                 "creep %.2f m", math.degrees(turn), fwd, lat, max(want, 0.0))
+        moved = 0.0
+        if want >= 0.05:
+            p0 = c.get_world_pose() or p0
+            t_end = self._clock.elapsed + 10.0
+            while c.is_running and self._clock.tick() < t_end:
+                p = c.get_world_pose()
+                if p is not None:
+                    moved = math.hypot(p[0] - p0[0], p[1] - p0[1])
+                    if moved >= want:
+                        break
+                c.send_cmd_vel(linear_x=APPROACH_V_MIN, angular_z=0.0)
+                c.sleep(STAGE2_NAV_DT)
+            self._halt()
+            p = c.get_world_pose()
+            if p is not None:
+                moved = math.hypot(p[0] - p0[0], p[1] - p0[1])
+        if abs(turn) < math.radians(4) and moved < 0.05:
+            return 0.0, None
+        return max(moved, 1e-3), (fwd - moved, lat)
 
     # [팀 신규 추가, 매니퓰레이션 담당 쪽] starter kit에 없던 메서드.
     def _wait_basket_state(self, timeout: float = 1.0):
@@ -1177,6 +1389,10 @@ class DemoParticipant:
             if msg is None:
                 msg = self.client.get_lidar()
             n = self._lidar_layer.update(msg, pose, self._lidar_mount_xy)
+            if self._curb is not None:
+                pts = lidar_xyz(msg)
+                if pts is not None and len(pts):
+                    self._curb.update(*lidar_world(pts, pose, self._lidar_mount_xy))
             self._lidar_fail_streak = 0
             return n
         except Exception as e:
@@ -1261,6 +1477,12 @@ class DemoParticipant:
             K = np.array(info.k, dtype=np.float64).reshape(3, 3)
             pts, obst = depth_ground_veto.floor_and_obstacle_world_xy(
                 depth, K, self._cam_mount_R, self._cam_mount_t, pose)
+            if self._curb is not None:
+                f_, l_, u_ = depth_ground_veto.base_points(
+                    depth, K, self._cam_mount_R, self._cam_mount_t)
+                x_, y_, yaw_ = pose
+                c_, s_ = math.cos(yaw_), math.sin(yaw_)
+                self._curb.update(x_ + f_ * c_ - l_ * s_, y_ + f_ * s_ + l_ * c_, u_)
         except Exception as e:
             log.warning("[Stage2] depth ghost-veto frame failed: %s: %s", type(e).__name__, e)
             return 0
@@ -1268,6 +1490,25 @@ class DemoParticipant:
         if cleared:
             log.info("[Stage2] depth ghost-veto: cleared %d cell(s)", cleared)
         return cleared
+
+    # [팀 신규 추가] curb_layer.hazard_xy 의 near_edge: 지도 도로 경계 MPPI_CURB_EDGE_M 안이면 True.
+    @staticmethod
+    def _road_edge_zone(planner):
+        from scipy import ndimage
+        g, res = planner._grid, planner._res
+        road, unk = g == 0, g < 0
+        edge = road & ndimage.binary_dilation(unk)
+        zone = ndimage.distance_transform_edt(~edge) * res <= MPPI_CURB_EDGE_M
+        ox, oy = planner._ox, planner._oy
+
+        def near_edge(xy):
+            j = np.floor((xy[:, 0] - ox) / res).astype(np.int64)
+            i = np.floor((xy[:, 1] - oy) / res).astype(np.int64)
+            ok = (i >= 0) & (i < zone.shape[0]) & (j >= 0) & (j < zone.shape[1])
+            out = np.zeros(len(xy), bool)
+            out[ok] = zone[i[ok], j[ok]]
+            return out
+        return near_edge
 
     def _plan_obstacles(self, goal, exclude_m, lidar_max_age_scans=None, near_xy=None,
                         near_m=0.0):
@@ -1780,6 +2021,8 @@ class DemoParticipant:
         field, ctrl = None, None
         field_dirty, built_at = True, -1e9
         hold_stage, hold_until = 0, -1e9      # stage hold -- see MPPI_STAGE_HOLD_S
+        tilt_last = None                      # (x, y, tilt deg) of the last tilt-guard trigger
+        edge_zone = None                      # map road-edge test for curb_layer.hazard_xy
         pos_history = deque()        # (t, x, y, yaw, commanded v)
         pin_history = deque()        # same, over MPPI_PIN_WINDOW_S
         v_history = deque()          # (t, V(robot)) -- tight legs: no V progress near goal = arrived
@@ -1803,6 +2046,8 @@ class DemoParticipant:
                 if not spinning:
                     if self._update_lidar_layer(pose):
                         field_dirty = True
+                    if self._curb is not None:
+                        field_dirty = True      # kerb / flat cells change every sweep
                 elif self._lidar_acc is not None:
                     self._lidar_acc.take_merged(pose)
                 self._update_depth_veto(pose)
@@ -1822,6 +2067,16 @@ class DemoParticipant:
             now_t = c.now_s()
             if field is None or (field_dirty and now_t - built_at >= NAVFIELD_REBUILD_S):
                 t0 = time.monotonic()
+                # kerbs / steps are obstacles in every stage; sensed-flat off-road is passable
+                step_discs, flat_xy, hazard_xy = (), None, None
+                if self._curb is not None:
+                    if edge_zone is None:
+                        edge_zone = self._road_edge_zone(planner)
+                    hz = self._curb.hazard_xy(near_edge=edge_zone)
+                    if len(hz):
+                        keep_ = ((np.hypot(hz[:, 0] - goal[0], hz[:, 1] - goal[1]) >= MPPI_STEP_GOAL_CLEAR_M)
+                                 & (np.hypot(hz[:, 0] - x, hz[:, 1] - y) >= MPPI_STEP_NEAR_M))
+                        hazard_xy = hz[keep_]
 
                 def build(discs, ok, r=inscribed):
                     return NavField(inscribed_m=r).build(
@@ -1829,7 +2084,8 @@ class DemoParticipant:
                         discs=discs, goal_clear_m=clear_m,
                         keep_discs=([(avoid_xy[0], avoid_xy[1], MPPI_OBJECT_RADIUS_M)]
                                     if avoid_xy else ()),
-                        free_xy=(x, y), offroad_ok=ok)
+                        free_xy=(x, y), offroad_ok=ok, step_discs=step_discs, flat_xy=flat_xy,
+                        edge_band_m=0.0, hazard_xy=hazard_xy)
 
                 # goal unreachable -> escalate (see MPPI_DISC_STALE_S / MPPI_STAGE_HOLD_S)
                 scans_per_s = STAGE2_NAV_RATE_HZ / LIDAR_UPDATE_EVERY_TICKS
@@ -1861,17 +2117,21 @@ class DemoParticipant:
                     if reach:
                         break
                 if k > 0 and (k != hold_stage or now_t >= hold_until):
-                    hold_stage, hold_until = k, now_t + MPPI_STAGE_HOLD_S
-                    log.info("[Stage2] navfield: holding stage %s for %.0fs", stages[k][0],
-                             MPPI_STAGE_HOLD_S)
+                    hold_s = (MPPI_LAST_RESORT_HOLD_S
+                              if stages[k][0] == "last-resort" and self._curb is not None
+                              else MPPI_STAGE_HOLD_S)
+                    hold_stage, hold_until = k, now_t + hold_s
+                    log.info("[Stage2] navfield: holding stage %s for %.0fs", stages[k][0], hold_s)
                 if ctrl is None:
                     ctrl = MPPI(field, steering_track=STEERING_TRACK)
                 else:
                     ctrl.set_field(field)
+                ctrl.v_max = MPPI_LAST_RESORT_V if stages[k][0] == "last-resort" else V_MAX_MPPI
                 field_dirty, built_at = False, now_t
-                log.info("[Stage2] navfield %dx%d built in %.0f ms (%d discs, %d off-road "
-                         "cells, ok r=%s) V(robot)=%.1f goal%s=(%.2f, %.2f)", field.w, field.h,
-                         1000 * (time.monotonic() - t0), len(discs), int(field.offroad.sum()),
+                log.info("[Stage2] navfield %dx%d built in %.0f ms (%d discs, %d hazard cells, %d off-road "
+                         "cells, ok r=%s) V(robot)=%.1f goal%s=(%.2f, %.2f)",
+                         field.w, field.h, 1000 * (time.monotonic() - t0), len(discs),
+                         0 if hazard_xy is None else len(hazard_xy), int(field.offroad.sum()),
                          "/".join("%.1f" % c[2] for c in getattr(field, "offroad_ok_eff", ())) or "-",
                          field.value(x, y),
                          " SNAPPED" if field.goal_snapped else "", field.goal[0], field.goal[1])
@@ -1881,13 +2141,27 @@ class DemoParticipant:
                 return True
 
             rp = imu_roll_pitch(c.get_imu())
-            if rp is not None and max(abs(rp[0]), abs(rp[1])) > math.radians(TILT_GUARD_DEG):
-                log.warning("[Stage2] tilt guard: roll %.1f pitch %.1f deg -> stop, back off, "
-                            "mark the spot", math.degrees(rp[0]), math.degrees(rp[1]))
-                c.send_cmd_vel(0.0, 0.0)
-                self._reverse_escape()
-                ahead = (x + 0.6 * math.cos(yaw), y + 0.6 * math.sin(yaw), yaw)
-                self._remember_blockage(ahead, goal)
+            tilt = math.degrees(max(abs(rp[0]), abs(rp[1]))) if rp is not None else 0.0
+            repeat = (tilt_last is not None
+                      and math.hypot(x - tilt_last[0], y - tilt_last[1]) < TILT_REPEAT_M
+                      and tilt < tilt_last[2] + TILT_REPEAT_DEG)
+            if tilt > TILT_GUARD_DEG and not repeat:
+                log.warning("[Stage2] tilt guard: roll %.1f pitch %.1f deg -> stop, settle%s",
+                            math.degrees(rp[0]), math.degrees(rp[1]),
+                            "" if tilt_last is None else " (worse / new spot)")
+                self._halt(max_s=TILT_SETTLE_S, min_s=TILT_SETTLE_S)
+                rp2 = imu_roll_pitch(c.get_imu())
+                tilt2 = math.degrees(max(abs(rp2[0]), abs(rp2[1]))) if rp2 is not None else 0.0
+                new_spot = (tilt_last is None
+                            or math.hypot(x - tilt_last[0], y - tilt_last[1]) >= TILT_REPEAT_M)
+                if tilt2 > TILT_GUARD_DEG:
+                    log.warning("[Stage2] tilt guard: still %.1f deg after settling -> back off "
+                                "slowly", tilt2)
+                    self._reverse_escape(speed=TILT_REVERSE_V)
+                if new_spot:
+                    ahead = (x + 0.6 * math.cos(yaw), y + 0.6 * math.sin(yaw), yaw)
+                    self._remember_blockage(ahead, goal)
+                tilt_last = (x, y, max(tilt, tilt2))
                 field_dirty, built_at = True, -1e9
                 ctrl.reset()
                 last_cmd = (0.0, 0.0)

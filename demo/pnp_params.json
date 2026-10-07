@@ -22,7 +22,10 @@
   },
   "tumbler": {
     "_note": "default 레이어 자체가 텀블러로 튜닝된 값이다. arm_base 는 섀시에 강체 고정이라 지면은 지형 고도와 무관하게 늘 같은 arm_base z 에 있고(조직위 참조 mock_agent_manipulation.py: GRASP=(0.40,0.0,-0.29) 'at the object on the ground'), 그래서 이 깊이는 인식이 아니라 상수로 두는 게 킷의 설계다. 여기 명시해 두면 텀블러는 깊이 측정 폴백으로 새지 않고 튜닝 상수를 그대로 쓴다.",
-    "grasp_down": -0.28
+    "grasp_down": -0.28,
+    "carry_up": 0.36,
+    "carry_speed": 0.25,
+    "_carry_note": "[팀 추가 2026-10-07] 운반 저속·고높이 (long_object 층과 같은 값). 3차 rt04: 기울어진(약 25°) 텀블러를 잡은 뒤 over/place 단계에서 손가락이 35-45°로 벌어지며 4런 연속 낙하 -- 원호 중 관성으로 미끄러짐 완화. 라이브 확인 필요."
   },
   "sunblock": {
     "_note": "held reading measured 37.7-39.4deg (2026-08-31, manip-trainer, grip_close=0.58) -- above tumbler's own empty~35 baseline, so the global threshold misjudged a real grasp as empty. Provisional: needs re-verification on GPU (grasp_fwd/grasp_down for sunblock itself were never confirmed either, only the threshold).",

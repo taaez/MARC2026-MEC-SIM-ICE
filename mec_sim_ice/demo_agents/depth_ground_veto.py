@@ -208,3 +208,17 @@ def floor_and_obstacle_world_xy(depth, K, mount_R, mount_t, pose):
         floor &= rng < nearest[b] - SHADOW_MARGIN_M
 
     return world(floor), world(obst)
+
+
+def base_points(depth, K, mount_R, mount_t, stride=PIXEL_STRIDE, max_range=MAX_VETO_RANGE_M):
+    """[팀 추가] Valid depth pixels back-projected to the chassis frame: (fwd, lat, up) arrays.
+    Used by curb_layer (ground height steps) -- same projection as the veto above."""
+    h, w = depth.shape
+    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    vs, us = np.mgrid[0:h:stride, 0:w:stride]
+    d = depth[vs, us]
+    ok = np.isfinite(d) & (d > 0.05) & (d < max_range)
+    d = np.where(ok, d, 0.0)
+    pts = np.stack([(us - cx) / fx * d, (vs - cy) / fy * d, d], axis=-1) @ mount_R.T + mount_t
+    ok &= pts[..., 0] > MIN_FWD_M
+    return pts[..., 0][ok], pts[..., 1][ok], pts[..., 2][ok]
