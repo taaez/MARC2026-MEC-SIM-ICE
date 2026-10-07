@@ -60,7 +60,8 @@ class NavField:
 
     # ------------------------------------------------------------------ build --
     def build(self, grid, origin, res, start_xy, goal_xy, discs=(), goal_clear_m=0.0,
-              keep_discs=(), free_xy=None, offroad_ok=()):
+              keep_discs=(), free_xy=None, offroad_ok=(), step_discs=(), flat_xy=None,
+              edge_band_m=0.0, hazard_xy=None):
         """grid: int8 (H, W) occupancy, row 0 = bottom (OccupancyGridPlanner._grid);
         origin: (ox, oy); res: map m/cell; discs: [(x, y, r)] extra obstacles (lidar cells,
         stall memory); goal_clear_m: obstacle discs within this of the goal are dropped
@@ -75,7 +76,19 @@ class NavField:
         UNKNOWN_COST; everywhere else they are obstacles (see the module docstring). A circle
         is widened to reach the nearest road cell (+ inscribed + 2 cells), so it always
         connects to the road; the radii used are in `offroad_ok_eff`.
-        None = all off-road passable at UNKNOWN_COST (fallback when the goal is cut off)."""
+        None = all off-road passable at UNKNOWN_COST (fallback when the goal is cut off).
+        step_discs: [(x, y, r)] kerb / step cells from curb_layer -- obstacles in every case
+        (never dropped near the goal, also with offroad_ok=None).
+        flat_xy: (N, 2) cell centres curb_layer observed flat -- off-road there is passable
+        (the map's road edge is not a kerb where the sensors see no step).
+        hazard_xy: (N, 2) kerb / ledge cells (curb_layer.hazard_xy) that only the ROLLOUT
+        collision check sees (lookup()'s lethal) -- not the cost-to-go, not the inflation. The
+        path stays the map-based one; MPPI just never picks a trajectory over a kerb or ledge.
+        edge_band_m: with offroad_ok=None (all off-road open), off-road cells within this of the
+        road stay obstacles unless observed flat -- the robot may only leave the road where the
+        sensors saw no kerb, while the off-road interior beyond is open (live rtC2_curb_mppi:
+        with the whole edge open it kept heading for unseen edge right next to it, found a kerb,
+        replanned, for minutes; the flush entry it had driven past was 25 m back)."""
         ox, oy = origin
         x0 = min(start_xy[0], goal_xy[0]) - MARGIN_M
         y0 = min(start_xy[1], goal_xy[1]) - MARGIN_M
@@ -99,7 +112,14 @@ class NavField:
         cy = self.oy + (yy + 0.5) * self.cell
 
         # off-road (unknown) cells: obstacles except inside the offroad_ok circles
-        offroad = unknown.copy() if offroad_ok is not None else np.zeros_like(unknown)
+        if offroad_ok is not None:
+            offroad = unknown.copy()
+        elif edge_band_m > 0:
+            road_ = ~unknown & ~occ
+            k_ = max(1, int(round(edge_band_m / self.cell)))
+            offroad = unknown & ndimage.binary_dilation(road_, iterations=k_)
+        else:
+            offroad = np.zeros_like(unknown)
         road = ~unknown & ~occ
         self.offroad_ok_eff = []
         for (ax, ay, ar) in offroad_ok or ():
@@ -124,11 +144,21 @@ class NavField:
                 to_road = math.sqrt(float(d2.min())) if d2.size else 0.0
                 hole = max(OFFROAD_ESCAPE_M, to_road + self.inscribed + 2 * self.cell)
             offroad &= (cx - free_xy[0]) ** 2 + (cy - free_xy[1]) ** 2 > hole * hole
+        if flat_xy is not None and len(flat_xy) and offroad.any():
+            # sensed flat ground: the map's road edge is not a kerb there (curb_layer)
+            fi = np.floor((np.asarray(flat_xy)[:, 1] - self.oy) / self.cell).astype(np.int64)
+            fj = np.floor((np.asarray(flat_xy)[:, 0] - self.ox) / self.cell).astype(np.int64)
+            ok = (fi >= 0) & (fi < h) & (fj >= 0) & (fj < w)
+            self.flat_opened = int(offroad[fi[ok], fj[ok]].sum())
+            offroad[fi[ok], fj[ok]] = False
+        else:
+            self.flat_opened = 0
         occ |= offroad
         unknown &= ~offroad                 # what is left is the passable-but-costly part
         self.offroad = offroad
 
         # extra obstacles as discs
+        keep_discs = list(keep_discs) + list(step_discs)
         if discs or keep_discs:
             gx, gy = goal_xy
             keep = [(float(a), float(b), float(c), True) for (a, b, c) in keep_discs]
@@ -191,6 +221,15 @@ class NavField:
         self.goal = self._xy(gi, gj) if self.goal_snapped else (float(goal_xy[0]), float(goal_xy[1]))
         self.field = self._dijkstra(gi, gj)
         self.ready = np.isfinite(self.field).any()
+        self.hazard = np.zeros((h, w), bool)
+        if hazard_xy is not None and len(hazard_xy):
+            hz = np.zeros((h, w), bool)
+            hi_ = np.floor((np.asarray(hazard_xy)[:, 1] - self.oy) / self.cell).astype(np.int64)
+            hj_ = np.floor((np.asarray(hazard_xy)[:, 0] - self.ox) / self.cell).astype(np.int64)
+            ok_ = (hi_ >= 0) & (hi_ < h) & (hj_ >= 0) & (hj_ < w)
+            hz[hi_[ok_], hj_[ok_]] = True
+            if hz.any():
+                self.hazard = ndimage.distance_transform_edt(~hz) * self.cell < self.inscribed
         # descent direction (world angle of -grad V): the field has no notion of heading, so
         # MPPI also scores how well the chassis faces downhill -- otherwise "spin to face the
         # goal" and "stand still" cost the same (measured offline: leg2 starting 145 deg off
@@ -239,7 +278,7 @@ class NavField:
         inside = (i >= 0) & (i < self.h) & (j >= 0) & (j < self.w)
         ic, jc = np.clip(i, 0, self.h - 1), np.clip(j, 0, self.w - 1)
         field = np.where(inside, self.field[ic, jc], np.inf)
-        lethal = ~inside | self.lethal[ic, jc] | ~np.isfinite(field)
+        lethal = ~inside | self.lethal[ic, jc] | ~np.isfinite(field) | self.hazard[ic, jc]
         return field, np.where(inside, self.infl[ic, jc], 1.0), lethal
 
     def descent_at(self, xs, ys):

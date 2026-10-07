@@ -21,7 +21,7 @@ MAX_GRACE = int(os.environ.get("WATCHDOG_GRACE", "3"))
 RECOVERY = re.compile(r"stall detected|\] pinned:|wedged|reversing|tilt guard|brake held")
 MILESTONE = re.compile(r"leg[12] ->|pick attempt|object pick sequence|at default pose|"
                        r"traversing waypoints|DONE \(holding|reached|accepting|\[STATE\]|"
-                       r"driving finished|approach_straight|align")
+                       r"driving finished|approach_straight|align|\[survey\] wp")
 LEG = re.compile(r"leg[12] ->")
 DIST = re.compile(r"\bpose=.*?dist=([\d.]+)m")
 

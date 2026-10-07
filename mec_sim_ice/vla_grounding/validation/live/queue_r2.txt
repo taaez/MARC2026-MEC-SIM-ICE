@@ -1,0 +1,12 @@
+# 2026-10-06 2nd verification for the paper ablation: same code for every run (rtC2 on hold)
+# problem tag ABL_OFF GRASP_OFF planner
+rt01_parking_tumbler   rt01_r2_legacy  - - legacy
+rt01_parking_tumbler   rt01_r2_mppi    - - mppi
+rt02_parking_umbrella  rt02_r2_legacy  - - legacy
+rt02_parking_umbrella  rt02_r2_mppi    - - mppi
+rt03_vending_umbrella  rt03_r2_legacy  - - legacy
+rt03_vending_umbrella  rt03_r2_mppi    - - mppi
+rt04_taxi_tumbler      rt04_r2_legacy  - - legacy
+rt04_taxi_tumbler      rt04_r2_mppi    - - mppi
+rt04b_taxi_umbrella    rt04b_r2_legacy - - legacy
+rt04b_taxi_umbrella    rt04b_r2_mppi   - - mppi

@@ -1,0 +1,6 @@
+# 2026-10-06: curb/step layer (MPPI) live check
+# problem tag ABL_OFF GRASP_OFF planner
+rtC2_fallenbike_pencil rtC2_curb_mppi  - - mppi
+rt01_parking_tumbler   rt01_curb_mppi  - - mppi
+rt04b_taxi_umbrella    rt04b_curb_mppi - - mppi
+rtC2_fallenbike_pencil rtC2_curb_mppi  - - mppi
