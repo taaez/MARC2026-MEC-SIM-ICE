@@ -57,6 +57,11 @@ class MPPI:
         self.rng = rng or np.random.default_rng()
         self.U = np.zeros((HORIZON, 2))
         self.v_max = float(v_max)
+        # caller may lower both (e.g. near kerbs); rollouts obey them. w_max caps the turn rate
+        # while MOVING only -- a pure spin keeps W_MAX: slow spins barely turn this chassis
+        # (rt01_r5_mppi with w_max 0.6: spin commands of ~0.28 rad/s turned 1.4 rad in 40 s and
+        # the robot never left the spot), and a spin at v = 0 has no lateral load to cap
+        self.w_max = W_MAX
         self.last_info = {}
 
     def set_field(self, field):
@@ -78,6 +83,7 @@ class MPPI:
             v = np.where((np.abs(vc) < SPIN_SNAP_V) & (np.abs(v) <= 1.5 * DECEL * DT), 0.0, v)
             w = np.clip(U[:, t, 1], -W_MAX, W_MAX)
             av = np.abs(v)
+            w = np.where(av > 0.05, np.clip(w, -self.w_max, self.w_max), w)
             # lateral accel cap, then 4WS validity: |w| <= 1.8 v / track unless spinning
             wl = np.where(av > 1e-3, LAT_ACCEL / np.maximum(av, 1e-3), W_MAX)
             w = np.clip(w, -wl, wl)
@@ -114,7 +120,7 @@ class MPPI:
         # large heading change (it cannot steer tighter than 1.8 v / track while moving)
         m = 1 + n
         for k in (3, 6, 10, 15, 20):
-            for wsp in (-1.2, 1.2):
+            for wsp in (-W_MAX, W_MAX):
                 for vgo in (0.4, 0.8):
                     if m >= K:
                         break
