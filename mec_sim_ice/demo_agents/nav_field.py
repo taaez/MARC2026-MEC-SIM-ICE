@@ -48,6 +48,14 @@ SNAP_M = 1.2
 OFFROAD_ESCAPE_M = 1.5    # robot standing off-road: unknown cells this close (at least as
                           # far as the nearest road cell + margin) stay passable
 LETHAL = np.inf
+# [팀 추가 2026-10-08] Occupancy-grid obstacles (occupancy_layer.OccupancyLayer) with soft costs.
+# Only cells with log-odds >= OCC_L_HARD are lethal; cells from OCC_L_SOFT up to that are a cost
+# that grows with the log-odds (dilated by the inscribed radius, so it applies to the robot
+# centre like the lethal set), so an uncertain obstacle never makes the goal unreachable --
+# live rt04_r8_mppi: boxed in by lidar discs, V(robot) = inf for minutes.
+OCC_L_HARD = 2.5
+OCC_L_SOFT = 0.4
+OCC_SOFT_WEIGHT = 6.0     # extra cost per metre at soft = 1 (an L_HARD-1 cell)
 
 
 class NavField:
@@ -61,7 +69,7 @@ class NavField:
     # ------------------------------------------------------------------ build --
     def build(self, grid, origin, res, start_xy, goal_xy, discs=(), goal_clear_m=0.0,
               keep_discs=(), free_xy=None, offroad_ok=(), step_discs=(), flat_xy=None,
-              edge_band_m=0.0, hazard_xy=None):
+              edge_band_m=0.0, hazard_xy=None, occ_layer=None):
         """grid: int8 (H, W) occupancy, row 0 = bottom (OccupancyGridPlanner._grid);
         origin: (ox, oy); res: map m/cell; discs: [(x, y, r)] extra obstacles (lidar cells,
         stall memory); goal_clear_m: obstacle discs within this of the goal are dropped
@@ -188,6 +196,32 @@ class NavField:
                             m &= (px - free_xy[0]) ** 2 + (py - free_xy[1]) ** 2 > hole * hole
                 occ[i0:i1, j0:j1] |= m
 
+        # occupancy-grid obstacles (OCC_L_*): hard cells join the lethal set, the rest is a cost
+        soft = None
+        if occ_layer is not None:
+            # [r9b] value at the cell centre only (not the max over the 0.2 m cell): a 0.1 m grid
+            # cell then marks ~25 % of the cells it touches, as the 0.05 m lidar discs (r = 0.05,
+            # painted only when they cover a cell centre, ~20 %) did -- r9's max-pooling made the
+            # same obstacles much fatter and closed the gaps around the rt04 taxi.
+            Lc = occ_layer.sample(cx, cy)
+            if goal_clear_m > 0:
+                Lc = np.where((cx - goal_xy[0]) ** 2 + (cy - goal_xy[1]) ** 2 <= goal_clear_m ** 2,
+                              np.minimum(Lc, 0.0), Lc)
+            hard = Lc >= OCC_L_HARD
+            if free_xy is not None:
+                hole = self.inscribed + self.cell
+                hard &= (cx - free_xy[0]) ** 2 + (cy - free_xy[1]) ** 2 > hole * hole
+            occ |= hard
+            s_ = np.clip((Lc - OCC_L_SOFT) / (OCC_L_HARD - OCC_L_SOFT), 0.0, 1.0)
+            s_[hard] = 0.0
+            if s_.any():
+                k_ = int(math.ceil(self.inscribed / self.cell))
+                yy_, xx_ = np.mgrid[-k_:k_ + 1, -k_:k_ + 1]
+                soft = ndimage.grey_dilation(s_, footprint=(xx_ ** 2 + yy_ ** 2) <= k_ * k_)
+            self.occ_hard, self.occ_soft = int(hard.sum()), int((s_ > 0).sum())
+        else:
+            self.occ_hard = self.occ_soft = 0
+
         # distance to the nearest obstacle cell (m)
         dist = ndimage.distance_transform_edt(~occ) * self.cell if occ.any() else \
             np.full((h, w), 1e3)
@@ -199,6 +233,9 @@ class NavField:
         self.infl = infl
         # per-metre traversal cost of each cell
         cost = 1.0 + INFLATION_WEIGHT * infl + UNKNOWN_COST * unknown
+        if soft is not None:
+            cost = cost + OCC_SOFT_WEIGHT * soft
+            self.infl = infl = np.maximum(infl, soft)       # MPPI's near-obstacle cost sees it too
         cost[self.lethal] = LETHAL
         self.cell_cost = cost
 

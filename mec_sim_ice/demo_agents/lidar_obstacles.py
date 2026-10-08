@@ -144,6 +144,36 @@ PATH_CORRIDOR_M = 0.45
 ELONGATION_SPLIT_RATIO = 1.8
 
 
+def estimate_ground(pts):
+    """Per-point ground height (sensor frame) for one sweep, and the global fallback.
+
+    Not an absolute height: a first-order line z = m*r + c per azimuth sector (see the
+    GROUND_SECTORS comment -- one scalar for the whole sweep turns the ground around the robot
+    into a ghost ring on slopes / spawn height differences; range-band percentiles are not
+    enough either). Shared by LidarObstacleLayer and occupancy_layer.OccupancyLayer.
+    """
+    gz_global = float(np.percentile(pts[:, 2], GROUND_PERCENTILE))
+    az = np.arctan2(pts[:, 1], pts[:, 0])
+    sector = ((az + math.pi) / (2.0 * math.pi) * GROUND_SECTORS).astype(np.int64)
+    sector = np.clip(sector, 0, GROUND_SECTORS - 1)
+    rng_all = np.hypot(pts[:, 0], pts[:, 1])
+    ground = np.full(pts.shape[0], gz_global)
+    for s in range(GROUND_SECTORS):
+        m = sector == s
+        if int(m.sum()) < GROUND_MIN_BIN_PTS:
+            continue
+        zs, rs = pts[m, 2], rng_all[m]
+        lo = float(np.percentile(zs, GROUND_PERCENTILE))
+        rough = zs <= lo + GROUND_ROUGH_BAND_M   # 장애물 몸통을 적합 재료에서 제외
+        if int(rough.sum()) < GROUND_MIN_BIN_PTS:
+            continue
+        slope, icept = np.polyfit(rs[rough], zs[rough], 1)
+        if abs(float(slope)) > GROUND_MAX_SLOPE:
+            continue                              # 벽/차체 오적합 -- 전역 폴백 유지
+        ground[m] = slope * rs + icept
+    return ground, gz_global
+
+
 def lidar_xyz(msg):
     """`get_lidar()` 결과 -> (N, 3) float32, **센서 프레임**. None 이면 쓸 점이 없다.
 
@@ -253,29 +283,9 @@ class LidarObstacleLayer:
             return 0
         self.scans += 1
 
-        # 1) 지면 추정 -- 절대 높이가 아니라, 방위각 섹터별 1차 직선 z = m*r + c
-        # (GROUND_SECTORS 상수의 주석 참고 -- 전역 스칼라 하나는 경사/스폰 고도차에서
-        # 로봇 주변 지면을 유령 링으로 만들고, 거리 밴드 percentile 로도 부족하다).
-        gz_global = float(np.percentile(pts[:, 2], GROUND_PERCENTILE))
+        # 1) 지면 추정 -- estimate_ground() 참고.
+        ground, gz_global = estimate_ground(pts)
         self.last_ground_z = gz_global
-        az = np.arctan2(pts[:, 1], pts[:, 0])
-        sector = ((az + math.pi) / (2.0 * math.pi) * GROUND_SECTORS).astype(np.int64)
-        sector = np.clip(sector, 0, GROUND_SECTORS - 1)
-        rng_all = np.hypot(pts[:, 0], pts[:, 1])
-        ground = np.full(pts.shape[0], gz_global)
-        for s in range(GROUND_SECTORS):
-            m = sector == s
-            if int(m.sum()) < GROUND_MIN_BIN_PTS:
-                continue
-            zs, rs = pts[m, 2], rng_all[m]
-            lo = float(np.percentile(zs, GROUND_PERCENTILE))
-            rough = zs <= lo + GROUND_ROUGH_BAND_M   # 장애물 몸통을 적합 재료에서 제외
-            if int(rough.sum()) < GROUND_MIN_BIN_PTS:
-                continue
-            slope, icept = np.polyfit(rs[rough], zs[rough], 1)
-            if abs(float(slope)) > GROUND_MAX_SLOPE:
-                continue                              # 벽/차체 오적합 -- 전역 폴백 유지
-            ground[m] = slope * rs + icept
         z_rel = pts[:, 2] - ground
         keep = (z_rel > GROUND_BAND_MIN_M) & (z_rel < GROUND_BAND_MAX_M)
         if not np.any(keep):

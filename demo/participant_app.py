@@ -86,6 +86,7 @@ from curb_layer import CurbLayer, lidar_world
 from lidar_accumulator import LidarSliceAccumulator, imu_roll_pitch   # [팀 추가] 조각 누적
 # [팀 추가] 지역 내비게이션 함수 + MPPI (MARC_LOCAL_PLANNER=mppi). 모듈 docstring 참고.
 from nav_field import NavField
+from occupancy_layer import OccupancyLayer
 from mppi import MPPI, V_MAX as V_MAX_MPPI, W_MAX as MPPI_W_MAX
 LOCAL_PLANNER = os.environ.get("MARC_LOCAL_PLANNER", "legacy").strip().lower()
 NAVFIELD_REBUILD_S = 1.0       # sim s between cost-to-go rebuilds triggered by new lidar cells
@@ -141,6 +142,12 @@ MPPI_STAGE_HOLD_S = 15.0
 # saw it and leaves only after MPPI_DISC_DROP_BUILDS consecutive builds that did not (per
 # stage; a stage's first build takes everything). While a stage hold is active
 # (MPPI_STAGE_HOLD_S) the held stage's disc set is frozen as it was when the hold began.
+# [팀 추가 2026-10-08] MPPI obstacles from a log-odds occupancy grid (occupancy_layer.py) with
+# soft costs in the navfield (nav_field.OCC_L_*) instead of lidar discs. Pass-through beams lower
+# a cell's log-odds, so momentary returns clear by themselves; only confirmed cells are lethal.
+# With it the lidar discs are not used by MPPI (disc stabilization / freezing below then only
+# apply to the stall-memory discs). Legacy keeps the disc layer unchanged.
+MPPI_OCC_GRID = True
 MPPI_DISC_ADD_BUILDS = 2
 MPPI_DISC_DROP_BUILDS = 5
 MPPI_DISC_KEY_M = 0.1                 # disc identity = its centre rounded to this grid
@@ -551,6 +558,7 @@ class DemoParticipant:
         self._lidar_acc = None        # LidarSliceAccumulator, built once on the first run
         self._curb = None             # CurbLayer, fresh per run (curb_layer.py)
         self._curb_edge_zone = None   # map road-edge test from the last MPPI build (hazard_xy)
+        self._occ = None              # OccupancyLayer (MPPI_OCC_GRID), fresh per run
         # Base_LiDAR -> chassis mount offset (dx, dy). Static, so tf is asked once per run;
         # (0, 0) (sensor above the chassis origin) when tf cannot supply it.
         self._lidar_mount_xy = (0.0, 0.0)
@@ -755,6 +763,7 @@ class DemoParticipant:
         self._lidar_layer = LidarObstacleLayer()
         self._lidar_acc = self._lidar_accumulator()
         self._curb = CurbLayer() if LOCAL_PLANNER == "mppi" else None
+        self._occ = OccupancyLayer() if LOCAL_PLANNER == "mppi" and MPPI_OCC_GRID else None
         self._lidar_mount_xy = self._lidar_mount_offset()
         self._cam_mount_R, self._cam_mount_t = self._camera_mount_transform()
 
@@ -1505,6 +1514,8 @@ class DemoParticipant:
             if msg is None:
                 msg = self.client.get_lidar()
             n = self._lidar_layer.update(msg, pose, self._lidar_mount_xy)
+            if self._occ is not None:
+                self._occ.update(msg, pose, self._lidar_mount_xy)
             if self._curb is not None:
                 pts = lidar_xyz(msg)
                 if pts is not None and len(pts):
@@ -1603,6 +1614,8 @@ class DemoParticipant:
             log.warning("[Stage2] depth ghost-veto frame failed: %s: %s", type(e).__name__, e)
             return 0
         cleared = self._lidar_layer.veto_free(pts, keep=obst)
+        if self._occ is not None:
+            self._occ.free_points(pts, keep=obst)
         if cleared:
             log.info("[Stage2] depth ghost-veto: cleared %d cell(s)", cleared)
         return cleared
@@ -1658,7 +1671,7 @@ class DemoParticipant:
           height-band cannot see) was firing correctly and then being discarded downstream.
         """
         lidar_discs = (list(self._lidar_layer.discs(lidar_max_age_scans, near_xy, near_m))
-                       if self._lidar_layer is not None else [])
+                       if self._lidar_layer is not None and self._occ is None else [])
         lidar_discs = obstacles_excluding_goal(lidar_discs, goal, exclude_m=exclude_m)
         if stab is not None:
             lidar_discs = stab.update(lidar_discs)
@@ -2247,7 +2260,7 @@ class DemoParticipant:
                         keep_discs=([(avoid_xy[0], avoid_xy[1], MPPI_OBJECT_RADIUS_M)]
                                     if avoid_xy else ()),
                         free_xy=(x, y), offroad_ok=ok, step_discs=step_discs, flat_xy=flat_xy,
-                        edge_band_m=0.0, hazard_xy=hazard_xy)
+                        edge_band_m=0.0, hazard_xy=hazard_xy, occ_layer=self._occ)
 
                 # goal unreachable -> escalate (see MPPI_DISC_STALE_S / MPPI_STAGE_HOLD_S)
                 scans_per_s = STAGE2_NAV_RATE_HZ / LIDAR_UPDATE_EVERY_TICKS
@@ -2296,9 +2309,11 @@ class DemoParticipant:
                     ctrl.set_field(field)
                 last_resort = stages[k][0] == "last-resort"
                 field_dirty, built_at = False, now_t
-                log.info("[Stage2] navfield %dx%d built in %.0f ms (%d discs, %d hazard cells, %d off-road "
+                log.info("[Stage2] navfield %dx%d built in %.0f ms (%d discs, occ hard/soft %d/%d, "
+                         "%d hazard cells, %d off-road "
                          "cells, ok r=%s) V(robot)=%.1f goal%s=(%.2f, %.2f)",
                          field.w, field.h, 1000 * (time.monotonic() - t0), len(discs),
+                         field.occ_hard, field.occ_soft,
                          0 if hazard_xy is None else len(hazard_xy), int(field.offroad.sum()),
                          "/".join("%.1f" % c[2] for c in getattr(field, "offroad_ok_eff", ())) or "-",
                          field.value(x, y),
@@ -2457,7 +2472,8 @@ class DemoParticipant:
 
             # reactive brake (kept until the CBF safety filter replaces it)
             stop_dist = self._react_stop_dist(max(last_cmd[0], 0.0))
-            danger = self._lidar_layer is not None and self._lidar_layer.danger_ahead(
+            brake_layer = self._occ if self._occ is not None else self._lidar_layer
+            danger = brake_layer is not None and brake_layer.danger_ahead(
                 pose, stop_dist, REACT_STOP_CONE_DEG, goal=goal, goal_exclude_m=clear_m)
             if danger and linear > 0.0:
                 if not braking:
