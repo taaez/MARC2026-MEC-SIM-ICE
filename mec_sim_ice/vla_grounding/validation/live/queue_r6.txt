@@ -1,0 +1,12 @@
+# 6th round (2026-10-08): round-5 code + depth kerb exclusion (0.15 m, mppi), lidar disc-set stabilization (add 2 / drop 5 builds, frozen during stage hold), spin-stall escape (1 s, <10 deg -> reverse 0.3 m, else crab). Run under gnome-session-inhibit.
+# problem tag ABL_OFF GRASP_OFF planner
+rt01_parking_tumbler   rt01_r6_legacy  - - legacy
+rt01_parking_tumbler   rt01_r6_mppi    - - mppi
+rt02_parking_umbrella  rt02_r6_legacy  - - legacy
+rt02_parking_umbrella  rt02_r6_mppi    - - mppi
+rt03_vending_umbrella  rt03_r6_legacy  - - legacy
+rt03_vending_umbrella  rt03_r6_mppi    - - mppi
+rt04_taxi_tumbler      rt04_r6_legacy  - - legacy
+rt04_taxi_tumbler      rt04_r6_mppi    - - mppi
+rt04b_taxi_umbrella    rt04b_r6_legacy - - legacy
+rt04b_taxi_umbrella    rt04b_r6_mppi   - - mppi

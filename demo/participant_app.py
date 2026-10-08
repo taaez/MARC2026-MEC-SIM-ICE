@@ -134,6 +134,27 @@ MPPI_DISC_STALE_S = 10.0
 MPPI_DISC_NEAR_M = 2.0
 MPPI_TIGHT_INSCRIBED_M = 0.22
 MPPI_STAGE_HOLD_S = 15.0
+# [팀 추가 2026-10-07] Disc-set stabilization. Live rt04/rt04b (rounds 1, 4, 5): next to the
+# target the lidar disc count changed every build (rt04_r5_mppi: 1813 -> 859 -> 706 -> 193 ->
+# 153 ...), V jumped and MPPI flipped between turning left/right and forward/back for minutes.
+# A lidar disc now enters the field only after MPPI_DISC_ADD_BUILDS consecutive builds that
+# saw it and leaves only after MPPI_DISC_DROP_BUILDS consecutive builds that did not (per
+# stage; a stage's first build takes everything). While a stage hold is active
+# (MPPI_STAGE_HOLD_S) the held stage's disc set is frozen as it was when the hold began.
+MPPI_DISC_ADD_BUILDS = 2
+MPPI_DISC_DROP_BUILDS = 5
+MPPI_DISC_KEY_M = 0.1                 # disc identity = its centre rounded to this grid
+# [팀 추가 2026-10-07] Spin stall: rt04_r5_mppi's last ~6 s commanded w = +1.2 at v = 0 while
+# the yaw only wandered between -21 and -8 deg. A pure spin (|v| < MPPI_SPIN_CMD_V,
+# |w| >= MPPI_SPIN_STALL_W) held for MPPI_SPIN_STALL_S that turned less than
+# MPPI_SPIN_STALL_DEG -> back straight up MPPI_SPIN_ESCAPE_M (the track just driven); if that
+# does not move the chassis either, side-step (crab, linear_y) MPPI_SPIN_ESCAPE_M towards the
+# side with the lower cost-to-go.
+MPPI_SPIN_STALL_S = 1.0
+MPPI_SPIN_STALL_W = 0.5
+MPPI_SPIN_STALL_DEG = 10.0
+MPPI_SPIN_ESCAPE_M = 0.3
+MPPI_SPIN_ESCAPE_V = 0.2
 # Kerb / step layer (curb_layer.py) in the navfield. Step cells within MPPI_STEP_NEAR_M of the
 # robot (its footprint) are dropped -- the robot is standing there, and a stale band around a
 # kerb right beside it (the spawn) boxed it in.
@@ -156,6 +177,12 @@ MPPI_LAST_RESORT_V = 0.6
 # a kerb next to the spawn (2.8 rad/s spin at 1.5-1.76 m/s, 7 earlier passes there were fine)
 # and rt04 drove off the road ledge at (-70, 123) at 1.3 m/s.
 MPPI_SLOW_V = 0.5
+# [팀 추가 2026-10-07] Depth grasp: raised pixels within DEPTH_CURB_EXCLUDE_M of a sensed kerb /
+# ledge line (curb_layer.hazard_xy, MPPI runs only -- legacy has no curb layer) are not object
+# candidates. rt03 mppi (rounds 3, 4, 5): approaching from the north-east, the first depth
+# measurement was a "lying object 0.68-0.69 m long" 0.05 m from the map road edge and aligned
+# with it -- the kerb; the umbrella (0.21 m) lies 0.27 m from that edge.
+DEPTH_CURB_EXCLUDE_M = 0.15
 MPPI_SLOW_W = 0.6
 MPPI_SLOW_HAZARD_M, MPPI_SLOW_HAZARD_OFF_M = 1.5, 2.0
 # Road-edge distance was 1.0 / 1.5 m: the round-4 MPPI paths spent 3-68 % (rt03) of their
@@ -361,6 +388,36 @@ RETRY_WINDOW_M = 0.6
 PICK_SPIN_W = 0.5
 PICK_SPIN_MAX_SHIFT_M = 0.05
 
+class DiscStabilizer:
+    """Temporal filter for lidar discs (see MPPI_DISC_ADD_BUILDS / MPPI_DISC_DROP_BUILDS)."""
+
+    def __init__(self, n_add=MPPI_DISC_ADD_BUILDS, n_drop=MPPI_DISC_DROP_BUILDS, key_m=MPPI_DISC_KEY_M):
+        self.n_add, self.n_drop, self.key_m = n_add, n_drop, key_m
+        self.seen, self.miss, self.active = {}, {}, {}
+        self.builds = 0
+
+    def update(self, discs):
+        cur = {}
+        for d in discs:
+            cur[(int(round(d[0] / self.key_m)), int(round(d[1] / self.key_m)))] = d
+        first = self.builds == 0
+        self.builds += 1
+        for k, d in cur.items():
+            self.seen[k] = self.seen.get(k, 0) + 1
+            self.miss[k] = 0
+            if first or self.seen[k] >= self.n_add or k in self.active:
+                self.active[k] = d
+        for k in list(self.seen):
+            if k in cur:
+                continue
+            self.seen[k] = 0
+            self.miss[k] = self.miss.get(k, 0) + 1
+            if self.miss[k] >= self.n_drop:
+                self.active.pop(k, None)
+                del self.seen[k], self.miss[k]
+        return list(self.active.values())
+
+
 # -- Stage 2 goals --
 # The Stage 2 task drives to the target object and then delivers it to the owner zone.
 # Both goals come from the runtime protocol only: the pickup goal from the reveal (msg 411)
@@ -493,6 +550,7 @@ class DemoParticipant:
         self._lidar_layer = None
         self._lidar_acc = None        # LidarSliceAccumulator, built once on the first run
         self._curb = None             # CurbLayer, fresh per run (curb_layer.py)
+        self._curb_edge_zone = None   # map road-edge test from the last MPPI build (hazard_xy)
         # Base_LiDAR -> chassis mount offset (dx, dy). Static, so tf is asked once per run;
         # (0, 0) (sensor above the chassis origin) when tf cannot supply it.
         self._lidar_mount_xy = (0.0, 0.0)
@@ -1056,6 +1114,7 @@ class DemoParticipant:
 
         floor_z = float(np.median(up[valid]))
         candidate = valid & (up > floor_z + 0.03) & (fwd > 0.0) & (fwd < 1.2)
+        candidate = self._exclude_kerb_pixels(candidate, fwd, lat)
         n_cand = int(np.sum(candidate))
         if n_cand < 20:
             return None
@@ -1113,6 +1172,41 @@ class DemoParticipant:
             blob_mask = candidate
 
         return (float(np.mean(fwd[blob_mask])), float(np.mean(lat[blob_mask])))
+
+    # [팀 신규 추가 2026-10-07] DEPTH_CURB_EXCLUDE_M 위 주석 참고.
+    def _exclude_kerb_pixels(self, candidate, fwd, lat):
+        """Drop candidate pixels within DEPTH_CURB_EXCLUDE_M of a sensed kerb / ledge line."""
+        if self._curb is None or not np.any(candidate):
+            return candidate
+        pose = self.client.get_world_pose()
+        if pose is None:
+            return candidate
+        try:
+            hz = self._curb.hazard_xy(near_edge=self._curb_edge_zone)
+        except Exception as e:
+            log.warning("[Stage2] depth kerb exclusion: hazard_xy failed: %s", e)
+            return candidate
+        if not len(hz):
+            return candidate
+        hz = hz[np.hypot(hz[:, 0] - pose[0], hz[:, 1] - pose[1]) < 2.5]
+        if not len(hz):
+            return candidate
+        # hazard cells -> raw arm frame (pose math, same convention as _world_to_arm_pose)
+        ha = np.array([self._world_to_arm_pose(pose, hx, hy) for hx, hy in hz])
+        ha[:, 0] += GRASP_FWD_BACKOFF
+        idx = np.flatnonzero(candidate)
+        cf, cl = fwd.ravel()[idx], lat.ravel()[idx]
+        near = np.zeros(len(idx), bool)
+        for hf, hl in ha:
+            near |= (cf - hf) ** 2 + (cl - hl) ** 2 <= DEPTH_CURB_EXCLUDE_M ** 2
+        if near.any():
+            out = candidate.copy()
+            out.ravel()[idx[near]] = False
+            log.info("[Stage2] depth: %d/%d raised px within %.2fm of %d kerb/ledge cell(s) "
+                     "-> not object candidates", int(near.sum()), len(idx), DEPTH_CURB_EXCLUDE_M,
+                     len(hz))
+            return out
+        return candidate
 
     # [스타터킷 골격 + 확장] 직진 접근 + lat 중심맞춤 로직은 원본과 동일. 팀이
     # 추가한 것: cap_angular() 적용(섀시 정지 방지), 그리고 reversing 로직(과주행
@@ -1537,7 +1631,7 @@ class DemoParticipant:
         return near_edge
 
     def _plan_obstacles(self, goal, exclude_m, lidar_max_age_scans=None, near_xy=None,
-                        near_m=0.0):
+                        near_m=0.0, stab=None):
         """Everything the planner should route around on this leg.
 
         Two sources, excluded near the goal by two DIFFERENT radii -- they are not the same
@@ -1566,6 +1660,8 @@ class DemoParticipant:
         lidar_discs = (list(self._lidar_layer.discs(lidar_max_age_scans, near_xy, near_m))
                        if self._lidar_layer is not None else [])
         lidar_discs = obstacles_excluding_goal(lidar_discs, goal, exclude_m=exclude_m)
+        if stab is not None:
+            lidar_discs = stab.update(lidar_discs)
         memory = obstacles_excluding_goal(self._obstacles, goal, exclude_m=BLOCKAGE_RADIUS_M)
         return lidar_discs + memory
 
@@ -1631,6 +1727,35 @@ class DemoParticipant:
         log.info("[Stage2] blockage remembered at (%.2f, %.2f) r=%.2fm (%d known)",
                  bx, by, BLOCKAGE_RADIUS_M, len(self._obstacles))
         return True
+
+    # [팀 신규 추가 2026-10-07] MPPI_SPIN_STALL_* 위 주석 참고.
+    def _spin_stall_escape(self, field, pose):
+        """Back straight up MPPI_SPIN_ESCAPE_M; if the chassis does not move, crab sideways
+        MPPI_SPIN_ESCAPE_M towards the side whose cost-to-go is lower."""
+        c = self.client
+        dur = MPPI_SPIN_ESCAPE_M / MPPI_SPIN_ESCAPE_V
+        self._reverse_escape(duration_s=dur, speed=MPPI_SPIN_ESCAPE_V)
+        self._halt()
+        p = c.get_world_pose() or pose
+        moved = math.hypot(p[0] - pose[0], p[1] - pose[1])
+        if moved >= 0.1:
+            log.info("[Stage2] spin stall escape: reversed %.2f m", moved)
+            return
+        x, y, yaw = p
+        lx, ly = -math.sin(yaw), math.cos(yaw)             # left unit vector
+        d = MPPI_SPIN_ESCAPE_M + 0.1
+        v_left = field.value(x + d * lx, y + d * ly)
+        v_right = field.value(x - d * lx, y - d * ly)
+        side = 1.0 if v_left <= v_right else -1.0
+        t_end = self._clock.elapsed + dur
+        while c.is_running and self._clock.tick() < t_end:
+            c.send_cmd_vel(linear_x=0.0, linear_y=side * MPPI_SPIN_ESCAPE_V, angular_z=0.0)
+            c.sleep(STAGE2_NAV_DT)
+        self._halt()
+        q = c.get_world_pose() or p
+        log.info("[Stage2] spin stall escape: reverse moved %.2f m -> crab %s (V left %.1f, "
+                 "right %.1f) moved %.2f m", moved, "left" if side > 0 else "right", v_left,
+                 v_right, math.hypot(q[0] - p[0], q[1] - p[1]))
 
     def _reverse_escape(self, duration_s=1.5, speed=0.2):
         """Back straight up briefly -- recovery for a chassis physically wedged in front.
@@ -2052,6 +2177,11 @@ class DemoParticipant:
         edge_zone = None                      # map road-edge test for curb_layer.hazard_xy
         hazard_all = np.zeros((0, 2))         # kerb/ledge lines from the last build (slow zone)
         slow = False                          # inside the kerb / road-edge slow zone
+        disc_stab = {}                        # stage name -> DiscStabilizer
+        frozen = {}                           # stage name -> disc set frozen for the active hold
+        spin_t0 = None                        # (t, yaw) when the current pure spin began
+        yaw_acc = 0.0                         # yaw turned since spin_t0 (unwrapped)
+        yaw_prev = None
         pos_history = deque()        # (t, x, y, yaw, commanded v)
         pin_history = deque()        # same, over MPPI_PIN_WINDOW_S
         v_history = deque()          # (t, V(robot)) -- tight legs: no V progress near goal = arrived
@@ -2104,6 +2234,7 @@ class DemoParticipant:
                             planner, radii=(MPPI_SLOW_EDGE_M, MPPI_SLOW_EDGE_OFF_M))
                     hz = self._curb.hazard_xy(near_edge=edge_zone)
                     hazard_all = hz
+                    self._curb_edge_zone = edge_zone
                     if len(hz):
                         keep_ = ((np.hypot(hz[:, 0] - goal[0], hz[:, 1] - goal[1]) >= MPPI_STEP_GOAL_CLEAR_M)
                                  & (np.hypot(hz[:, 0] - x, hz[:, 1] - y) >= MPPI_STEP_NEAR_M))
@@ -2132,11 +2263,15 @@ class DemoParticipant:
                 n_all = None
                 for k in range(start, len(stages)):
                     name, max_age, r_k, ok_k = stages[k]
-                    if max_age is None:
-                        discs = self._plan_obstacles(goal, clear_m)
+                    stab = disc_stab.setdefault(name, DiscStabilizer())
+                    if k == hold_stage and now_t < hold_until and name in frozen:
+                        discs = frozen[name]
+                    elif max_age is None:
+                        discs = self._plan_obstacles(goal, clear_m, stab=stab)
                     else:
                         discs = self._plan_obstacles(goal, clear_m, lidar_max_age_scans=max_age,
-                                                     near_xy=(x, y), near_m=MPPI_DISC_NEAR_M)
+                                                     near_xy=(x, y), near_m=MPPI_DISC_NEAR_M,
+                                                     stab=stab)
                     if n_all is None:
                         n_all = len(discs)
                     field = build(discs, ok_k, r_k)
@@ -2152,7 +2287,9 @@ class DemoParticipant:
                               if stages[k][0] == "last-resort" and self._curb is not None
                               else MPPI_STAGE_HOLD_S)
                     hold_stage, hold_until = k, now_t + hold_s
-                    log.info("[Stage2] navfield: holding stage %s for %.0fs", stages[k][0], hold_s)
+                    frozen = {stages[k][0]: discs}
+                    log.info("[Stage2] navfield: holding stage %s for %.0fs (%d discs frozen)",
+                             stages[k][0], hold_s, len(discs))
                 if ctrl is None:
                     ctrl = MPPI(field, steering_track=STEERING_TRACK)
                 else:
@@ -2294,6 +2431,29 @@ class DemoParticipant:
                 pos_history.clear()
                 c.sleep(STAGE2_NAV_DT)
                 continue
+
+            # spin stall (MPPI_SPIN_STALL_*): a pure spin that does not turn the chassis
+            if yaw_prev is not None:
+                yaw_acc += math.atan2(math.sin(yaw - yaw_prev), math.cos(yaw - yaw_prev))
+            yaw_prev = yaw
+            if abs(last_cmd[0]) < MPPI_SPIN_CMD_V and abs(last_cmd[1]) >= MPPI_SPIN_STALL_W:
+                if spin_t0 is None:
+                    spin_t0, yaw_acc = now_t, 0.0
+                elif (now_t - spin_t0 >= MPPI_SPIN_STALL_S
+                      and abs(yaw_acc) < math.radians(MPPI_SPIN_STALL_DEG)):
+                    log.warning("[Stage2] spin stall: w=%+.2f for %.1fs turned %.1f deg -> "
+                                "escape", last_cmd[1], now_t - spin_t0, math.degrees(yaw_acc))
+                    self._spin_stall_escape(field, pose)
+                    spin_t0, yaw_prev = None, None
+                    field_dirty, built_at = True, -1e9
+                    ctrl.reset()
+                    last_cmd = (0.0, 0.0)
+                    pin_history.clear()
+                    pos_history.clear()
+                    c.sleep(STAGE2_NAV_DT)
+                    continue
+            else:
+                spin_t0 = None
 
             # reactive brake (kept until the CBF safety filter replaces it)
             stop_dist = self._react_stop_dist(max(last_cmd[0], 0.0))

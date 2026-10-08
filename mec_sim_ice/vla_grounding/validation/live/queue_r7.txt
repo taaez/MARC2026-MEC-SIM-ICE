@@ -1,0 +1,12 @@
+# 7th round (2026-10-08): FINAL code = round 6 (repeat 2/3; commit "Stage2 최종 코드", see stage2_ablation §15). Run under gnome-session-inhibit.
+# problem tag ABL_OFF GRASP_OFF planner
+rt01_parking_tumbler   rt01_r7_legacy  - - legacy
+rt01_parking_tumbler   rt01_r7_mppi    - - mppi
+rt02_parking_umbrella  rt02_r7_legacy  - - legacy
+rt02_parking_umbrella  rt02_r7_mppi    - - mppi
+rt03_vending_umbrella  rt03_r7_legacy  - - legacy
+rt03_vending_umbrella  rt03_r7_mppi    - - mppi
+rt04_taxi_tumbler      rt04_r7_legacy  - - legacy
+rt04_taxi_tumbler      rt04_r7_mppi    - - mppi
+rt04b_taxi_umbrella    rt04b_r7_legacy - - legacy
+rt04b_taxi_umbrella    rt04b_r7_mppi   - - mppi
