@@ -1,0 +1,16 @@
+{
+  "config": "C2",
+  "run": "3",
+  "host": "parktaejeong-MS-7D76",
+  "git": "9276636",
+  "started": "2026-10-05 23:23:27",
+  "settings": {
+    "landmark_gate": true,
+    "area_gate": true,
+    "rank": "full",
+    "coord": "push",
+    "on": false,
+    "probe": false,
+    "ankle": false
+  }
+}

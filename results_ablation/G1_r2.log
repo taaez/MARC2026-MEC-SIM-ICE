@@ -1,0 +1,393 @@
+==========================================
+  MARC 2026 SDK Demo Participant
+  team_id:        mec_sim_ice
+  ROS_DISTRO:     humble
+  ROS_DOMAIN_ID:  0
+  python:         python3
+==========================================
+[22:29:47] participant_app INFO: [entry] Stage 1 ablation G1 (+ Landmark gate) -- {'landmark_gate': True, 'area_gate': False, 'rank': 'conf', 'coord': 'full', 'on': True, 'probe': True, 'ankle': True}
+[22:29:47] participant_app INFO: [entry] run=2 score log=/home/parktaejeong/ablation_test/results_ablation/G1_r2.scores.jsonl  side log=/home/parktaejeong/ablation_test/results_ablation/G1_r2.side.jsonl  pose_disabled_env=
+[22:29:48] vla_grounding.yolo_adapter INFO: [yolo] routed B+small (small_conf=0.25, small_t640_r2)
+[22:29:48] participant_app INFO: [pose-kp] loaded /home/parktaejeong/ablation_test/mec_sim_ice/demo_agents/weights/yolo11m-pose.pt
+[INFO] [1791206988.880200351] [marc_participant]: [SUB] robot/gripper/holding
+[INFO] [1791206988.880584245] [marc_participant]: [SUB] robot/basket/occupied
+[INFO] [1791206988.881454790] [marc_participant]: [REGISTER] starting handshake to /marc/ops/register
+[INFO] [1791206995.865808525] [marc_participant]: [STATE] READY -> STAGE1_RUN
+[22:29:55] participant_app INFO: [STATE] READY -> STAGE1_RUN
+[INFO] [1791206995.866114583] [marc_participant]: [ACK] registration succeeded (team_id=mec_sim_ice, session issued)
+[22:29:55] participant_app INFO: [Stage2] tf2 listener up (world->arm_base_link / camera transforms live)
+[INFO] [1791207002.771944172] [marc_participant]: [SUB] CCTV rig_1_a
+[INFO] [1791207002.773373165] [marc_participant]: [SUB] CCTV rig_2_b
+[INFO] [1791207002.774875476] [marc_participant]: [SUB] CCTV rig_2_c
+[INFO] [1791207002.776306139] [marc_participant]: [SUB] CCTV rig_3_b
+[INFO] [1791207002.777710443] [marc_participant]: [SUB] CCTV rig_3_c
+[INFO] [1791207002.779108418] [marc_participant]: [SUB] CCTV rig_7_a
+[22:30:04] participant_app INFO: [warmup] CCTV ready: 6 cameras in 8.2s
+[22:30:04] participant_app INFO: [Stage1] round 1/33: "Find the mug on the picnic table."
+[22:30:07] participant_app INFO: [ablation] G1 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791207007.404453638] [marc_participant]: [SUBMIT] grounding (msg 301, seq=1)
+[22:30:07] participant_app INFO: [Score] round 1: total=58.094380377874685
+[INFO] [1791207007.421963229] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:07] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207009.484623841] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:09] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:09] participant_app INFO: [Stage1] round 2/33: "Find the tumbler on the bench."
+[22:30:11] vla_grounding.yolo_adapter INFO: [yolo-probe] rescued 3 low-conf target 'tumbler' on rig_1_a (best=0.0457)
+[22:30:11] participant_app INFO: [ablation] G1 cam=rig_7_a gate=landmark ['rig_1_a', 'rig_2_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207011.268351033] [marc_participant]: [SUBMIT] grounding (msg 301, seq=2)
+[22:30:11] participant_app INFO: [Score] round 2: total=35.0
+[INFO] [1791207011.349561196] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:11] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207013.394470793] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:13] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:13] participant_app INFO: [Stage1] round 3/33: "Find the tumbler near the fire hydrant in the parking lot."
+[22:30:15] participant_app INFO: [ablation] G1 cam=rig_7_a gate=landmark ['rig_7_a']
+[INFO] [1791207015.321197484] [marc_participant]: [SUBMIT] grounding (msg 301, seq=3)
+[22:30:15] participant_app INFO: [Score] round 3: total=59.00057651985979
+[INFO] [1791207015.400377167] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:15] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207017.471452031] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:17] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:17] participant_app INFO: [Stage1] round 4/33: "Find the sunblock beside the picnic table."
+[22:30:18] participant_app INFO: [ablation] G1 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791207018.926589587] [marc_participant]: [SUBMIT] grounding (msg 301, seq=4)
+[22:30:18] participant_app INFO: [Score] round 4: total=98.08626313740906
+[INFO] [1791207018.945000705] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:18] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207021.109166791] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:21] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:21] participant_app INFO: [Stage1] round 5/33: "Find the umbrella beside the vending machine."
+[22:30:22] participant_app INFO: [ablation] G1 cam=rig_2_c gate=landmark ['rig_2_c']
+[INFO] [1791207022.822086370] [marc_participant]: [SUBMIT] grounding (msg 301, seq=5)
+[22:30:22] participant_app INFO: [Score] round 5: total=99.09741955396805
+[INFO] [1791207022.941365900] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:22] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207025.020380585] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:25] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:25] participant_app INFO: [Stage1] round 6/33: "Find the umbrella next to the trash can."
+[22:30:26] participant_app INFO: [ablation] G1 cam=rig_2_c gate=landmark ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207026.596286963] [marc_participant]: [SUBMIT] grounding (msg 301, seq=6)
+[22:30:26] participant_app INFO: [Score] round 6: total=35.0
+[INFO] [1791207026.623164288] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:26] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207028.666369122] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:28] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:28] participant_app INFO: [Stage1] round 7/33: "Find the pencil case near the picnic table."
+[22:30:30] participant_app INFO: [ablation] G1 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791207030.193105300] [marc_participant]: [SUBMIT] grounding (msg 301, seq=7)
+[22:30:30] participant_app INFO: [Score] round 7: total=35.0
+[INFO] [1791207030.235106098] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:30] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207032.312639544] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:32] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:32] participant_app INFO: [Stage1] round 8/33: "Find the umbrella dropped in the empty parking space."
+[22:30:33] participant_app INFO: [ablation] G1 cam=rig_2_c gate=None ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207033.981814373] [marc_participant]: [SUBMIT] grounding (msg 301, seq=8)
+[22:30:34] participant_app INFO: [Score] round 8: total=25.0
+[INFO] [1791207034.067898942] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:34] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207036.145965229] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:36] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:36] participant_app INFO: [Stage1] round 9/33: "Find the tumbler dropped in the empty parking space."
+[22:30:37] participant_app INFO: [ablation] G1 cam=rig_7_a gate=None ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207037.875649869] [marc_participant]: [SUBMIT] grounding (msg 301, seq=9)
+[22:30:37] participant_app INFO: [Score] round 9: total=35.0
+[INFO] [1791207037.892966850] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:37] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207039.901629620] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:39] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:39] participant_app INFO: [Stage1] round 10/33: "Find the tumbler on the road next to the taxi."
+[22:30:41] participant_app INFO: [ablation] G1 cam=rig_3_c gate=landmark ['rig_3_c']
+[INFO] [1791207041.524071837] [marc_participant]: [SUBMIT] grounding (msg 301, seq=10)
+[22:30:41] participant_app INFO: [Score] round 10: total=96.77091516495977
+[INFO] [1791207041.651092462] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:41] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207043.719801834] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:43] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:43] participant_app INFO: [Stage1] round 11/33: "Find the umbrella on the road next to the taxi."
+[22:30:45] participant_app INFO: [ablation] G1 cam=rig_3_c gate=landmark ['rig_3_c']
+[INFO] [1791207045.358537368] [marc_participant]: [SUBMIT] grounding (msg 301, seq=11)
+[22:30:45] participant_app INFO: [Score] round 11: total=56.77121306702904
+[INFO] [1791207045.376792103] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:45] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207047.453743655] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:47] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:47] participant_app INFO: [Stage1] round 12/33: "After working out I grabbed a drink from the machine and left my umbrella standing next to it."
+[22:30:49] participant_app INFO: [ablation] G1 cam=rig_2_c gate=landmark ['rig_2_c']
+[INFO] [1791207049.124919586] [marc_participant]: [SUBMIT] grounding (msg 301, seq=12)
+[22:30:49] participant_app INFO: [Score] round 12: total=99.0956068386795
+[INFO] [1791207049.192149218] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:49] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207051.255211072] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:51] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:51] participant_app INFO: [Stage1] round 13/33: "I was taking notes at an outdoor table and left my pencil case behind."
+[22:30:53] participant_app INFO: [ablation] G1 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791207053.111092910] [marc_participant]: [SUBMIT] grounding (msg 301, seq=13)
+[22:30:53] participant_app INFO: [Score] round 13: total=25.0
+[INFO] [1791207053.194219028] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:53] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207055.272257108] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:55] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:55] participant_app INFO: [Stage1] round 14/33: "I was reading with a coffee at an outdoor table and left my mug there."
+[22:30:56] vla_grounding.yolo_adapter INFO: [yolo-probe] rescued 1 low-conf target 'mug' on rig_1_a (best=0.0017)
+[22:30:56] participant_app INFO: [ablation] G1 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791207056.936285759] [marc_participant]: [SUBMIT] grounding (msg 301, seq=14)
+[22:30:57] participant_app INFO: [Score] round 14: total=98.08577256327328
+[INFO] [1791207057.046101087] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:30:57] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207059.122990889] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:59] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:30:59] participant_app INFO: [Stage1] round 15/33: "I was resting in the sun at the park and left the sunblock I had been using."
+[22:31:01] participant_app INFO: [ablation] G1 cam=rig_1_a gate=None ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207061.105078821] [marc_participant]: [SUBMIT] grounding (msg 301, seq=15)
+[22:31:01] participant_app INFO: [Score] round 15: total=98.087344177476
+[INFO] [1791207061.134587599] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:01] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207063.218939450] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:03] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:03] participant_app INFO: [Stage1] round 16/33: "After grabbing a drink from the vending machine I left my umbrella propped against its side."
+[22:31:05] participant_app INFO: [ablation] G1 cam=rig_2_c gate=landmark ['rig_2_c']
+[INFO] [1791207065.191075389] [marc_participant]: [SUBMIT] grounding (msg 301, seq=16)
+[22:31:05] participant_app INFO: [Score] round 16: total=99.09750622566352
+[INFO] [1791207065.236170497] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:05] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207067.319456500] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:07] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:07] participant_app INFO: [Stage1] round 17/33: "I stopped to throw something in the bin and left my umbrella leaning against the trash can."
+[22:31:08] participant_app INFO: [ablation] G1 cam=rig_2_c gate=landmark ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207068.851785626] [marc_participant]: [SUBMIT] grounding (msg 301, seq=17)
+[22:31:08] participant_app INFO: [Score] round 17: total=35.0
+[INFO] [1791207068.876215157] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:08] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207070.963700373] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:10] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:10] participant_app INFO: [Stage1] round 18/33: "I think I dropped my tumbler on the ground as I got out of my car in the parking lot."
+[22:31:12] participant_app INFO: [ablation] G1 cam=rig_3_c gate=landmark ['rig_2_b', 'rig_2_c', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207072.663091140] [marc_participant]: [SUBMIT] grounding (msg 301, seq=18)
+[22:31:12] participant_app INFO: [Score] round 18: total=25.0
+[INFO] [1791207072.712441795] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:12] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207074.797191496] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:14] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:14] participant_app INFO: [Stage1] round 19/33: "Getting out of my car I dropped my umbrella in the empty space next to it; find it in the parking lot."
+[22:31:16] participant_app INFO: [ablation] G1 cam=rig_2_c gate=landmark ['rig_2_b', 'rig_2_c', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207076.419441256] [marc_participant]: [SUBMIT] grounding (msg 301, seq=19)
+[22:31:16] participant_app INFO: [Score] round 19: total=25.0
+[INFO] [1791207076.444311292] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:16] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207078.529777408] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:18] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:18] participant_app INFO: [Stage1] round 20/33: "Find the person sitting on top of the trash can in the parking lot."
+[22:31:20] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:31:20] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[22:31:20] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:31:20] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:31:20] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:31:20] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:31:20] participant_app INFO: [ablation] G1 cam=rig_2_c gate=landmark ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207080.619759317] [marc_participant]: [SUBMIT] grounding (msg 301, seq=20)
+[22:31:20] participant_app INFO: [Score] round 20: total=18.749999999999996
+[INFO] [1791207080.672905443] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:20] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207082.739915916] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:22] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:22] participant_app INFO: [Stage1] round 21/33: "Find the person sitting on top of the vending machine."
+[22:31:24] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:31:24] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[22:31:24] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:31:24] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:31:24] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:31:24] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:31:24] participant_app INFO: [ablation] G1 cam=rig_2_c gate=landmark ['rig_2_c']
+[INFO] [1791207084.628950129] [marc_participant]: [SUBMIT] grounding (msg 301, seq=21)
+[22:31:24] participant_app INFO: [Score] round 21: total=98.87529686947238
+[INFO] [1791207084.676581859] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:24] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207086.742873037] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:26] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:26] participant_app INFO: [Stage1] round 22/33: "Find the person lying face-down on the bench near the taxi."
+[22:31:28] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:31:28] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[22:31:28] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:31:28] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:31:28] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:31:28] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:31:28] participant_app INFO: [ablation] G1 cam=rig_7_a gate=landmark ['rig_1_a', 'rig_2_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207088.792596868] [marc_participant]: [SUBMIT] grounding (msg 301, seq=22)
+[22:31:28] participant_app INFO: [Score] round 22: total=18.749999999999996
+[INFO] [1791207088.834055151] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:28] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207090.834999386] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:30] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:30] participant_app INFO: [Stage1] round 23/33: "Find the person lying on top of the picnic table."
+[22:31:32] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:31:32] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[22:31:32] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:31:32] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:31:32] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:31:32] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:31:32] participant_app INFO: [ablation] G1 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791207092.670977968] [marc_participant]: [SUBMIT] grounding (msg 301, seq=23)
+[22:31:32] participant_app INFO: [Score] round 23: total=0.0
+[INFO] [1791207092.712258397] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:32] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207094.770449595] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:34] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:34] participant_app INFO: [Stage1] round 24/33: "Find the person collapsed on the parking lot floor."
+[22:31:36] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:31:36] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[22:31:36] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:31:36] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:31:36] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:31:36] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:31:36] participant_app INFO: [ablation] G1 cam=rig_1_a gate=None ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207096.698553660] [marc_participant]: [SUBMIT] grounding (msg 301, seq=24)
+[22:31:36] participant_app INFO: [Score] round 24: total=18.749999999999996
+[INFO] [1791207096.739708542] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:36] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207098.794757547] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:38] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:38] participant_app INFO: [Stage1] round 25/33: "Find the person lying face-down and motionless in the parking lot."
+[22:31:40] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:31:40] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[22:31:40] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:31:40] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:31:40] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:31:40] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:31:40] participant_app INFO: [ablation] G1 cam=rig_2_b gate=None ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207100.619330987] [marc_participant]: [SUBMIT] grounding (msg 301, seq=25)
+[22:31:40] participant_app INFO: [Score] round 25: total=18.749999999999996
+[INFO] [1791207100.662655924] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:40] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207102.719322881] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:42] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:42] participant_app INFO: [Stage1] round 26/33: "Find the person fallen on the ground next to the toppled bicycle."
+[22:31:44] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:31:44] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[22:31:44] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:31:44] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:31:44] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:31:44] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:31:44] participant_app INFO: [ablation] G1 cam=rig_3_b gate=landmark ['rig_1_a', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207104.562190089] [marc_participant]: [SUBMIT] grounding (msg 301, seq=26)
+[22:31:44] participant_app INFO: [Score] round 26: total=99.74225370711481
+[INFO] [1791207104.599297345] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:44] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207106.663297410] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:46] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:46] participant_app INFO: [Stage1] round 27/33: "Find the person bent over and motionless near the trash can in the park rest area."
+[22:31:48] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:31:48] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[22:31:48] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:31:48] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:31:48] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:31:48] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:31:48] participant_app INFO: [ablation] G1 cam=rig_3_b gate=landmark ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207108.624396714] [marc_participant]: [SUBMIT] grounding (msg 301, seq=27)
+[22:31:48] participant_app INFO: [Score] round 27: total=18.749999999999996
+[INFO] [1791207108.710103599] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:48] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207110.784679222] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:50] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:50] participant_app INFO: [Stage1] round 28/33: "People are relaxing at the park and one is even lying on the grass; find the one near the trash can who is bent over and not moving and actually needs help."
+[22:31:52] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:31:52] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[22:31:52] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:31:52] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:31:52] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:31:52] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:31:52] participant_app INFO: [ablation] G1 cam=rig_3_b gate=landmark ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207112.730183701] [marc_participant]: [SUBMIT] grounding (msg 301, seq=28)
+[22:31:52] participant_app INFO: [Score] round 28: total=18.749999999999996
+[INFO] [1791207112.745500534] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:52] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207114.814732374] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:54] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:54] participant_app INFO: [Stage1] round 29/33: "In the parking lot a person is down next to a bicycle and looks like they had an accident; find them."
+[22:31:56] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:31:56] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[22:31:56] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:31:56] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:31:56] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:31:56] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:31:56] participant_app INFO: [ablation] G1 cam=rig_3_b gate=landmark ['rig_1_a', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207116.763635742] [marc_participant]: [SUBMIT] grounding (msg 301, seq=29)
+[22:31:56] participant_app INFO: [Score] round 29: total=0.0
+[INFO] [1791207116.778286800] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:31:56] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207118.831551151] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:58] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:31:58] participant_app INFO: [Stage1] round 30/33: "Someone is up where people should not be; find the person who climbed on top of the drink machine."
+[22:32:00] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:32:00] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[22:32:00] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:32:00] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:32:00] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:32:00] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:32:00] participant_app INFO: [ablation] G1 cam=rig_2_c gate=landmark ['rig_2_c']
+[INFO] [1791207120.798728568] [marc_participant]: [SUBMIT] grounding (msg 301, seq=30)
+[INFO] [1791207120.872104571] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:32:00] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:32:00] participant_app INFO: [Score] round 30: total=98.87808235425112
+[INFO] [1791207122.940151066] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:32:02] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:32:02] participant_app INFO: [Stage1] round 31/33: "In the parking lot, find the person who climbed up and is sitting on top of the trash can."
+[22:32:04] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:32:04] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[22:32:04] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:32:04] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:32:04] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:32:04] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:32:04] participant_app INFO: [ablation] G1 cam=rig_2_c gate=landmark ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207124.631615931] [marc_participant]: [SUBMIT] grounding (msg 301, seq=31)
+[22:32:04] participant_app INFO: [Score] round 31: total=18.749999999999996
+[INFO] [1791207124.651191586] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:32:04] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207126.719024160] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:32:06] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:32:06] participant_app INFO: [Stage1] round 32/33: "Near the taxi, find the person lying down on top of the bench."
+[22:32:08] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:32:08] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[22:32:08] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:32:08] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:32:08] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:32:08] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:32:08] participant_app INFO: [ablation] G1 cam=rig_7_a gate=landmark ['rig_1_a', 'rig_2_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207128.876510415] [marc_participant]: [SUBMIT] grounding (msg 301, seq=32)
+[22:32:08] participant_app INFO: [Score] round 32: total=18.749999999999996
+[INFO] [1791207128.935103625] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:32:08] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207131.009911396] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:32:11] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[22:32:11] participant_app INFO: [Stage1] round 33/33: "Several people are in the parking lot; one is completely face-down and immobile; find the most critical one."
+[22:32:13] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[22:32:13] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[22:32:13] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[22:32:13] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[22:32:13] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[22:32:13] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[22:32:13] participant_app INFO: [ablation] G1 cam=rig_2_b gate=None ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207133.366108281] [marc_participant]: [SUBMIT] grounding (msg 301, seq=33)
+[22:32:13] participant_app INFO: [Score] round 33: total=18.749999999999996
+[INFO] [1791207133.411221087] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[22:32:13] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791207135.492490495] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE2_RUN
+[22:32:15] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE2_RUN
+[22:32:15] participant_app INFO: [Stage2] task: "Pick up the tumbler dropped on the parking lot floor and bring it to the owner." (limit 600s)
+[22:32:15] participant_app INFO: [Stage2] owner_position(runtime-provided)=(-54.56651, 142.79308)
+[22:32:17] participant_app INFO: [ablation] G1 cam=rig_3_c gate=None ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791207137.385522939] [marc_participant]: [SUBMIT] stage2 grounding (msg 311, seq=34)
+[22:32:17] participant_app INFO: [Stage2] submitted grounding target=(-85.70938422651115, 106.63393701298254), delivery point=(-54.56651, 142.79308)
+[22:32:17] participant_app INFO: [Stage2] reveal received -- score=25.0, type=tumbler, center=[-44.37683, 121.1243, 16.67988], r=2.0
+[22:32:17] participant_app INFO: [Stage2] reveal logged -> /home/parktaejeong/ablation_test/results_ablation/G1_r2.reveals.jsonl
+[22:32:17] participant_app INFO: [Stage2] navigation start -- collect=(-44.37683, 121.1243) deliver=(-54.56651, 142.79308) (timeout 1800s)
+[22:32:17] participant_app INFO: [Stage2] lidar mount offset from tf (arm_base + ARM_BASE_FWD): (0.302, 0.000)
+[22:32:17] participant_app INFO: [Stage2] camera mount transform acquired (arm_base + ARM_BASE_FWD) -- depth ghost-veto active
+[22:32:17] participant_app INFO: [Stage2] arm stow -> HOME (lower CoG, tip-over prevention)
+[22:32:17] participant_app INFO: [Stage2] leg1 -> object (-44.38, 121.12) front standoff (-44.95, 121.2)
+[22:32:17] participant_app INFO: [Stage2] occupancy received: 3939x3815 res=0.050 origin=(-185.2, 64.9)
+[22:32:17] participant_app INFO: [Stage2] occupancy A* path 4 waypoints
+[22:32:17] participant_app INFO: [STAGE2] pose=(-64.69, 123.65, yaw=48deg) dist=19.89m wp 0/4=(-59.0, 129.5) v=0.80 w=-0.02
+[INFO] [1791207138.280788942] [marc_participant]: [SUB] robot/lidar/points
+[INFO] [1791207138.281801030] [marc_participant]: [SUB] robot/base_camera/depth/image
+[INFO] [1791207139.560278230] [marc_participant]: [SHUTDOWN] done

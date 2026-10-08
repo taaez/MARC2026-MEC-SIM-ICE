@@ -1,0 +1,16 @@
+{
+  "config": "G2",
+  "run": "2",
+  "host": "parktaejeong-MS-7D76",
+  "git": "9276636",
+  "started": "2026-10-05 22:33:11",
+  "settings": {
+    "landmark_gate": true,
+    "area_gate": true,
+    "rank": "conf",
+    "coord": "full",
+    "on": true,
+    "probe": true,
+    "ankle": true
+  }
+}

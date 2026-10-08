@@ -1,0 +1,16 @@
+{
+  "config": "G3",
+  "run": "6",
+  "host": "parktaejeong-MS-7D76",
+  "git": "9276636",
+  "started": "2026-10-06 00:50:47",
+  "settings": {
+    "landmark_gate": true,
+    "area_gate": true,
+    "rank": "bucket",
+    "coord": "full",
+    "on": true,
+    "probe": true,
+    "ankle": true
+  }
+}

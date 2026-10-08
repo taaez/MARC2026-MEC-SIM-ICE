@@ -1,0 +1,1 @@
+{"sim_time": 23.150000344000002, "task_description": "Pick up the tumbler dropped on the parking lot floor and bring it to the owner.", "grounding_score": 75.02153248889404, "target_type": "tumbler", "hint_center": [-44.37683, 121.1243, 16.67988], "hint_radius": 2.0, "submitted_target_coord": [-43.9776506129201, 121.624387041694, 16.799999237060547]}

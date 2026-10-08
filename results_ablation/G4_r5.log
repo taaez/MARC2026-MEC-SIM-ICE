@@ -1,0 +1,434 @@
+==========================================
+  MARC 2026 SDK Demo Participant
+  team_id:        mec_sim_ice
+  ROS_DISTRO:     humble
+  ROS_DOMAIN_ID:  0
+  python:         python3
+==========================================
+[00:20:31] participant_app INFO: [entry] Stage 1 ablation G4 (+ Person proximity exception (full)) -- {'landmark_gate': True, 'area_gate': True, 'rank': 'full', 'coord': 'full', 'on': True, 'probe': True, 'ankle': True}
+[00:20:31] participant_app INFO: [entry] run=5 score log=/home/parktaejeong/ablation_test/results_ablation/G4_r5.scores.jsonl  side log=/home/parktaejeong/ablation_test/results_ablation/G4_r5.side.jsonl  pose_disabled_env=
+[00:20:32] vla_grounding.yolo_adapter INFO: [yolo] routed B+small (small_conf=0.25, small_t640_r2)
+[00:20:32] participant_app INFO: [pose-kp] loaded /home/parktaejeong/ablation_test/mec_sim_ice/demo_agents/weights/yolo11m-pose.pt
+[INFO] [1791213632.461737730] [marc_participant]: [SUB] robot/gripper/holding
+[INFO] [1791213632.462099481] [marc_participant]: [SUB] robot/basket/occupied
+[INFO] [1791213632.463116853] [marc_participant]: [REGISTER] starting handshake to /marc/ops/register
+[INFO] [1791213639.409266758] [marc_participant]: [STATE] READY -> STAGE1_RUN
+[00:20:39] participant_app INFO: [STATE] READY -> STAGE1_RUN
+[INFO] [1791213639.409498108] [marc_participant]: [ACK] registration succeeded (team_id=mec_sim_ice, session issued)
+[00:20:39] participant_app INFO: [Stage2] tf2 listener up (world->arm_base_link / camera transforms live)
+[INFO] [1791213646.345823120] [marc_participant]: [SUB] CCTV rig_1_a
+[INFO] [1791213646.347246712] [marc_participant]: [SUB] CCTV rig_2_b
+[INFO] [1791213646.348624225] [marc_participant]: [SUB] CCTV rig_2_c
+[INFO] [1791213646.350143788] [marc_participant]: [SUB] CCTV rig_3_b
+[INFO] [1791213646.351529050] [marc_participant]: [SUB] CCTV rig_3_c
+[INFO] [1791213646.352935782] [marc_participant]: [SUB] CCTV rig_7_a
+[00:20:47] participant_app INFO: [warmup] CCTV ready: 6 cameras in 8.2s
+[00:20:47] participant_app INFO: [Stage1] round 1/33: "Find the mug on the picnic table."
+[00:20:50] participant_app INFO: [ablation] G4 복제 resolve 대조: 1회 중 불일치 0회
+[00:20:50] participant_app INFO: [ablation] G4 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791213650.961387905] [marc_participant]: [SUBMIT] grounding (msg 301, seq=1)
+[00:20:50] participant_app INFO: [Score] round 1: total=58.096149518628316
+[INFO] [1791213650.983324304] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:20:50] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213653.044034780] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:20:53] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:20:53] participant_app INFO: [Stage1] round 2/33: "Find the tumbler on the bench."
+[00:20:54] vla_grounding.yolo_adapter INFO: [yolo-probe] rescued 3 low-conf target 'tumbler' on rig_1_a (best=0.0256)
+[00:20:54] participant_app INFO: [grounding] pair 후보 12개(카메라 3대) 경쟁: [('rig_1_a', 0.0, 0.0, 0.026), ('rig_1_a', 0.0, 0.0, 0.026), ('rig_1_a', 0.706, 0.0, 0.026), ('rig_1_a', 0.0, 0.0, 0.005), ('rig_1_a', 0.0, 0.0, 0.005), ('rig_1_a', 0.722, 0.0, 0.005), ('rig_1_a', 0.0, 0.0, 0.003), ('rig_1_a', 0.0, 0.0, 0.003), ('rig_1_a', 0.716, 0.0, 0.003), ('rig_3_c', 0.032, 0.0, 0.573), ('rig_7_a', 0.0, 0.0, 0.843), ('rig_7_a', 0.0, 0.0, 0.539)]
+[00:20:54] participant_app INFO: [ablation] G4 복제 resolve 대조: 2회 중 불일치 0회
+[00:20:54] participant_app INFO: [ablation] G4 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_2_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791213654.877661871] [marc_participant]: [SUBMIT] grounding (msg 301, seq=2)
+[00:20:54] participant_app INFO: [Score] round 2: total=59.09666411034993
+[INFO] [1791213654.891604115] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:20:54] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213656.948786771] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:20:56] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:20:56] participant_app INFO: [Stage1] round 3/33: "Find the tumbler near the fire hydrant in the parking lot."
+[00:20:58] participant_app INFO: [ablation] G4 복제 resolve 대조: 3회 중 불일치 0회
+[00:20:58] participant_app INFO: [ablation] G4 cam=rig_7_a gate=landmark+area ['rig_7_a']
+[INFO] [1791213658.590707565] [marc_participant]: [SUBMIT] grounding (msg 301, seq=3)
+[00:20:58] participant_app INFO: [Score] round 3: total=59.00234402681672
+[INFO] [1791213658.652995334] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:20:58] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213660.667634272] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:00] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:00] participant_app INFO: [Stage1] round 4/33: "Find the sunblock beside the picnic table."
+[00:21:02] participant_app INFO: [ablation] G4 복제 resolve 대조: 4회 중 불일치 0회
+[00:21:02] participant_app INFO: [ablation] G4 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791213662.533013473] [marc_participant]: [SUBMIT] grounding (msg 301, seq=4)
+[00:21:02] participant_app INFO: [Score] round 4: total=98.08155326027642
+[INFO] [1791213662.592291036] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:02] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213664.673278506] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:04] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:04] participant_app INFO: [Stage1] round 5/33: "Find the umbrella beside the vending machine."
+[00:21:06] participant_app INFO: [ablation] G4 복제 resolve 대조: 5회 중 불일치 0회
+[00:21:06] participant_app INFO: [ablation] G4 cam=rig_2_c gate=landmark ['rig_2_c']
+[INFO] [1791213666.389040186] [marc_participant]: [SUBMIT] grounding (msg 301, seq=5)
+[00:21:06] participant_app INFO: [Score] round 5: total=99.0939156070171
+[INFO] [1791213666.422398734] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:06] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213668.506866636] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:08] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:08] participant_app INFO: [Stage1] round 6/33: "Find the umbrella next to the trash can."
+[00:21:10] participant_app INFO: [grounding] pair 후보 4개(카메라 4대) 경쟁: [('rig_2_b', 0.0, 1.0, 0.401), ('rig_2_c', 0.13, 1.0, 0.824), ('rig_3_c', 0.653, 1.0, 0.6), ('rig_7_a', 0.0, 1.0, 0.202)]
+[00:21:10] participant_app INFO: [ablation] G4 복제 resolve 대조: 6회 중 불일치 0회
+[00:21:10] participant_app INFO: [ablation] G4 cam=rig_3_c gate=landmark ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791213670.168176872] [marc_participant]: [SUBMIT] grounding (msg 301, seq=6)
+[00:21:10] participant_app INFO: [Score] round 6: total=35.0
+[INFO] [1791213670.252079776] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:10] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213672.332913018] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:12] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:12] participant_app INFO: [Stage1] round 7/33: "Find the pencil case near the picnic table."
+[00:21:13] participant_app INFO: [ablation] G4 복제 resolve 대조: 7회 중 불일치 0회
+[00:21:13] participant_app INFO: [ablation] G4 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791213673.843606405] [marc_participant]: [SUBMIT] grounding (msg 301, seq=7)
+[00:21:13] participant_app INFO: [Score] round 7: total=35.0
+[INFO] [1791213673.896464386] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:13] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213675.898682111] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:15] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:15] participant_app INFO: [Stage1] round 8/33: "Find the umbrella dropped in the empty parking space."
+[00:21:17] participant_app INFO: [ablation] G4 복제 resolve 대조: 8회 중 불일치 0회
+[00:21:17] participant_app INFO: [ablation] G4 cam=rig_7_a gate=area ['rig_7_a']
+[INFO] [1791213677.541132293] [marc_participant]: [SUBMIT] grounding (msg 301, seq=8)
+[00:21:17] participant_app INFO: [Score] round 8: total=35.0
+[INFO] [1791213677.557576391] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:17] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213679.554548875] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:19] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:19] participant_app INFO: [Stage1] round 9/33: "Find the tumbler dropped in the empty parking space."
+[00:21:21] participant_app INFO: [ablation] G4 복제 resolve 대조: 9회 중 불일치 0회
+[00:21:21] participant_app INFO: [ablation] G4 cam=rig_7_a gate=area ['rig_7_a']
+[INFO] [1791213681.387714353] [marc_participant]: [SUBMIT] grounding (msg 301, seq=9)
+[00:21:21] participant_app INFO: [Score] round 9: total=75.0
+[INFO] [1791213681.407285107] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:21] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213683.470103520] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:23] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:23] participant_app INFO: [Stage1] round 10/33: "Find the tumbler on the road next to the taxi."
+[00:21:24] participant_app INFO: [ablation] G4 복제 resolve 대조: 10회 중 불일치 0회
+[00:21:24] participant_app INFO: [ablation] G4 cam=rig_3_c gate=landmark ['rig_3_c']
+[INFO] [1791213684.990034754] [marc_participant]: [SUBMIT] grounding (msg 301, seq=10)
+[00:21:25] participant_app INFO: [Score] round 10: total=96.76993667300165
+[INFO] [1791213685.022557259] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:25] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213687.096341319] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:27] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:27] participant_app INFO: [Stage1] round 11/33: "Find the umbrella on the road next to the taxi."
+[00:21:28] participant_app INFO: [ablation] G4 복제 resolve 대조: 11회 중 불일치 0회
+[00:21:28] participant_app INFO: [ablation] G4 cam=rig_3_c gate=landmark ['rig_3_c']
+[INFO] [1791213688.679155511] [marc_participant]: [SUBMIT] grounding (msg 301, seq=11)
+[00:21:28] participant_app INFO: [Score] round 11: total=56.76955069549104
+[INFO] [1791213688.743380469] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:28] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213690.821568384] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:30] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:30] participant_app INFO: [Stage1] round 12/33: "After working out I grabbed a drink from the machine and left my umbrella standing next to it."
+[00:21:32] participant_app INFO: [ablation] G4 복제 resolve 대조: 12회 중 불일치 0회
+[00:21:32] participant_app INFO: [ablation] G4 cam=rig_2_c gate=landmark ['rig_2_c']
+[INFO] [1791213692.520194561] [marc_participant]: [SUBMIT] grounding (msg 301, seq=12)
+[00:21:32] participant_app INFO: [Score] round 12: total=99.09573284759125
+[INFO] [1791213692.557057083] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:32] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213694.630935698] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:34] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:34] participant_app INFO: [Stage1] round 13/33: "I was taking notes at an outdoor table and left my pencil case behind."
+[00:21:36] participant_app INFO: [ablation] G4 복제 resolve 대조: 13회 중 불일치 0회
+[00:21:36] participant_app INFO: [ablation] G4 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791213696.466838535] [marc_participant]: [SUBMIT] grounding (msg 301, seq=13)
+[00:21:36] participant_app INFO: [Score] round 13: total=25.0
+[INFO] [1791213696.484216475] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:36] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213698.555774642] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:38] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:38] participant_app INFO: [Stage1] round 14/33: "I was reading with a coffee at an outdoor table and left my mug there."
+[00:21:40] vla_grounding.yolo_adapter INFO: [yolo-probe] rescued 2 low-conf target 'mug' on rig_1_a (best=0.0015)
+[00:21:40] participant_app INFO: [ablation] G4 복제 resolve 대조: 14회 중 불일치 0회
+[00:21:40] participant_app INFO: [ablation] G4 cam=rig_1_a gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791213700.504194007] [marc_participant]: [SUBMIT] grounding (msg 301, seq=14)
+[00:21:40] participant_app INFO: [Score] round 14: total=98.07786491124065
+[INFO] [1791213700.580260524] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:40] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213702.666855683] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:42] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:42] participant_app INFO: [Stage1] round 15/33: "I was resting in the sun at the park and left the sunblock I had been using."
+[00:21:44] participant_app INFO: [ablation] G4 복제 resolve 대조: 15회 중 불일치 0회
+[00:21:44] participant_app INFO: [ablation] G4 cam=rig_1_a gate=area ['rig_1_a']
+[INFO] [1791213704.309259895] [marc_participant]: [SUBMIT] grounding (msg 301, seq=15)
+[00:21:44] participant_app INFO: [Score] round 15: total=98.08441565983574
+[INFO] [1791213704.323153228] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:44] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213706.409967256] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:46] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:46] participant_app INFO: [Stage1] round 16/33: "After grabbing a drink from the vending machine I left my umbrella propped against its side."
+[00:21:48] participant_app INFO: [ablation] G4 복제 resolve 대조: 16회 중 불일치 0회
+[00:21:48] participant_app INFO: [ablation] G4 cam=rig_2_c gate=landmark ['rig_2_c']
+[INFO] [1791213708.374348202] [marc_participant]: [SUBMIT] grounding (msg 301, seq=16)
+[00:21:48] participant_app INFO: [Score] round 16: total=99.10380605846434
+[INFO] [1791213708.426203159] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:48] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213710.513728414] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:50] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:50] participant_app INFO: [Stage1] round 17/33: "I stopped to throw something in the bin and left my umbrella leaning against the trash can."
+[00:21:52] participant_app INFO: [grounding] pair 후보 3개(카메라 3대) 경쟁: [('rig_2_b', 0.0, 0.0, 0.544), ('rig_2_c', 0.13, 0.0, 0.822), ('rig_3_c', 0.654, 0.0, 0.627)]
+[00:21:52] participant_app INFO: [ablation] G4 복제 resolve 대조: 17회 중 불일치 0회
+[00:21:52] participant_app INFO: [ablation] G4 cam=rig_3_c gate=landmark ['rig_1_a', 'rig_2_b', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791213712.520123538] [marc_participant]: [SUBMIT] grounding (msg 301, seq=17)
+[00:21:52] participant_app INFO: [Score] round 17: total=35.0
+[INFO] [1791213712.533605400] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:52] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213714.619859030] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:54] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:54] participant_app INFO: [Stage1] round 18/33: "I think I dropped my tumbler on the ground as I got out of my car in the parking lot."
+[00:21:56] participant_app INFO: [ablation] G4 복제 resolve 대조: 18회 중 불일치 0회
+[00:21:56] participant_app INFO: [ablation] G4 cam=rig_7_a gate=landmark+area ['rig_7_a']
+[INFO] [1791213716.322574750] [marc_participant]: [SUBMIT] grounding (msg 301, seq=18)
+[00:21:56] participant_app INFO: [Score] round 18: total=75.0
+[INFO] [1791213716.366233772] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:21:56] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213718.455852035] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:58] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:21:58] participant_app INFO: [Stage1] round 19/33: "Getting out of my car I dropped my umbrella in the empty space next to it; find it in the parking lot."
+[00:21:59] participant_app INFO: [ablation] G4 복제 resolve 대조: 19회 중 불일치 0회
+[00:21:59] participant_app INFO: [ablation] G4 cam=rig_7_a gate=landmark+area ['rig_7_a']
+[INFO] [1791213719.971853019] [marc_participant]: [SUBMIT] grounding (msg 301, seq=19)
+[00:22:00] participant_app INFO: [Score] round 19: total=35.0
+[INFO] [1791213720.029643904] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:00] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213722.044090832] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:02] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:02] participant_app INFO: [Stage1] round 20/33: "Find the person sitting on top of the trash can in the parking lot."
+[00:22:04] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:04] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[00:22:04] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:04] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:04] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:04] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:04] participant_app INFO: [ablation] G4 복제 resolve 대조: 20회 중 불일치 0회
+[00:22:04] participant_app INFO: [ablation] G4 cam=rig_7_a gate=landmark+area ['rig_7_a']
+[INFO] [1791213724.566196625] [marc_participant]: [SUBMIT] grounding (msg 301, seq=20)
+[00:22:04] participant_app INFO: [Score] round 20: total=98.2716949878371
+[INFO] [1791213724.666627509] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:04] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213726.725074435] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:06] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:06] participant_app INFO: [Stage1] round 21/33: "Find the person sitting on top of the vending machine."
+[00:22:08] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:08] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[00:22:08] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:08] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:08] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:08] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:08] participant_app INFO: [ablation] G4 복제 resolve 대조: 21회 중 불일치 0회
+[00:22:08] participant_app INFO: [ablation] G4 cam=rig_2_c gate=landmark ['rig_2_c']
+[INFO] [1791213728.566976361] [marc_participant]: [SUBMIT] grounding (msg 301, seq=21)
+[00:22:08] participant_app INFO: [Score] round 21: total=98.8769101299343
+[INFO] [1791213728.645511299] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:08] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213730.722478042] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:10] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:10] participant_app INFO: [Stage1] round 22/33: "Find the person lying face-down on the bench near the taxi."
+[00:22:12] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:12] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[00:22:12] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:12] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:12] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:12] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:12] participant_app INFO: [grounding] pair 후보 11개(카메라 4대) 경쟁: [('rig_1_a', 0.758, 0.0, 0.949), ('rig_1_a', 0.0, 0.0, 0.949), ('rig_1_a', 0.053, 0.0, 0.949), ('rig_1_a', 0.0, 0.0, 0.944), ('rig_1_a', 0.0, 0.0, 0.944), ('rig_1_a', 0.0, 0.0, 0.944), ('rig_2_b', 0.011, 0.0, 0.966), ('rig_2_b', 0.0, 0.0, 0.966), ('rig_3_c', 1.0, 1.0, 0.952), ('rig_7_a', 0.0, 0.0, 0.97), ('rig_7_a', 0.0, 0.0, 0.963)]
+[00:22:12] participant_app INFO: [ablation] G4 복제 resolve 대조: 22회 중 불일치 0회
+[00:22:12] participant_app INFO: [ablation] G4 cam=rig_3_c gate=landmark ['rig_1_a', 'rig_2_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791213732.551261306] [marc_participant]: [SUBMIT] grounding (msg 301, seq=22)
+[00:22:12] participant_app INFO: [Score] round 22: total=40.31342813094456
+[INFO] [1791213732.605859125] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:12] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213734.682531846] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:14] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:14] participant_app INFO: [Stage1] round 23/33: "Find the person lying on top of the picnic table."
+[00:22:16] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:17] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[00:22:17] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:17] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:17] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:17] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:17] participant_app INFO: [grounding] pair 후보 4개(카메라 2대) 경쟁: [('rig_1_a', 0.0, 0.0, 0.95), ('rig_1_a', 0.0, 0.0, 0.944), ('rig_3_b', 0.0, 0.0, 0.982), ('rig_3_b', 1.0, 1.0, 0.891)]
+[00:22:17] participant_app INFO: [ablation] G4 복제 resolve 대조: 23회 중 불일치 0회
+[00:22:17] participant_app INFO: [ablation] G4 cam=rig_3_b gate=landmark ['rig_1_a', 'rig_3_b']
+[INFO] [1791213737.227062207] [marc_participant]: [SUBMIT] grounding (msg 301, seq=23)
+[00:22:17] participant_app INFO: [Score] round 23: total=97.97803838585146
+[INFO] [1791213737.296182399] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:17] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213739.347330704] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:19] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:19] participant_app INFO: [Stage1] round 24/33: "Find the person collapsed on the parking lot floor."
+[00:22:20] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:20] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[00:22:21] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:21] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:21] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:21] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:21] participant_app INFO: [ablation] G4 복제 resolve 대조: 24회 중 불일치 0회
+[00:22:21] participant_app INFO: [ablation] G4 cam=rig_7_a gate=area ['rig_7_a']
+[INFO] [1791213741.138318744] [marc_participant]: [SUBMIT] grounding (msg 301, seq=24)
+[00:22:21] participant_app INFO: [Score] round 24: total=98.74889157324803
+[INFO] [1791213741.222541069] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:21] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213743.278452220] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:23] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:23] participant_app INFO: [Stage1] round 25/33: "Find the person lying face-down and motionless in the parking lot."
+[00:22:24] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:24] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[00:22:24] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:25] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:25] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:25] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:25] participant_app INFO: [ablation] G4 복제 resolve 대조: 25회 중 불일치 0회
+[00:22:25] participant_app INFO: [ablation] G4 cam=rig_7_a gate=area ['rig_7_a']
+[INFO] [1791213745.118352548] [marc_participant]: [SUBMIT] grounding (msg 301, seq=25)
+[00:22:25] participant_app INFO: [Score] round 25: total=98.97730005839267
+[INFO] [1791213745.157886342] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:25] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213747.222306884] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:27] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:27] participant_app INFO: [Stage1] round 26/33: "Find the person fallen on the ground next to the toppled bicycle."
+[00:22:28] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:28] participant_app INFO: [pose-kp] rig_2_b: 6/6 person detections got an ankle column
+[00:22:28] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:28] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:29] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:29] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:29] participant_app INFO: [grounding] pair 후보 9개(카메라 4대) 경쟁: [('rig_1_a', 0.0, 1.0, 0.947), ('rig_1_a', 0.0, 1.0, 0.947), ('rig_1_a', 0.0, 1.0, 0.943), ('rig_1_a', 0.0, 1.0, 0.943), ('rig_3_b', 0.822, 0.0, 0.982), ('rig_3_b', 0.0, 1.0, 0.892), ('rig_3_c', 0.449, 1.0, 0.954), ('rig_7_a', 0.0, 1.0, 0.969), ('rig_7_a', 0.726, 0.0, 0.963)]
+[00:22:29] participant_app INFO: [ablation] G4 복제 resolve 대조: 26회 중 불일치 0회
+[00:22:29] participant_app INFO: [ablation] G4 cam=rig_3_b gate=landmark ['rig_1_a', 'rig_2_c', 'rig_3_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791213749.088819314] [marc_participant]: [SUBMIT] grounding (msg 301, seq=26)
+[00:22:29] participant_app INFO: [Score] round 26: total=99.74794100051989
+[INFO] [1791213749.103087907] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:29] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213751.168180189] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:31] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:31] participant_app INFO: [Stage1] round 27/33: "Find the person bent over and motionless near the trash can in the park rest area."
+[00:22:32] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:32] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[00:22:32] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:32] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:32] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:32] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:32] participant_app INFO: [ablation] G4 복제 resolve 대조: 27회 중 불일치 0회
+[00:22:32] participant_app INFO: [ablation] G4 cam=rig_1_a gate=landmark+area ['rig_1_a']
+[INFO] [1791213752.905919113] [marc_participant]: [SUBMIT] grounding (msg 301, seq=27)
+[00:22:32] participant_app INFO: [Score] round 27: total=47.358619034987
+[INFO] [1791213752.959361788] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:32] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213755.033102713] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:35] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:35] participant_app INFO: [Stage1] round 28/33: "People are relaxing at the park and one is even lying on the grass; find the one near the trash can who is bent over and not moving and actually needs help."
+[00:22:36] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:36] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[00:22:36] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:36] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:36] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:36] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:36] participant_app INFO: [ablation] G4 복제 resolve 대조: 28회 중 불일치 0회
+[00:22:36] participant_app INFO: [ablation] G4 cam=rig_1_a gate=landmark+area ['rig_1_a']
+[INFO] [1791213756.738951416] [marc_participant]: [SUBMIT] grounding (msg 301, seq=28)
+[00:22:36] participant_app INFO: [Score] round 28: total=47.35201323723556
+[INFO] [1791213756.819348835] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:36] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213758.898682266] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:38] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:38] participant_app INFO: [Stage1] round 29/33: "In the parking lot a person is down next to a bicycle and looks like they had an accident; find them."
+[00:22:40] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:40] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[00:22:40] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:40] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:40] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:40] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:40] participant_app INFO: [ablation] G4 복제 resolve 대조: 29회 중 불일치 0회
+[00:22:40] participant_app INFO: [ablation] G4 cam=rig_7_a gate=landmark+area ['rig_7_a']
+[INFO] [1791213760.863095340] [marc_participant]: [SUBMIT] grounding (msg 301, seq=29)
+[00:22:40] participant_app INFO: [Score] round 29: total=98.97362770620352
+[INFO] [1791213760.947482784] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:40] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213763.011661710] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:43] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:43] participant_app INFO: [Stage1] round 30/33: "Someone is up where people should not be; find the person who climbed on top of the drink machine."
+[00:22:44] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:44] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[00:22:44] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:44] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:44] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:44] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:44] participant_app INFO: [ablation] G4 복제 resolve 대조: 30회 중 불일치 0회
+[00:22:44] participant_app INFO: [ablation] G4 cam=rig_2_c gate=landmark ['rig_2_c']
+[INFO] [1791213764.910860620] [marc_participant]: [SUBMIT] grounding (msg 301, seq=30)
+[00:22:44] participant_app INFO: [Score] round 30: total=98.87367087963452
+[INFO] [1791213764.974843791] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:44] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213767.048841930] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:47] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:47] participant_app INFO: [Stage1] round 31/33: "In the parking lot, find the person who climbed up and is sitting on top of the trash can."
+[00:22:48] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:48] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[00:22:48] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:48] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:48] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:48] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:48] participant_app INFO: [ablation] G4 복제 resolve 대조: 31회 중 불일치 0회
+[00:22:48] participant_app INFO: [ablation] G4 cam=rig_7_a gate=landmark+area ['rig_7_a']
+[INFO] [1791213768.980478640] [marc_participant]: [SUBMIT] grounding (msg 301, seq=31)
+[00:22:49] participant_app INFO: [Score] round 31: total=98.26962805813096
+[INFO] [1791213769.020847014] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:49] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213771.098375127] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:51] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:51] participant_app INFO: [Stage1] round 32/33: "Near the taxi, find the person lying down on top of the bench."
+[00:22:52] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:52] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[00:22:52] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:52] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:53] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:53] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:53] participant_app INFO: [grounding] pair 후보 10개(카메라 4대) 경쟁: [('rig_1_a', 0.76, 0.0, 0.949), ('rig_1_a', 0.0, 0.0, 0.949), ('rig_1_a', 0.055, 0.0, 0.949), ('rig_1_a', 0.0, 0.0, 0.945), ('rig_1_a', 0.0, 0.0, 0.945), ('rig_1_a', 0.0, 0.0, 0.945), ('rig_2_b', 0.0, 0.0, 0.952), ('rig_2_b', 1.0, 0.0, 0.952), ('rig_3_c', 1.0, 1.0, 0.953), ('rig_7_a', 0.0, 0.0, 0.969)]
+[00:22:53] participant_app INFO: [ablation] G4 복제 resolve 대조: 32회 중 불일치 0회
+[00:22:53] participant_app INFO: [ablation] G4 cam=rig_3_c gate=landmark ['rig_1_a', 'rig_2_b', 'rig_3_c', 'rig_7_a']
+[INFO] [1791213773.069192088] [marc_participant]: [SUBMIT] grounding (msg 301, seq=32)
+[00:22:53] participant_app INFO: [Score] round 32: total=89.20999611414254
+[INFO] [1791213773.158128317] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:53] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213775.236243110] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:55] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE1_RUN
+[00:22:55] participant_app INFO: [Stage1] round 33/33: "Several people are in the parking lot; one is completely face-down and immobile; find the most critical one."
+[00:22:56] participant_app INFO: [pose-kp] rig_1_a: 5/5 person detections got an ankle column
+[00:22:56] participant_app INFO: [pose-kp] rig_2_b: 5/5 person detections got an ankle column
+[00:22:56] participant_app INFO: [pose-kp] rig_2_c: 2/2 person detections got an ankle column
+[00:22:56] participant_app INFO: [pose-kp] rig_3_b: 2/2 person detections got an ankle column
+[00:22:56] participant_app INFO: [pose-kp] rig_3_c: 2/3 person detections got an ankle column
+[00:22:57] participant_app INFO: [pose-kp] rig_7_a: 4/4 person detections got an ankle column
+[00:22:57] participant_app INFO: [ablation] G4 복제 resolve 대조: 33회 중 불일치 0회
+[00:22:57] participant_app INFO: [ablation] G4 cam=rig_7_a gate=area ['rig_7_a']
+[INFO] [1791213777.023772383] [marc_participant]: [SUBMIT] grounding (msg 301, seq=33)
+[00:22:57] participant_app INFO: [Score] round 33: total=98.98274510322572
+[INFO] [1791213777.041300240] [marc_participant]: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[00:22:57] participant_app INFO: [STATE] STAGE1_RUN -> STAGE1_SCORE
+[INFO] [1791213779.123379448] [marc_participant]: [STATE] STAGE1_SCORE -> STAGE2_RUN
+[00:22:59] participant_app INFO: [STATE] STAGE1_SCORE -> STAGE2_RUN
+[00:22:59] participant_app INFO: [Stage2] task: "Pick up the tumbler dropped on the parking lot floor and bring it to the owner." (limit 600s)
+[00:22:59] participant_app INFO: [Stage2] owner_position(runtime-provided)=(-54.56651, 142.79308)
+[00:23:01] participant_app INFO: [ablation] G4 복제 resolve 대조: 34회 중 불일치 0회
+[00:23:01] participant_app INFO: [ablation] G4 cam=rig_7_a gate=area ['rig_7_a']
+[INFO] [1791213781.051206840] [marc_participant]: [SUBMIT] stage2 grounding (msg 311, seq=34)
+[00:23:01] participant_app INFO: [Stage2] submitted grounding target=(-43.97777919521988, 121.6263187782308), delivery point=(-54.56651, 142.79308)
+[00:23:01] participant_app INFO: [Stage2] reveal received -- score=75.01075225402039, type=tumbler, center=[-44.37683, 121.1243, 16.67988], r=2.0
+[00:23:01] participant_app INFO: [Stage2] reveal logged -> /home/parktaejeong/ablation_test/results_ablation/G4_r5.reveals.jsonl
+[00:23:01] participant_app INFO: [Stage2] navigation start -- collect=(-44.37683, 121.1243) deliver=(-54.56651, 142.79308) (timeout 1800s)
+[00:23:01] participant_app INFO: [Stage2] lidar mount offset from tf (arm_base + ARM_BASE_FWD): (0.302, 0.000)
+[00:23:01] participant_app INFO: [Stage2] camera mount transform acquired (arm_base + ARM_BASE_FWD) -- depth ghost-veto active
+[00:23:01] participant_app INFO: [Stage2] arm stow -> HOME (lower CoG, tip-over prevention)
+[00:23:01] participant_app INFO: [Stage2] leg1 -> object (-44.38, 121.12) front standoff (-44.95, 121.2)
+[00:23:01] participant_app INFO: [Stage2] occupancy received: 3939x3815 res=0.050 origin=(-185.2, 64.9)
+[00:23:01] participant_app INFO: [Stage2] occupancy A* path 4 waypoints
+[00:23:01] participant_app INFO: [STAGE2] pose=(-64.69, 123.65, yaw=48deg) dist=19.89m wp 0/4=(-59.0, 129.5) v=0.80 w=-0.02
+[INFO] [1791213781.916506736] [marc_participant]: [SUB] robot/lidar/points
+[INFO] [1791213781.917330547] [marc_participant]: [SUB] robot/base_camera/depth/image
+[INFO] [1791213783.138729084] [marc_participant]: [SHUTDOWN] done
