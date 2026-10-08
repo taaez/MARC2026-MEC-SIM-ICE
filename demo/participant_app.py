@@ -149,7 +149,7 @@ MPPI_STAGE_HOLD_S = 15.0
 # a cell's log-odds, so momentary returns clear by themselves; only confirmed cells are lethal.
 # With it the lidar discs are not used by MPPI (disc stabilization / freezing below then only
 # apply to the stall-memory discs). Legacy keeps the disc layer unchanged.
-MPPI_OCC_GRID = True
+MPPI_OCC_GRID = os.environ.get("MARC_MPPI_OCC_GRID", "1") != "0"   # 0 = lidar discs (ablation only)
 MPPI_DISC_ADD_BUILDS = 2
 MPPI_DISC_DROP_BUILDS = 5
 MPPI_DISC_KEY_M = 0.1                 # disc identity = its centre rounded to this grid

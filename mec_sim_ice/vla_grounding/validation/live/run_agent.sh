@@ -11,7 +11,7 @@ exec docker run --name live-agent --rm --gpus all --network host \
   -e MARC_TEAM_ID=mec_sim_ice -e MARC_TOKEN=PASTE_YOUR_TOKEN_HERE \
   -e ROS_DOMAIN_ID=0 -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
   -e MARC_DISABLE_DINO_FALLBACK=1 -e MARC_LOG_LEVEL=INFO \
-  -e MARC_LOCAL_PLANNER="${MARC_LOCAL_PLANNER:-legacy}" -e SURVEY_PART="${SURVEY_PART:-0/1}" -e SURVEY_BUDGET_S="${SURVEY_BUDGET_S:-560}" -e SURVEY_SEEN="${SURVEY_SEEN:-}" -e LIDAR_DEBUG="${LIDAR_DEBUG:-0}" -e ABL_OFF="$ABL" -e GRASP_OFF="$GRASP" -e LIVE_OUT=/agent/live_out \
+  -e MARC_LOCAL_PLANNER="${MARC_LOCAL_PLANNER:-legacy}" -e SURVEY_PART="${SURVEY_PART:-0/1}" -e SURVEY_BUDGET_S="${SURVEY_BUDGET_S:-560}" -e SURVEY_SEEN="${SURVEY_SEEN:-}" -e LIDAR_DEBUG="${LIDAR_DEBUG:-0}" -e MARC_MPPI_OCC_GRID="${MARC_MPPI_OCC_GRID:-1}" -e ABL_OFF="$ABL" -e GRASP_OFF="$GRASP" -e LIVE_OUT=/agent/live_out \
   -e MARC_SCORE_LOG=/agent/live_out/scores.jsonl -e MARC_REVEAL_LOG=/agent/live_out/stage2_reveals.jsonl \
   -v "$ROOT/marc_sdk:/agent/marc_sdk:ro" -v "$ROOT/demo:/agent/demo:ro" \
   -v "$ROOT/manipulation:/agent/manipulation:ro" -v "$ROOT/mec_sim_ice:/agent/mec_sim_ice:ro" \
