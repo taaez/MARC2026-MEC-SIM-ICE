@@ -1,0 +1,4 @@
+# 9b (2026-10-08): round-9 occupancy grid + (1) camera floor drops a cell to L_MIN at once, (2) navfield samples the grid at cell centres (obstacle density matched to the old disc painting). MPPI, rt03 + rt04 only. Run under gnome-session-inhibit.
+# problem tag ABL_OFF GRASP_OFF planner
+rt03_vending_umbrella  rt03_r9b_mppi   - - mppi
+rt04_taxi_tumbler      rt04_r9b_mppi   - - mppi

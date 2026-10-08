@@ -1,0 +1,5 @@
+# 10th round (2026-10-08): same code as 9b (round-9 occupancy grid + camera-floor override + centre sampling). MPPI rt03 / rt04 / rt04b first (the contribution problems); rt01 / rt02 mppi and legacy to be filled later if this code is adopted. Run under gnome-session-inhibit.
+# problem tag ABL_OFF GRASP_OFF planner
+rt03_vending_umbrella  rt03_r10_mppi   - - mppi
+rt04_taxi_tumbler      rt04_r10_mppi   - - mppi
+rt04b_taxi_umbrella    rt04b_r10_mppi  - - mppi

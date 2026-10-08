@@ -1,0 +1,7 @@
+# 9th round (2026-10-08): final code 3c5f4f5 + MPPI obstacles from a log-odds occupancy grid (occupancy_layer.py: hit +0.85, pass-through -0.4, clamp [-2, 3.5]) with soft costs (nav_field OCC_L_*: lethal only at L >= 2.5, cost from L 0.4). MPPI only -- legacy code unchanged (its rounds 6-8 stand). Run under gnome-session-inhibit.
+# problem tag ABL_OFF GRASP_OFF planner
+rt01_parking_tumbler   rt01_r9_mppi    - - mppi
+rt02_parking_umbrella  rt02_r9_mppi    - - mppi
+rt03_vending_umbrella  rt03_r9_mppi    - - mppi
+rt04_taxi_tumbler      rt04_r9_mppi    - - mppi
+rt04b_taxi_umbrella    rt04b_r9_mppi   - - mppi
