@@ -52,6 +52,17 @@ ON_TARGET_PROBE_CONF = 0.001
 SMALL_TARGET_MIN_CONF = {"tumbler": 0.20, "pencilcase": 0.20, "umbrella": 0.20}
 
 
+def _yolo_conf_floor(min_conf: float, min_conf_by_class: dict) -> float:
+    """YOLO 내부 컷으로 넘길 값 = 기본 문턱과 클래스별 문턱 중 가장 낮은 값.
+
+    ultralytics 는 conf 를 안 넘기면 기본 0.25 로 먼저 잘라서, 그보다 낮은
+    클래스별 문턱(SMALL_TARGET_MIN_CONF)까지 박스가 도달하지 못한다. 컷을
+    내려도 클래스별 NMS 는 높은 점수 박스를 먼저 남기므로 기존 문턱 이상의
+    박스 집합은 그대로이고, 늘어난 박스는 뒤에서 클래스별 문턱으로 다시 거른다.
+    """
+    return min([min_conf, *(min_conf_by_class or {}).values()])
+
+
 def detections_from_result(result, min_conf: float = 0.25,
                            min_conf_by_class: dict = SMALL_TARGET_MIN_CONF) -> list:
     """ultralytics Results(단일 이미지) → [Detection, ...].
@@ -79,19 +90,22 @@ def infer_cameras(model, images_bgr: dict, min_conf: float = 0.25,
     """{cam_id: BGR ndarray} → {cam_id: [Detection, ...]}.
 
     ``model`` 은 plain ultralytics YOLO 또는 load_detector() 가 돌려준
-    RoutedDetector. 라우팅 경로에서는 conf/imgsz 가 로드 시점에 이미
-    고정돼 있으므로 min_conf/imgsz/min_conf_by_class 인자는 쓰지 않는다
-    (소형 3클래스의 confidence 는 B 와 스케일이 달라 문턱을 다시 걸면 소형
-    검출을 부당하게 잘라낸다 — predict.py 도입부 'WHY ROUTING' 참조).
-    B 단독 경로에서만 클래스별 문턱(SMALL_TARGET_MIN_CONF)이 적용된다.
+    RoutedDetector. 두 경로 모두 B 담당 클래스에 min_conf/min_conf_by_class
+    를 적용한다. 라우팅 경로의 소형 3클래스는 서브모델 자기 문턱(small_conf)
+    을 이미 통과했으므로 다시 걸지 않는다 (confidence 스케일이 B 와 달라
+    문턱을 다시 걸면 소형 검출을 부당하게 잘라낸다 — predict.py 도입부
+    'WHY ROUTING' 참조). 라우팅 경로의 imgsz 는 로드 시점에 고정돼 있다.
     """
     out = {}
     routed = hasattr(model, "small_to_det")     # RoutedDetector 덕타이핑
     for cam_id, img in images_bgr.items():
         if routed:
-            out[cam_id] = detections_from_routed(model, img)
+            out[cam_id] = detections_from_routed(model, img, min_conf=min_conf,
+                                                 min_conf_by_class=min_conf_by_class)
         else:
-            results = model(img, imgsz=imgsz, verbose=False)
+            results = model(img, imgsz=imgsz,
+                            conf=_yolo_conf_floor(min_conf, min_conf_by_class),
+                            verbose=False)
             out[cam_id] = detections_from_result(results[0], min_conf=min_conf,
                                                  min_conf_by_class=min_conf_by_class)
     return out
@@ -251,7 +265,11 @@ def load_detector(weights: str, conf: float = 0.25, imgsz: int = 1280,
     # batch=4: 8GB GPU 에서 DINO/pose 모델과 동시 상주하므로 기본 8 대신
     # 절반으로. 타일 6장/프레임이라 호출당 2배치 — 속도 손해는 미미하다.
     small = TiledPredictor(small_weights, tiling, conf=small_conf, batch=4)
-    det = RoutedDetector(weights, small, conf=conf, imgsz=imgsz)
+    # B 의 내부 컷은 클래스별 문턱까지 내려 두고, 실제 판정은 detections_from_routed
+    # (min_conf/min_conf_by_class) 와 predict_result(conf) 가 한다.
+    det = RoutedDetector(weights, small,
+                         conf=_yolo_conf_floor(conf, SMALL_TARGET_MIN_CONF),
+                         imgsz=imgsz)
     _log.info("[yolo] routed B+small (small_conf=%.2f, %s)",
               small_conf, os.path.basename(os.path.dirname(
                   os.path.dirname(small_weights))))
@@ -292,23 +310,40 @@ def predict_result(model, img, imgsz: int = 1280, conf: float = 0.35):
     """단일 프레임 추론 → .boxes/.names 를 가진 결과 (plain/routed 공용).
 
     record_agent_vla 의 _best_box() 류가 그대로 동작하도록, 라우팅 경로에서는
-    RoutedResult 셸을 돌려준다. 라우팅의 conf 는 로드 시점 고정이라 여기
-    conf 인자는 plain 경로에서만 쓰인다.
+    RoutedResult 셸을 돌려준다. 라우팅 경로에서도 B 담당 클래스는 conf 로
+    자른다 (load_detector 가 B 내부 컷을 클래스별 문턱까지 내려 두었으므로).
+    클래스별 문턱은 여기선 적용하지 않는다 -- 기록용 경로의 기존 동작 유지.
     """
     if hasattr(model, "small_to_det"):
         boxes, scores, classes = model.predict(img)
-        return RoutedResult(boxes, scores, classes, _routed_names(model))
+        keep = [i for i, (s, c) in enumerate(zip(scores, classes))
+                if int(c) in model.owned or float(s) >= conf]
+        return RoutedResult(boxes[keep], scores[keep], classes[keep],
+                            _routed_names(model))
     return model.predict(img, imgsz=imgsz, conf=conf, verbose=False)[0]
 
 
-def detections_from_routed(model, img) -> list:
-    """RoutedDetector 한 프레임 → [Detection, ...] (infer_cameras 라우팅 경로)."""
+def detections_from_routed(model, img, min_conf: float = 0.25,
+                           min_conf_by_class: dict = SMALL_TARGET_MIN_CONF) -> list:
+    """RoutedDetector 한 프레임 → [Detection, ...] (infer_cameras 라우팅 경로).
+
+    B 담당 클래스에는 detections_from_result 와 같은 문턱을 건다. 소형 모델
+    담당 클래스(model.owned)는 서브모델 문턱을 이미 통과했으므로 그대로 둔다.
+    """
     names = _routed_names(model)
     boxes, scores, classes = model.predict(img)
-    return [Detection(label=names[int(c)],
-                      bbox=(float(b[0]), float(b[1]), float(b[2]), float(b[3])),
-                      score=float(s))
-            for b, s, c in zip(boxes, scores, classes)]
+    out = []
+    for b, s, c in zip(boxes, scores, classes):
+        cls_id, score = int(c), float(s)
+        label = names[cls_id]
+        if cls_id not in model.owned:
+            thr = (min_conf_by_class or {}).get(label, min_conf)
+            if score < thr:
+                continue
+        out.append(Detection(label=label,
+                             bbox=(float(b[0]), float(b[1]), float(b[2]), float(b[3])),
+                             score=score))
+    return out
 
 
 def verify_model_names(model, expected_classes) -> list:

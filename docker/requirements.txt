@@ -1,15 +1,20 @@
-# 버전은 2026-08 기준 안정 조합. transformers 는 Grounding DINO 를 지원하는 4.5x 대 고정.
+# 버전은 2026-08 기준 안정 조합. 2026-10-08 finals: 라이브 실험 이미지와 같은 버전으로 전부 고정
+# (범위 지정이면 주최측 빌드 시점의 최신판이 들어와 실험 환경과 달라질 수 있다).
+# placo 는 Dockerfile 의 apt 단계에서 설치되지만 여기서 버전을 고정한다.
+# transformers 는 Grounding DINO 를 지원하는 4.5x 대 고정.
 transformers==4.53.2
 accelerate==1.8.1
 huggingface_hub==0.33.4
-pillow>=10.0
-numpy<2.3
-opencv-python-headless>=4.9
+pillow==12.3.0
+numpy==2.2.6
+opencv-python-headless==5.0.0.93
+opencv-python==5.0.0.93      # ultralytics 가 끌어오는 비-headless 판도 같은 버전으로 고정
 ultralytics==8.3.170        # vla_grounding YOLO 파이프라인
-scipy                       # Stage2 깊이 파지 보정(_locate_object_by_depth)의 연결요소 라벨링 -- 없어도
+scipy==1.15.3               # Stage2 깊이 파지 보정(_locate_object_by_depth)의 연결요소 라벨링 -- 없어도
                             # ImportError 로 안전하게 폴백하지만, 없으면 디스트랙터 구분 없이 후보
                             # 픽셀 전체를 하나로 묶어버려 신규 파지 보정 기능이 사실상 무력화된다
 
 # 2026-08-29 제거: bitsandbytes(4bit), qwen-vl-utils -- vla_grounding/vlm_fallback.py
 # 가 VL(비전-언어) 모델 지원을 통째로 뺐다(텍스트 전용 소형 LM만 씀, 이미지
 # 인코더/4bit 양자화 둘 다 필요 없음). 되돌릴 일이 생기면 여기부터 복구할 것.
+placo==0.9.25

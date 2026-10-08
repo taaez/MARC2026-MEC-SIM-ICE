@@ -33,6 +33,9 @@ services:
       # 되돌리려면 이 줄을 지우거나 "0" 으로.
       MARC_DISABLE_DINO_FALLBACK: "${MARC_DISABLE_DINO_FALLBACK:-1}"
       MARC_LOG_LEVEL: "INFO"
+      # Stage 2 지역 주행: 최종 코드는 지역 내비게이션 함수 + MPPI(+ 점유 격자). 코드 기본값도
+      # mppi 지만 제출 설정을 여기서 명시한다 ("legacy" = A* + P 제어, ablation 비교용).
+      MARC_LOCAL_PLANNER: "${MARC_LOCAL_PLANNER:-mppi}"
     # GPU (nvidia-container-toolkit 필요) — 원본 demo compose 와 동일한 지정 방식
     deploy:
       resources:

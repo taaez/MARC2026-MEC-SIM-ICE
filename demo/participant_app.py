@@ -88,7 +88,9 @@ from lidar_accumulator import LidarSliceAccumulator, imu_roll_pitch   # [팀 추
 from nav_field import NavField
 from occupancy_layer import OccupancyLayer
 from mppi import MPPI, V_MAX as V_MAX_MPPI, W_MAX as MPPI_W_MAX
-LOCAL_PLANNER = os.environ.get("MARC_LOCAL_PLANNER", "legacy").strip().lower()
+# 기본값 mppi = 최종 제출 설정 (2026-10-08 finals). "legacy" 는 ablation 비교용 -- 라이브 실험
+# 스크립트(validation/live/run_one.sh)는 이 변수를 항상 명시해서 넘긴다.
+LOCAL_PLANNER = os.environ.get("MARC_LOCAL_PLANNER", "mppi").strip().lower()
 NAVFIELD_REBUILD_S = 1.0       # sim s between cost-to-go rebuilds triggered by new lidar cells
 MPPI_GOAL_CLEAR_M = 0.6        # lidar/stall discs dropped this close to the goal (pick target)
 MPPI_ACCEPT_NEAR_M = 1.0       # tight legs: a stall this close to the goal counts as arrival
