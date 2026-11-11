@@ -141,7 +141,6 @@ mec_sim_ice/
 ├── tools/                          # 오프라인 재실행 스크립트 (run_offline_real_vla.py 등)
 ├── scripts/                         # 환경 점검/링크 진단/오프라인 검증 셸 스크립트
 ├── models/                           # (현재 비어 있음, .gitkeep)
-├── problems.yaml.bak                  # problems.yaml 백업
 └── *.md                                 # 설계/브리프/런북/세션 리포트 문서
 ```
 
