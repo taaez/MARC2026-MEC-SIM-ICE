@@ -7,5 +7,5 @@
     "tissue",
     "disposable_cup"
   ],
-  "source": "/home/parktaejeong/MARC2026-MEC-SIM-ICE/mec_sim_ice/datasets/dataset_v2"
+  "source": "mec_sim_ice/datasets/dataset_v2"
 }
