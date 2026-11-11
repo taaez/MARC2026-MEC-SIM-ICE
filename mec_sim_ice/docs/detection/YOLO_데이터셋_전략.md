@@ -3,13 +3,8 @@
 Stage 1 탐지기(YOLO11 + `DET_CLASSES` 34종)의 **데이터셋 개선 방향**을 정리한 문서.
 새 세션이 이 문서만 읽고 바로 논의에 참여할 수 있도록 사실·진단·결정·미확인을 분리해 적었다.
 
-> 배치 위치: 리포 루트. 팀 문서는 원래 `mec_sim_ice/`에 모으는 규칙(`PROJECT_STRUCTURE.md`)이라
-> 필요하면 옮겨도 된다.
-
-관련 문서: `mec_sim_ice/SESSION_REPORT_2026-08-27.md` (점수 개선 경과),
-`mec_sim_ice/taejeong/RUNBOOK.md` (탐지 recall 측정),
-`mec_sim_ice/test/YOLO11_학습_가이드.md` (학습 실행 절차),
-`mec_sim_ice/test/det_classes.py` (34종 정의).
+관련 문서: `mec_sim_ice/training/YOLO11_학습_가이드.md` (학습 실행 절차),
+`mec_sim_ice/training/det_classes.py` (34종 정의).
 
 ---
 

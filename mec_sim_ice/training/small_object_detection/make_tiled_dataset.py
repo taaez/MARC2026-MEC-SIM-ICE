@@ -18,7 +18,7 @@ WHY TILING (the part that actually matters)
 YOLO11 n/s/m/l/x all use stride [8, 16, 32]; the finest feature map has one grid cell per
 8x8 px of MODEL INPUT. The three target classes average 5-8 px per side, i.e. a whole object
 fits inside one grid cell, which is why IoU-based assignment and CIoU loss are so unstable
-for them (SESSION_REPORT_2026-08-28.md §1, §2).
+for them.
 
 Tiling helps ONLY through the upscale it enables:
 

@@ -1,6 +1,6 @@
 """Detection class taxonomy for the real VLA grounding model (YOLO11 DET_CLASSES).
 
-Source: 정리폴더/MARC2026_객체_상태_분류.md (실측 dataset-gen 씬 1개 + mock_demo_data.yaml
+Source: mec_sim_ice/docs/design/MARC2026_객체_상태_분류.md (실측 dataset-gen 씬 1개 + mock_demo_data.yaml
 교차검증), cross-checked against the dataset-gen "New Scene" object-selection panel
 (Objects/Landmarks checklist screenshot) -- that panel lists 10 objects and 15 landmarks,
 which is what TARGET_CLASSES/LANDMARK_CLASSES below now match exactly. POSE_CLASSES (9) also

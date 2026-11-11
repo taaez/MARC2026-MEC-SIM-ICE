@@ -1,6 +1,6 @@
 """GT sampling (copy-paste augmentation) for the tiny pickable classes.
 
-Motivation (see mec_sim_ice/SESSION_REPORT_2026-08-27.md §5-6): sunblock / tissue /
+Motivation: sunblock / tissue /
 disposable_cup sit far below every other class, and image-level oversampling
 (``train_yolo11.py oversample``) only partly helps -- it duplicates whole images, so the
 target share of all instances stays pinned at ~7.5% no matter how high the duplication

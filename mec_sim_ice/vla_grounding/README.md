@@ -54,7 +54,7 @@ payload = decision.to_payload()   # GroundingResult 필드 구조 그대로
 - **relation**: 텍스트 confident 면 텍스트 우선 → 명령이 '빈 자리/열린 바닥'이라는
   영역을 가리키면 near(확인된 의미 예외) → 그 외에는 기하(on/above/beside/near).
   **near/beside 는 XY 평면 OBB 표면거리로 가른다** (중심거리 아님, 임계값 0.63m).
-  규칙·유도는 리포 루트의 `MARC2026_Chungmu_near_beside_OBB_analysis.md`. 문서의
+  규칙·유도는 `../docs/design/MARC2026_Chungmu_near_beside_OBB_analysis.md`. 문서의
   0.58m 는 공식 OBB 척도의 값이고, 우리는 같은 쌍을 단안으로 0.61m 로 재므로
   **우리 척도의 경계인 0.63m 로 재보정**했다 (2026-08-30, 39라운드 재채점 확인).
   방향(behind/front/left/right)은 텍스트가 방향을 말할 때만 기하로 확인 — 기준

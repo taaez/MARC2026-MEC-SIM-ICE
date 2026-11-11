@@ -13,7 +13,7 @@ offline_score 를 import 한 뒤 몇 개 함수만 런타임에 바꿔 끼우고
 
 결과: <out_dir>/<CONFIG>.json (offline_score 리포트), <CONFIG>.side.json (라운드별
 게이트/오차), <CONFIG>.log, 그리고 summary.md / summary.csv (논문용 표).
-자세한 설명은 mec_sim_ice/docs/작업기록_2026-10-05.md.
+최종 결과 표는 mec_sim_ice/docs/results/ablation_results.md.
 """
 
 from __future__ import annotations

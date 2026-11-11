@@ -134,14 +134,14 @@ mec_sim_ice/
 │   └── weights/                  # best.pt, yolo11m-pose.pt
 ├── record_agent_vla.py    # ② record 전용 파이프라인 (RUNBOOK_record.md)
 ├── score.py                # ③ 오프라인 채점 실행기 (mec_sim_ice/score.py)
-├── records/                  # ③ 입력 데이터 -- Isaac Sim 세션에서 수집한 라운드별 기록
+├── records/                  # ③ 입력 데이터 -- Isaac Sim 세션에서 수집한 라운드별 기록 (git 미추적)
 ├── training/                   # YOLO11 학습 코드 (det_classes.py, train_yolo11.py, small_object_detection/)
 ├── datasets/                    # 학습/소형객체 서브모델 데이터셋
 ├── tests/                         # 단위 테스트 (pytest, ROS 불필요)
 ├── tools/                          # 오프라인 재실행 스크립트 (run_offline_real_vla.py 등)
 ├── scripts/                         # 환경 점검/링크 진단/오프라인 검증 셸 스크립트
 ├── models/                           # (현재 비어 있음, .gitkeep)
-└── *.md                                 # 설계/브리프/런북/세션 리포트 문서
+└── docs/                                # 설계(design) / 탐지(detection) / 가이드(guides) / 최종 결과(results)
 ```
 
 각 서브디렉토리의 내부 구조는 대회측 원본과 별개로 팀이 자유롭게 정한 것이라 필요 시

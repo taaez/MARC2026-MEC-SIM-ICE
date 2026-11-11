@@ -1,7 +1,7 @@
 # Ablation Results (Final)
 
 Final experimental results of the MARC 2026 agent, identical to Tables I–IV of the paper
-([`paper/MARC2026_paper_EN.pdf`](../../paper/MARC2026_paper_EN.pdf), Section V).
+([`paper/MARC2026_paper_EN.pdf`](../../../paper/MARC2026_paper_EN.pdf), Section V).
 All runs are live, network-disabled runs on the public Chungmu playground.
 
 The comparisons are **cumulative**: each row adds one component on top of the previous row, so a
@@ -105,10 +105,10 @@ MARC_ABLATION_CONFIG=C0 MARC_ENTRYPOINT=participant_app_ablation.py \
 MARC_SCORE_LOG=../results_ablation/C0.scores.jsonl ./launch.sh <team_id>
 ```
 
-- Wrapper: [`demo_agents/participant_app_ablation.py`](../demo_agents/participant_app_ablation.py)
-- 7-run repeat runner: [`scripts/run_ablation_repeats.sh`](../scripts/run_ablation_repeats.sh)
+- Wrapper: [`demo_agents/participant_app_ablation.py`](../../demo_agents/participant_app_ablation.py)
+- 7-run repeat runner: [`scripts/run_ablation_repeats.sh`](../../scripts/run_ablation_repeats.sh)
 
-**Stage 2** (switches in [`demo/participant_app.py`](../../demo/participant_app.py)):
+**Stage 2** (switches in [`demo/participant_app.py`](../../../demo/participant_app.py)):
 
 | Column | Environment |
 |---|---|

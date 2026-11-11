@@ -454,7 +454,7 @@ class ElapsedClock:
     calls -- if that one computation happened to land in the wall-clock-fallback window, the
     deadline is a huge epoch-based number that no future sim-time `now_s()` can ever reach, so
     `now_s() < deadline` stays true forever and the loop never exits. This is the exact bug
-    documented in STAGE2_SESSION_REPORT_2026-08-22.md for demo/agent_vla.py's _observe() (fixed
+    previously hit in demo/agent_vla.py's _observe() (fixed
     there with an iteration-count budget instead); the same pattern reappeared here in at least
     six places and was reproduced live twice in a row (participant registering while STAGE1_RUN/
     STAGE2_RUN was already in progress -- exactly maximises the chance the first now_s() call
@@ -745,7 +745,7 @@ class DemoParticipant:
         # value: a plain `now_s() + budget` computed here can land before the first /clock
         # message (a huge wall-clock fallback), making every later `now_s() < deadline` compare
         # against a value no sim-time now_s() can ever reach -- an infinite hang, reproduced live
-        # twice (see STAGE2_SESSION_REPORT_2026-08-22.md for the same bug in agent_vla.py).
+        # twice (the same bug was fixed earlier in agent_vla.py).
         self._clock = ElapsedClock(c)
         deadline = STAGE2_NAV_TIMEOUT_S
 

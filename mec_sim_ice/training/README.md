@@ -5,7 +5,7 @@
 
 ## 여기 있는 것
 - `det_classes.py` — `TARGET_CLASSES`/`LANDMARK_CLASSES`/`POSE_CLASSES`/`DET_CLASSES`.
-  근거: `../docs/MARC2026_객체_상태_분류.md` (아직 완결 아님, 계속 갱신 중).
+  근거: `../docs/design/MARC2026_객체_상태_분류.md` (아직 완결 아님, 계속 갱신 중).
 - `train_yolo11.py` — dataset-gen JSON → YOLO 라벨 변환 + 학습. 실행법/경로는 파일 상단 docstring 참고.
 
 ## 다음 단계 (검증되면 `demo/`로 이동)

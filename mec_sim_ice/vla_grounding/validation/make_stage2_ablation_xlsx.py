@@ -3,7 +3,7 @@
     python3 mec_sim_ice/vla_grounding/validation/stage2_drive_ablation.py
     python3 mec_sim_ice/vla_grounding/validation/grasp_shape_ablation.py
     python3 mec_sim_ice/vla_grounding/validation/make_stage2_ablation_xlsx.py
-        -> mec_sim_ice/docs/ablation/stage2_ablation.xlsx
+        -> results_ablation/stage2_ablation.xlsx (not tracked)
 
 Measured values are written as numbers (blue); every derived column (deltas, rates) is an
 Excel formula (black). The workbook is flagged to recalculate fully on open.
@@ -21,7 +21,7 @@ from openpyxl.utils import get_column_letter
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
-OUT = os.path.join(_REPO, "mec_sim_ice", "docs", "ablation", "stage2_ablation.xlsx")
+OUT = os.path.join(_REPO, "results_ablation", "stage2_ablation.xlsx")
 
 FONT = "Arial"
 F_TITLE = Font(name=FONT, size=13, bold=True)

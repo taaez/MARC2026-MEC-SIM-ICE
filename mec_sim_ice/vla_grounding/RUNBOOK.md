@@ -36,7 +36,7 @@ record 전용 파이프라인(`record_agent_vla.py`)은 `MARC_ENTRYPOINT=partici
 **Isaac Sim 없이 바로 재채점하고 싶으면** (코드만 고쳐가며 반복할 때) `validation/offline_score.py`
 를 쓴다 — `records/s1_*` 를 지금 코드로 재실행하고, 과거 라이브 실행이 남긴 정답(좌표 포함)으로
 그 자리에서 채점해 문항별 표를 터미널에 바로 찍는다. 자세한 건 `validation/offline_score.py`
-의 모듈 docstring과 `../OFFLINE_검증_가이드.md` 참고.
+의 모듈 docstring과 `../docs/guides/OFFLINE_검증_가이드.md` 참고.
 
 ## 0. 사전 준비 (최초 1회)
 
@@ -412,5 +412,5 @@ lying_down 0.61~0.91 / prone 0.49).
 `COPY mec_sim_ice /agent/mec_sim_ice` 로 `vla_grounding/`·`demo_agents/`
 전체가 이미지에 baking 된다. 예전에 이 절이 경고했던 "제출 경로가 Grounding
 DINO+Qwen 실험(`stage1/`)을 실행 중" 상태는 이미 고쳤고, 그 실험 자체도
-2026-08-31에 완전히 삭제했다(자세한 건 `mec_sim_ice/docs/PROJECT_STRUCTURE.md`
+2026-08-31에 완전히 삭제했다(자세한 건 `mec_sim_ice/docs/guides/PROJECT_STRUCTURE.md`
 §5 참고).

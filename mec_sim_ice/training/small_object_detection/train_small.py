@@ -74,7 +74,7 @@ def main():
 
     # mec_sim_ice/training/small_object_detection/train_small.py ->
     # mec_sim_ice/training_results/yolo_main_logs (shared with train_yolo11.py -- same
-    # convention as before the 2026-08-29 reorg, see mec_sim_ice/docs/폴더_정리_기록_2026-08-29.md)
+    # convention as before the 2026-08-29 reorg)
     logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                              "training_results", "yolo_main_logs")
     os.makedirs(logs_dir, exist_ok=True)
