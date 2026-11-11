@@ -64,3 +64,7 @@ demo/weights/
 # 라이브 런 원본 로그(플랫폼/에이전트 로그, 텔레메트리 -- 런당 수십~수백 MB). 요약만
 # mec_sim_ice/vla_grounding/validation/runs/ 에 남긴다 (예: ab_planner_261005.json).
 /mec_sim_ice/vla_grounding/validation/live/runs/
+
+# Run outputs (not tracked)
+mec_sim_ice/records/
+results_ablation/
