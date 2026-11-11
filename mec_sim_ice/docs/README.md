@@ -11,6 +11,7 @@
 | | [small_object_detection_plan.md](detection/small_object_detection_plan.md) | Small-object detection (tiling sub-model) plan |
 | `guides/` | [PROJECT_STRUCTURE.md](guides/PROJECT_STRUCTURE.md) | Repository layout (organizer files vs. team code) |
 | | [OFFLINE_검증_가이드.md](guides/OFFLINE_검증_가이드.md) | Offline validation without Isaac Sim |
+| | [STARTER_KIT_README.md](guides/STARTER_KIT_README.md) | Original README of the organizer's starter kit |
 
 Module-level guides live next to the code: `vla_grounding/README.md`, `vla_grounding/RUNBOOK.md`,
 `training/README.md`, `training/YOLO11_학습_가이드.md`, `RUNBOOK_record.md`.

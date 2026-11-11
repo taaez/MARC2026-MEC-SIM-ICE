@@ -21,7 +21,7 @@
 
 ```
 marc-starter-kit/
-├── README.md                  # 전체 킷 개요 + Quick start        [대회측 원본]
+├── README.md                  # 팀 프로젝트 소개 (대회측 원본은 mec_sim_ice/docs/guides/STARTER_KIT_README.md)
 ├── NOTICES.md                 # 라이선스/저작권/실행환경(인터넷 정책) 고지  [대회측 원본]
 ├── problems.yaml               # 문제(미션) 정의 데이터           [팀 설정, 루트 고정 필요]
 ├── docker-compose.yml          # 팀 제출 진입점 (docker compose up)  [팀 제작, 루트 고정 필요]
