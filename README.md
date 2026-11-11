@@ -197,7 +197,7 @@ docker compose up --build
 | 팀원 | 이태영 | 정보통신공학전공 | xodu00504@dgu.ac.kr |
 | 팀원 | 박주원 | 기계로봇에너지공학과 | playdoll1235@dgu.ac.kr |
 | 팀원 | 조이준 | 정보통신공학전공 | jo2june@naver.com |
-| 팀원 | 박은채 | 정보통신공학과, 로봇융합소프트웨어학과 | eunchae0923@naver.com |
+| 팀원 | 박은채 | 정보통신공학과, 로봇융합소프트웨어연계전공 | eunchae0923@naver.com |
 
 ## 8. 출처와 라이선스
 
