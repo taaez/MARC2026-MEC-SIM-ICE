@@ -53,11 +53,6 @@ CCTV로 상황을 파악한 뒤 로봇이 직접 물체를 회수하는 **VLA(Vi
 | 공개 미션 | 33개 (사람 14, 분실물 19) | 5개 (텀블러·우산, 그중 2개는 택시 주변 밀집 구간) |
 | 채점 | 의미 필드 정확 일치 + 좌표 XY 오차 | 파지 50점 + 배송 30점 + 그라운딩 점수 |
 
-**어려운 점**
-- CCTV 시야가 거의 겹치지 않고 같은 종류의 물체가 여러 카메라에 반복해서 나와, 검출 신뢰도만으로는 카메라를 고를 수 없습니다.
-- 바운딩 박스는 위치 추정에 필요한 물리적 지점(바닥 접점, 놓인 면)을 직접 알려주지 않습니다.
-- 주행 중 LiDAR가 일시적 반사와 경사면 바닥을 장애물로 잘못 쌓으면, 목표로 가는 길이 모두 막힐 수 있습니다.
-
 ## 3. 파이프라인
 
 <p align="center">
@@ -136,9 +131,6 @@ CCTV로 상황을 파악한 뒤 로봇이 직접 물체를 회수하는 **VLA(Vi
 
 단계별 누적 비교와 밀집 구간 장애물 표현 비교는 [최종 실험 결과](mec_sim_ice/docs/results/ablation_results.md)에 정리했습니다.
 
-**한계**: 남은 실패는 대부분 연석 근처의 파지 모호성(자판기 옆 우산)과,
-정답 카메라에서 대상을 검출하지 못한 경우입니다. 공개 미션으로 평가했기 때문에 처음 보는 환경으로의 일반화를 입증하지는 않습니다.
-
 ## 6. 저장소 구조와 실행 방법
 
 ### 저장소 구조
@@ -164,9 +156,21 @@ CCTV로 상황을 파악한 뒤 로봇이 직접 물체를 회수하는 **VLA(Vi
 자세한 구조는 [PROJECT_STRUCTURE.md](mec_sim_ice/docs/guides/PROJECT_STRUCTURE.md),
 문서 목록은 [mec_sim_ice/docs](mec_sim_ice/docs/README.md)에 있습니다.
 
-### 실행 방법
+### 실행 환경
 
-**요구 사항**: Ubuntu 22.04, NVIDIA GPU와 nvidia-container-toolkit, Docker, NVIDIA NGC 계정(Isaac Sim 이미지 pull용)
+**하드웨어 사양**
+
+| 구분 | OS | CPU | RAM | GPU |
+|---|---|---|---|---|
+| 채점 환경 (주최 측 예선 기준) | Ubuntu 22.04 | Intel Core i7-12700K | 125 GiB | NVIDIA RTX PRO 5000 (48 GB) |
+| 팀 개발 환경 | Ubuntu 22.04 | — | — | NVIDIA RTX 5060 Ti (8 GB) |
+
+- 팀 개발 환경에서는 GPU 한 장(8 GB)으로 Isaac Sim과 에이전트를 함께 실행했습니다.
+- 에이전트 이미지는 CUDA 12.8 기반입니다(RTX 50 시리즈 등 Blackwell GPU 지원).
+
+**소프트웨어 요구 사항**: Docker, NVIDIA 드라이버와 nvidia-container-toolkit, NVIDIA NGC 계정(Isaac Sim 이미지 pull용)
+
+### 실행 방법
 
 ```bash
 # 1) 시뮬레이션 플랫폼 (Isaac Sim 머신)
@@ -179,8 +183,6 @@ export MARC_TEAM_ID=<팀 ID> MARC_TOKEN=<발급받은 토큰>
 docker compose up --build
 ```
 
-- Stage 2 주행 방식은 `MARC_LOCAL_PLANNER`(`mppi` 기본, `legacy` = A* + P 제어)와
-  `MARC_MPPI_OCC_GRID`(`1` 기본 = 점유 격자, `0` = 원판 장애물)로 바꿀 수 있습니다.
 - Isaac Sim 없이 기록 데이터로 Stage 1을 채점하려면 [오프라인 검증 가이드](mec_sim_ice/docs/guides/OFFLINE_검증_가이드.md)를 참고하세요.
 - 플랫폼 설치 과정은 주최 측 [스타터 킷 README](mec_sim_ice/docs/guides/STARTER_KIT_README.md)와
   [개발자 가이드](https://marc-challenge.github.io/marc-dev-guide/)에 자세히 나와 있습니다.
