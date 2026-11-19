@@ -5,7 +5,7 @@
 CCTV 영상에서 자연어 명령이 가리키는 물체와 사람을 찾아 월드 좌표를 추정하고(Stage 1),
 모바일 매니퓰레이터로 그 물체를 회수해 주인에게 전달하는(Stage 2) **모듈형 오프라인 VLA 에이전트**입니다.
 
-> 🏆 **IEEE MetaCom 2026 · MARC 2026 Excellence Award (우수상, 2위)**
+> 🏆 **IEEE MetaCom 2026 · MARC 2026 Excellence Award (최우수상, 2위)**
 
 📄 논문: [English (IEEE)](paper/MARC2026_paper_EN.pdf) · [한국어 번역본](paper/MARC2026_paper_KO.pdf)
 
@@ -100,7 +100,7 @@ CCTV로 상황을 파악한 뒤 로봇이 직접 물체를 회수하는 **VLA(Vi
 
 ## 5. 결과
 
-### 🏆 IEEE MetaCom 2026 · MARC 2026 Excellence Award (우수상)
+### 🏆 IEEE MetaCom 2026 · MARC 2026 Excellence Award (최우수상)
 
 <p align="center">
   <img src="mec_sim_ice/docs/assets/award.jpg" width="640" alt="MARC 2026 Excellence Award 상장">
