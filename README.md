@@ -106,6 +106,10 @@ CCTV로 상황을 파악한 뒤 로봇이 직접 물체를 회수하는 **VLA(Vi
   <img src="mec_sim_ice/docs/assets/award.jpg" width="640" alt="MARC 2026 Excellence Award 상장">
 </p>
 
+<p align="center">
+  📜 <a href="mec_sim_ice/docs/assets/marc_2026_certificate_mec-sim-ice.pdf">MARC 2026 인증서 (PDF)</a>
+</p>
+
 **IEEE International Conference on Metaverse Computing, Networking and Applications (MetaCom 2026)**,
 2026년 11월 6–10일, 중국 시안(Xi'an). Meta-Sejong AI Robotics Challenge **Second Prize**.
 
