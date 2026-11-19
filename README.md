@@ -109,7 +109,7 @@ CCTV로 상황을 파악한 뒤 로봇이 직접 물체를 회수하는 **VLA(Vi
 <p align="center">
   <a href="mec_sim_ice/docs/assets/marc_2026_certificate_mec-sim-ice.pdf"><img src="mec_sim_ice/docs/assets/certificate.jpg" width="640" alt="MARC 2026 인증서"></a>
   <br>
-  <sub>MARC 2026 인증서 · 클릭하면 PDF 원본</sub>
+  <sub>MARC 2026 최우수상</sub>
 </p>
 
 **IEEE International Conference on Metaverse Computing, Networking and Applications (MetaCom 2026)**,
